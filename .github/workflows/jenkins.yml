@@ -17,4 +17,4 @@ jobs:
         run: >-
                   curl -X POST
                   -u "${JENKINS_USER}:${JENKINS_API_TOKEN}"
-                  "http://localhost:8080/job/<CHANGEME>/build?token=${JENKINS_TRIGGER_TOKEN}"
+                  "http://localhost:8080/job/ml/build?token=${JENKINS_TRIGGER_TOKEN}"
