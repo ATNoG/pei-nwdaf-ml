@@ -1,0 +1,8 @@
+services:
+  #TODO
+  the_service:
+    build: .
+
+networks:
+  nwdaf-network:
+    external: true
