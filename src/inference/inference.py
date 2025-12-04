@@ -1,4 +1,4 @@
-from src.general.modelI import ModelI
+from src.models.modelI import ModelI
 import logging
 
 logger = logging.getLogger("Inference")
