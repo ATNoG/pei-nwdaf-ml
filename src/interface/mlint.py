@@ -5,12 +5,15 @@
 #
 # Author: Miguel Neto
 
-import fastapi
 from kmw import PyKafBridge
 
 import asyncio
 import logging
 import os
+import json
+import urllib.request
+import urllib.error
+import urllib.parse
 from typing import Optional, List, Dict, Any
 
 from src.mlflow.main import MLFlowBridge
@@ -29,8 +32,9 @@ class MLInterface():
     def __init__(self,
                  kafka_host: str = 'localhost',
                  kafka_port: str = '9092',
-                 mlflow_tracking_uri: str = None,
-                 mlflow_experiment_name: str = 'default'):
+                 mlflow_tracking_uri: Optional[str] = None,
+                 mlflow_experiment_name: str = 'default',
+                 data_storage_api_url: Optional[str] = None):
 
         self.bridge = PyKafBridge(
             hostname=kafka_host,
@@ -56,10 +60,18 @@ class MLInterface():
             mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
             self._initialize_mlflow(mlflow_uri, mlflow_experiment_name)
 
+        # Data Storage API configuration
+        self.data_storage_api_url = data_storage_api_url or os.getenv(
+            "DATA_STORAGE_API_URL",
+            "http://localhost:8001"
+        )
+
+        # Component status tracking
         self._component_status = {
             'inference': {'status': 'idle', 'current_model': None},
             'training': {'status': 'idle', 'active_runs': 0},
-            'model_registry': {'status': 'unknown', 'model_count': 0}
+            'model_registry': {'status': 'unknown', 'model_count': 0},
+            'data_storage': {'status': 'unknown', 'last_request': None}
         }
 
     def _initialize_mlflow(self, tracking_uri: str, experiment_name: str) -> None:
@@ -137,6 +149,208 @@ class MLInterface():
         """Get list of subscribed Kafka topics"""
         return self.topics
 
+
+    def request_data_from_storage(self,
+                                   endpoint: str,
+                                   params: Optional[Dict[str, Any]] = None,
+                                   method: str = 'GET',
+                                   data: Optional[Dict[str, Any]] = None,
+                                   timeout: int = 30) -> Optional[Dict[str, Any]]:
+        """
+        Request data from the Data Storage Query API
+
+        Args:
+            endpoint: API endpoint path (e.g., '/query/timeseries', '/query/analytics')
+            params: Query parameters for GET requests
+            method: HTTP method ('GET' or 'POST')
+            data: JSON data for POST requests
+            timeout: Request timeout in seconds
+
+        Returns a dictionary with response data, or None if request failed
+        """
+        try:
+            url = f"{self.data_storage_api_url.rstrip('/')}/{endpoint.lstrip('/')}"
+
+            if params and method == 'GET':
+                query_string = urllib.parse.urlencode(params)
+                url = f"{url}?{query_string}"
+
+            headers = {'Content-Type': 'application/json'}
+
+            if method == 'POST' and data:
+                json_data = json.dumps(data).encode('utf-8')
+                req = urllib.request.Request(url, data=json_data, headers=headers, method='POST')
+            else:
+                req = urllib.request.Request(url, headers=headers, method=method)
+
+            logger.info(f"Requesting data from storage: {method} {url}")
+            self.update_component_status('data_storage', 'requesting', endpoint=endpoint)
+
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                response_data = response.read().decode('utf-8')
+                result = json.loads(response_data)
+
+                logger.info(f"Successfully received data from storage API: {endpoint}")
+                self.update_component_status(
+                    'data_storage',
+                    'connected',
+                    last_request=endpoint,
+                    last_status='success'
+                )
+
+                return result
+
+        except urllib.error.HTTPError as e:
+            error_msg = e.read().decode('utf-8') if e.fp else str(e)
+            logger.error(f"HTTP error requesting data from storage: {e.code} - {error_msg}")
+            self.update_component_status(
+                'data_storage',
+                'error',
+                last_request=endpoint,
+                last_status='http_error',
+                error_code=e.code
+            )
+            return None
+
+        except urllib.error.URLError as e:
+            logger.error(f"URL error requesting data from storage: {e.reason}")
+            self.update_component_status(
+                'data_storage',
+                'disconnected',
+                last_request=endpoint,
+                last_status='connection_error',
+                error=str(e.reason)
+            )
+            return None
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to decode JSON response from storage API: {e}")
+            self.update_component_status(
+                'data_storage',
+                'error',
+                last_request=endpoint,
+                last_status='json_error'
+            )
+            return None
+
+        except Exception as e:
+            logger.error(f"Unexpected error requesting data from storage: {e}")
+            self.update_component_status(
+                'data_storage',
+                'error',
+                last_request=endpoint,
+                last_status='unknown_error',
+                error=str(e)
+            )
+            return None
+
+    async def request_data_from_storage_async(self,
+                                              endpoint: str,
+                                              params: Optional[Dict[str, Any]] = None,
+                                              method: str = 'GET',
+                                              data: Optional[Dict[str, Any]] = None,
+                                              timeout: int = 30) -> Optional[Dict[str, Any]]:
+        """
+        Wrapper for requesting data from Data Storage API
+
+        Args:
+            endpoint: API endpoint path
+            params: Query parameters for GET requests
+            method: HTTP method ('GET' or 'POST')
+            data: JSON data for POST requests
+            timeout: Request timeout in seconds
+
+        Returns:
+            Dictionary with response data or None if request failed
+        """
+        # Run sync method in executor to avoid blocking
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            self.request_data_from_storage,
+            endpoint,
+            params,
+            method,
+            data,
+            timeout
+        )
+
+    def get_training_data(self,
+                         start_time: Optional[str] = None,
+                         end_time: Optional[str] = None,
+                         data_type: str = 'timeseries',
+                         filters: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """
+        Request training data from Data Storage component
+
+        Args:
+            start_time: Start timestamp for data query
+            end_time: End timestamp for data query
+            data_type: Type of data to fetch ('timeseries', 'analytics')
+            filters: Additional filters for the query
+
+        Returns:
+            Training data dictionary or None if request failed
+        """
+        params = {}
+
+        if start_time:
+            params['start_time'] = start_time
+        if end_time:
+            params['end_time'] = end_time
+        if filters:
+            params.update(filters)
+
+        endpoint = f'/query/{data_type}'
+
+        logger.info(f"Requesting training data: {data_type} from {start_time} to {end_time}")
+        return self.request_data_from_storage(endpoint, params=params)
+
+    async def get_training_data_async(self,
+                                     start_time: Optional[str] = None,
+                                     end_time: Optional[str] = None,
+                                     data_type: str = 'timeseries',
+                                     filters: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """
+        Async version of get_training_data
+
+        Args:
+            start_time: Start timestamp for data query
+            end_time: End timestamp for data query
+            data_type: Type of data to fetch
+            filters: Additional filters for the query
+
+        Returns:
+            Training data dictionary or None if request failed
+        """
+        params = {}
+
+        if start_time:
+            params['start_time'] = start_time
+        if end_time:
+            params['end_time'] = end_time
+        if filters:
+            params.update(filters)
+
+        endpoint = f'/query/{data_type}'
+
+        logger.info(f"Requesting training data (async): {data_type} from {start_time} to {end_time}")
+        return await self.request_data_from_storage_async(endpoint, params=params)
+
+    def check_data_storage_connection(self) -> bool:
+        """
+        Check if Data Storage API is reachable
+
+        Returns:
+            True if connected, False otherwise
+        """
+        try:
+            result = self.request_data_from_storage('/health', timeout=5)
+            return result is not None
+        except Exception as e:
+            logger.warning(f"Data Storage API not reachable: {e}")
+            return False
+
     def is_mlflow_connected(self) -> bool:
         """Check if MLFlow connection is active"""
         return self._mlflow_connected
@@ -212,8 +426,8 @@ class MLInterface():
             registered_models = client.search_registered_models()
 
             models_info = []
-            for rm in registered_models:
-                latest_versions = rm.latest_versions
+            for rm in registered_models or []:
+                latest_versions = rm.latest_versions or []
                 models_info.append({
                     'name': rm.name,
                     'creation_timestamp': rm.creation_timestamp,
@@ -300,7 +514,7 @@ class MLInterface():
 
         return self.mlflow_bridge.register_model(model_uri, model_name)
 
-    def get_best_model(self, model_name_prefix: str = None, metric: str = 'accuracy') -> Optional[Dict[str, Any]]:
+    def get_best_model(self, model_name_prefix: Optional[str] = None, metric: str = 'accuracy') -> Optional[Dict[str, Any]]:
         """
         Find the best performing model based on a metric
 
@@ -325,13 +539,13 @@ class MLInterface():
             best_model = None
             best_metric_value = -float('inf')
 
-            for rm in registered_models:
+            for rm in registered_models or []:
                 # Filter by prefix if provided
                 if model_name_prefix and not rm.name.startswith(model_name_prefix):
                     continue
 
                 # Check latest production version
-                for version in rm.latest_versions:
+                for version in rm.latest_versions or []:
                     if version.current_stage == 'Production':
                         metrics = self.get_model_metrics(version.run_id)
                         metric_value = metrics.get(metric, -float('inf'))
@@ -400,6 +614,8 @@ class MLInterface():
         else:
             overall_status = 'unhealthy'
 
+        data_storage_connected = self.check_data_storage_connection()
+
         return {
             'overall_status': overall_status,
             'kafka': {
@@ -410,6 +626,10 @@ class MLInterface():
             'mlflow': {
                 'connected': self.is_mlflow_connected(),
                 'tracking_uri': self.mlflow_bridge.tracking_uri if self._mlflow_connected else None
+            },
+            'data_storage': {
+                'connected': data_storage_connected,
+                'api_url': self.data_storage_api_url
             },
             'components': self._component_status
         }

@@ -7,6 +7,7 @@ import logging
 from src.interface.mlint import MLInterface
 from src.routers.inference import router as inference_router
 from src.routers.kafka import router as kafka_router
+from src.routers.data import router as data_router
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -20,6 +21,7 @@ KAFKA_PORT = os.getenv("KAFKA_PORT", "9092")
 KAFKA_TOPICS = os.getenv("KAFKA_TOPICS", "ml.inference.request,network.data.processed,network.data.request").split(",")
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
 MLFLOW_EXPERIMENT_NAME = os.getenv("MLFLOW_EXPERIMENT_NAME", "ml-service-default")
+DATA_STORAGE_API_URL = os.getenv("DATA_STORAGE_API_URL", "http://localhost:8001")
 
 ml_interface: MLInterface = None
 
@@ -35,6 +37,7 @@ async def lifespan(app: FastAPI):
             kafka_port=KAFKA_PORT,
             mlflow_tracking_uri=MLFLOW_TRACKING_URI,
             mlflow_experiment_name=MLFLOW_EXPERIMENT_NAME,
+            data_storage_api_url=DATA_STORAGE_API_URL,
         )
 
         app.state.ml_interface = ml_interface
@@ -53,6 +56,7 @@ async def lifespan(app: FastAPI):
         logger.info(f"Kafka: {KAFKA_HOST}:{KAFKA_PORT}")
         logger.info(f"Topics: {KAFKA_TOPICS}")
         logger.info(f"MLFlow: {MLFLOW_TRACKING_URI}")
+        logger.info(f"Data Storage API: {DATA_STORAGE_API_URL}")
 
     except Exception as e:
         logger.error(f"Failed to initialize ML Service: {e}")
@@ -80,6 +84,7 @@ app = FastAPI(
 
 app.include_router(kafka_router, prefix="/kafka", tags=["Kafka"])
 app.include_router(inference_router, prefix="/ml", tags=["ML"])
+app.include_router(data_router, prefix="/data", tags=["Data"])
 
 
 @app.get("/", tags=["Health"])
@@ -113,15 +118,18 @@ async def health_check():
     kafka_connected = ml_int.is_connected()
     consumer_running = ml_int.is_consumer_running()
     mlflow_connected = ml_int.is_mlflow_connected()
+    data_storage_connected = ml_int.check_data_storage_connection()
 
     return {
-        "status": "healthy" if (kafka_connected and mlflow_connected) else "degraded",
+        "status": "healthy" if (kafka_connected and mlflow_connected and data_storage_connected) else "degraded",
         "kafka_connected": kafka_connected,
         "consumer_running": consumer_running,
         "mlflow_connected": mlflow_connected,
+        "data_storage_connected": data_storage_connected,
         "subscribed_topics": ml_int.get_subscribed_topics(),
         "kafka_broker": f"{KAFKA_HOST}:{KAFKA_PORT}",
-        "mlflow_uri": MLFLOW_TRACKING_URI
+        "mlflow_uri": MLFLOW_TRACKING_URI,
+        "data_storage_api": DATA_STORAGE_API_URL
     }
 
 
