@@ -1,9 +1,15 @@
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 import logging
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+class KafkaMessage(BaseModel):
+    """Used for producing messages to kafka"""
+    topic: str
+    message: str
 
 @router.post("/produce")
 async def produce_message(msg: KafkaMessage, request: Request):
