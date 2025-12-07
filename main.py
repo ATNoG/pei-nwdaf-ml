@@ -5,7 +5,8 @@ from fastapi import FastAPI
 import logging
 
 from src.interface.mlint import MLInterface
-from src.routers.ml import router as ml_router
+from src.routers.inference import router as inference_router
+from src.routers.kafka import router as kafka_router
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -71,8 +72,9 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-app.include_router(kafka_router, prefix="/kafka", tags=["Kafka Operations"])
-app.include_router(ml_router, prefix="/ml", tags=["ML Operations"])
+
+app.include_router(kafka_router, prefix="/kafka", tags=["Kafka"])
+app.include_router(inference_router, prefix="/ml", tags=["ML"])
 
 
 @app.get("/", tags=["Health"])
