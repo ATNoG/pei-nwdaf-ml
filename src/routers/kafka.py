@@ -19,7 +19,7 @@ async def produce_message(msg: KafkaMessage, request: Request):
     if not ml_interface:
         raise HTTPException(status_code=500, detail="ML Interface not initialized")
 
-    success = ml_interface.publish(msg.topic, msg.message)
+    success = ml_interface.produce_to_kafka(msg.topic, msg.message)
 
     if success:
         return {
@@ -28,7 +28,7 @@ async def produce_message(msg: KafkaMessage, request: Request):
             "message_length": len(msg.message)
         }
     else:
-        raise HTTPException(status_code=500, detail="Failed to publish message")
+        raise HTTPException(status_code=500, detail="Failed to produce message to Kafka")
 
 
 @router.get("/messages/{topic}")

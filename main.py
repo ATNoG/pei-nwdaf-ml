@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 KAFKA_HOST = os.getenv("KAFKA_HOST", "localhost")
 KAFKA_PORT = os.getenv("KAFKA_PORT", "9092")
 KAFKA_TOPICS = os.getenv("KAFKA_TOPICS", "ml.inference.request,network.data.processed,network.data.request").split(",")
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
+MLFLOW_EXPERIMENT_NAME = os.getenv("MLFLOW_EXPERIMENT_NAME", "ml-service-default")
 
 ml_interface: MLInterface = None
 
@@ -31,6 +33,8 @@ async def lifespan(app: FastAPI):
         ml_interface = MLInterface(
             kafka_host=KAFKA_HOST,
             kafka_port=KAFKA_PORT,
+            mlflow_tracking_uri=MLFLOW_TRACKING_URI,
+            mlflow_experiment_name=MLFLOW_EXPERIMENT_NAME,
         )
 
         app.state.ml_interface = ml_interface
@@ -48,6 +52,7 @@ async def lifespan(app: FastAPI):
         logger.info("ML Service ready to accept requests")
         logger.info(f"Kafka: {KAFKA_HOST}:{KAFKA_PORT}")
         logger.info(f"Topics: {KAFKA_TOPICS}")
+        logger.info(f"MLFlow: {MLFLOW_TRACKING_URI}")
 
     except Exception as e:
         logger.error(f"Failed to initialize ML Service: {e}")
@@ -107,13 +112,16 @@ async def health_check():
 
     kafka_connected = ml_int.is_connected()
     consumer_running = ml_int.is_consumer_running()
+    mlflow_connected = ml_int.is_mlflow_connected()
 
     return {
-        "status": "healthy" if kafka_connected else "degraded",
+        "status": "healthy" if (kafka_connected and mlflow_connected) else "degraded",
         "kafka_connected": kafka_connected,
         "consumer_running": consumer_running,
+        "mlflow_connected": mlflow_connected,
         "subscribed_topics": ml_int.get_subscribed_topics(),
-        "kafka_broker": f"{KAFKA_HOST}:{KAFKA_PORT}"
+        "kafka_broker": f"{KAFKA_HOST}:{KAFKA_PORT}",
+        "mlflow_uri": MLFLOW_TRACKING_URI
     }
 
 
@@ -124,19 +132,7 @@ async def detailed_status():
     if not ml_int:
         return {"error": "ML Interface not initialized"}
 
-    return {
-        "service": "ML Communication Interface",
-        "kafka": {
-            "connected": ml_int.is_connected(),
-            "consumer_running": ml_int.is_consumer_running(),
-            "broker": f"{KAFKA_HOST}:{KAFKA_PORT}",
-            "subscribed_topics": ml_int.get_subscribed_topics(),
-        },
-        "config": {
-            "auto_start_consumer": AUTO_START_CONSUMER,
-            "log_level": os.getenv("LOG_LEVEL", "INFO"),
-        }
-    }
+    return ml_int.get_system_health()
 
 
 if __name__ == "__main__":
