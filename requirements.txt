@@ -9,3 +9,4 @@ mlflow==3.6.0
 mlflow-skinny==3.6.0
 mlflow-tracing==3.6.0
 xgboost==3.1.2
+httpx==0.28.1
