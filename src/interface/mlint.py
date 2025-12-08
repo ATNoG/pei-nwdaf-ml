@@ -5,7 +5,7 @@
 #
 # Author: Miguel Neto
 
-from kmw import PyKafBridge
+from utils.kmw import PyKafBridge
 
 import asyncio
 import logging
@@ -16,10 +16,10 @@ import urllib.error
 import urllib.parse
 from typing import Optional, List, Dict, Any
 
-from src.mlflow.main import MLFlowBridge
+from src.mlflow.mlf import MLFlowBridge
 
 logging.basicConfig(level=logging.DEBUG,
-                    format="%(asctime)s %(name)-12s %(levelname)-8s %(message)s",
+                    format="%(asctime)s %(name)-20s %(levelname)-8s %(message)s",
                     datefmt="%m-%d %H:%M:%S",
                     handlers=[
                         logging.StreamHandler()
@@ -36,6 +36,14 @@ class MLInterface():
                  mlflow_experiment_name: str = 'default',
                  data_storage_api_url: Optional[str] = None):
 
+        # Component status tracking
+        self._component_status = {
+            'inference': {'status': 'idle', 'current_model': None},
+            'training': {'status': 'idle', 'active_runs': 0},
+            'model_registry': {'status': 'unknown', 'model_count': 0},
+            'data_storage': {'status': 'unknown', 'last_request': None}
+        }
+
         self.bridge = PyKafBridge(
             hostname=kafka_host,
             port=kafka_port,
@@ -43,9 +51,6 @@ class MLInterface():
         )
         self.topics = [
             'ml.inference.request',
-            'ml.inference.response',
-            'ml.training.request',
-            'ml.training.complete',
             'network.data.processed',
             'network.data.request'
         ]
@@ -65,14 +70,6 @@ class MLInterface():
             "DATA_STORAGE_API_URL",
             "http://localhost:8001"
         )
-
-        # Component status tracking
-        self._component_status = {
-            'inference': {'status': 'idle', 'current_model': None},
-            'training': {'status': 'idle', 'active_runs': 0},
-            'model_registry': {'status': 'unknown', 'model_count': 0},
-            'data_storage': {'status': 'unknown', 'last_request': None}
-        }
 
     def _initialize_mlflow(self, tracking_uri: str, experiment_name: str) -> None:
         """Initialize MLFlow connection"""
@@ -144,6 +141,28 @@ class MLInterface():
         if limit and messages:
             return messages[-limit:]
         return messages if messages else []
+
+    def subscribe_topic(self, topic: str) -> bool:
+        """Subscribe to a Kafka topic"""
+        if not topic or not isinstance(topic, str):
+            logger.error("Invalid topic provided to subscribe_topic")
+            return False
+
+        topic = topic.strip()
+        if topic == "":
+            logger.error("Empty topic name is not allowed")
+            return False
+
+        if topic not in self.topics:
+            self.topics.append(topic)
+
+        try:
+            self.bridge.add_topic(topic)
+            logger.info(f"Subscribed to topic: {topic}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to subscribe to topic {topic}: {e}")
+            return False
 
     def get_subscribed_topics(self) -> List[str]:
         """Get list of subscribed Kafka topics"""

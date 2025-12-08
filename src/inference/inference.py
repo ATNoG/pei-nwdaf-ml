@@ -1,4 +1,4 @@
-from src.general.modelI import ModelI
+from src.models.modelI import ModelI
 from typing import Optional, Any, Dict
 import logging
 

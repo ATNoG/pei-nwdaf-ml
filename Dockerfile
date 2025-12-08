@@ -20,3 +20,11 @@ RUN mkdir utils && cd utils \
 && mv kafka/src/kmw.py . \
 && rm -rf .git \
 && rmdir -p kafka/src
+
+COPY requirements.txt .
+RUN uv pip install --system -r requirements.txt
+
+COPY src/ ./src/
+COPY main.py .
+
+CMD ["python3", "main.py"]
