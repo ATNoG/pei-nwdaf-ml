@@ -11,7 +11,7 @@ from src.routers.data import router as data_router
 
 logging.basicConfig(
     level=logging.DEBUG,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s %(name)-20s %(levelname)-8s %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -147,7 +147,7 @@ if __name__ == "__main__":
     import uvicorn
 
     api_host = os.getenv("API_HOST", "0.0.0.0")
-    api_port = int(os.getenv("API_PORT", "8000"))
+    api_port = int(os.getenv("API_PORT", "8060"))
     api_reload = os.getenv("API_RELOAD", "true").lower() == "true"
 
     logger.info(f"Starting server on {api_host}:{api_port}")

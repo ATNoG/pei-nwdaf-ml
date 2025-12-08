@@ -1,9 +1,10 @@
-fastapi==0.121.3
-pydantic==2.12.4
-uvicorn==0.34.0
 confluent_kafka==2.12.2
-bandit==1.8.0
-safety==2.3.5
+fastapi==0.124.0
 numpy==2.3.5
-xgboost==3.1.2
-scikit-learn==1.7.2
+pydantic==2.12.5
+pytest==9.0.1
+scikit_learn==1.7.2
+uvicorn==0.38.0
+mlflow==3.6.0
+mlflow-skinny==3.6.0
+mlflow-tracing==3.6.0

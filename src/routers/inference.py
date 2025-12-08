@@ -19,7 +19,6 @@ class InferenceRequest(BaseModel):
     model_version: Optional[str] = None
     model_stage: Optional[str] = "Production"
     publish_result: bool = False
-    result_topic: Optional[str] = "ml.inference.response"
 
 
 class TrainingRequest(BaseModel):
