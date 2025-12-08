@@ -260,8 +260,19 @@ class InferenceMaker:
 
             self.ml_interface.log_inference_metrics({
                 'inference_count': 1,
-                'model_used': self._current_model_id or 'unknown'
             })
+
+            # Log model_used as a tag or parameter instead of a metric
+            if hasattr(self.ml_interface, "log_inference_tag"):
+                self.ml_interface.log_inference_tag('model_used', self._current_model_id or 'unknown')
+            elif hasattr(self.ml_interface, "log_inference_param"):
+                self.ml_interface.log_inference_param('model_used', self._current_model_id or 'unknown')
+            else:
+                try:
+                    import mlflow
+                    mlflow.set_tag('model_used', self._current_model_id or 'unknown')
+                except ImportError:
+                    logger.warning("Could not log 'model_used' as tag: mlflow not available")
 
             logger.info("Inference completed successfully")
             self.ml_interface.update_component_status(
