@@ -381,6 +381,7 @@ class MLInterface():
         Args:
             model_uri: URI of the model (e.g., 'models:/ModelName/Production'
                        or 'models:/ModelName/1' or 'runs:/<run_id>/model')
+            )
 
         Returns:
             Loaded model object or None if failed
