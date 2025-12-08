@@ -85,7 +85,7 @@ async def ml_inference(req: InferenceRequest, request: Request, background_tasks
                 })
                 published = ml_interface.produce_to_kafka('ml.inference.complete', result_message)
                 if published:
-                    logger.info(f"Published inference result to {req.result_topic}")
+                    logger.info("Published inference result to ml.inference.complete")
             except Exception as e:
                 logger.error(f"Failed to publish inference result: {e}")
 
