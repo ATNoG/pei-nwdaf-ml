@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
 from typing import Optional, List
 import logging
 import json
+import datetime
 
 from src.inference.inference import InferenceMaker
 from src.schemas.inference import (
@@ -80,9 +81,9 @@ async def ml_inference(req: InferenceRequest, request: Request, background_tasks
                 result_message = json.dumps({
                     "model_used": model_used,
                     "result": result if isinstance(result, (dict, list, str, int, float)) else str(result),
-                    "timestamp": None  # TODO: add timestamp
+                    "timestamp": datetime.datetime.now().timestamp()
                 })
-                published = ml_interface.produce_to_kafka(req.result_topic, result_message)
+                published = ml_interface.produce_to_kafka('ml.inference.complete', result_message)
                 if published:
                     logger.info(f"Published inference result to {req.result_topic}")
             except Exception as e:
