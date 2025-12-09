@@ -14,6 +14,7 @@ import json
 import urllib.request
 import urllib.error
 import urllib.parse
+from threading import Thread
 from typing import Optional, List, Dict, Any
 
 from src.mlflow.mlf import MLFlowBridge
@@ -50,11 +51,10 @@ class MLInterface():
             debug_label='ML Interface Bridge'
         )
         self.topics = [
-            'ml.inference.request',
+            #'ml.inference.request',
             'network.data.processed',
-            'network.data.request'
+            #'network.data.request'
         ]
-        self.bridge.add_n_topics(self.topics)
 
         self.mlflow_bridge = MLFlowBridge()
         self._mlflow_connected = False
@@ -96,13 +96,44 @@ class MLInterface():
 
     async def start_consumer(self) -> bool:
         """Start the Kafka consumer"""
+        self.bridge.add_n_topics(self.topics)
+
         try:
             await self.bridge.start_consumer()
             logger.info("Started PyKaf Consumer")
+            if self.bridge._consumer_task:
+                await self.bridge._consumer_task
             return True
         except Exception as e:
             logger.error(f"Failed to start PyKaf consumer: {e}")
             return False
+
+    def start_consumer_background(self) -> Thread:
+        """
+        Start the Kafka consumer in a background thread with its own event loop.
+        This prevents rdkafka from blocking the main application.
+
+        Returns:
+            The background thread object
+        """
+        def kafka_worker():
+            """Worker function that runs in background thread"""
+            try:
+                self.bridge.add_n_topics(self.topics)
+                asyncio.run(self.start_consumer())
+                logger.info("Kafka consumer thread started successfully")
+
+            except Exception as e:
+                logger.error(f"Kafka consumer thread crashed: {e}")
+
+        kafka_thread = Thread(
+            target=kafka_worker,
+            daemon=True,
+            name="ml-kafka-consumer-thread"
+        )
+        kafka_thread.start()
+        logger.info("Kafka consumer starting in background thread")
+        return kafka_thread
 
     async def shutdown_bridge(self) -> None:
         """Shutdown Kafka bridge"""

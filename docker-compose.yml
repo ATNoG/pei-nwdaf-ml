@@ -4,19 +4,18 @@ volumes:
 
 services:
   mlservice:
-    image: pei-ml
     container_name: pei-ml
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "8060:8060"
     env_file: ".env"
     networks:
       - nwdaf-ml
+      - nwdaf-network
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
       mlflow:
         condition: service_healthy
 
@@ -49,8 +48,8 @@ services:
       - minio-data:/data
     command: server /data --console-address ":9001"
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${MINIO_HOST_PORT}:9000"
+      - "${MINIO_CONSOLE_HOST_PORT}:9001"
     networks:
       - nwdaf-ml
     healthcheck:
@@ -131,3 +130,5 @@ services:
 networks:
   nwdaf-ml:
     driver: bridge
+  nwdaf-network:
+      external: true
