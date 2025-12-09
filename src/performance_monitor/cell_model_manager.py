@@ -220,39 +220,33 @@ class CellModelManager:
             Model info dict or None
         """
         try:
-            # Start MLflow run
             with mlflow.start_run(run_name=f"{model_name}_init") as run:
-                # Log model metadata
-                mlflow.set_tag("cell_index", cell_index)
-                mlflow.set_tag("model_type", model.__class__.__name__)
-                mlflow.set_tag("status", "untrained")
-                mlflow.log_param("cell_index", cell_index)
-
-                # Log the sklearn model using MLflow's standard format
-                # The underlying sklearn model is stored in model.model
+                # Log the sklearn model
                 mlflow.sklearn.log_model(
                     sk_model=model,
                     artifact_path="model",
-                    registered_model_name=model_name,
-                    tags={
-                        "cell_index": cell_index,
-                        "model_type": model.__class__.__name__,
-                        "status": "untrained"
-                    }
+                    registered_model_name=model_name
                 )
 
                 logger.info(f"Logged and registered untrained model {model_name} with run_id {run.info.run_id}")
 
-                return {
-                    'model_name': model_name,
-                    'model_type': model.__class__.__name__,
-                    'run_id': run.info.run_id,
-                    'status': 'untrained'
-                }
+            # Set tags on the registered model
+            client = MlflowClient()
+            client.set_registered_model_tag(model_name, "cell_index", cell_index)
+            client.set_registered_model_tag(model_name, "model_type", model.__class__.__name__)
+            client.set_registered_model_tag(model_name, "status", "untrained")
+
+            return {
+                'model_name': model_name,
+                'model_type': model.__class__.__name__,
+                'run_id': run.info.run_id,
+                'status': 'untrained'
+            }
 
         except Exception as e:
             logger.error(f"Error logging model {model_name} to MLflow: {e}")
             return None
+
 
     def get_cell_model_info(self, cell_index: str) -> Optional[Dict[str, Any]]:
         """
