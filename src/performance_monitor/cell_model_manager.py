@@ -209,9 +209,10 @@ class CellModelManager:
     def _register_model_with_mlflow(self, model, model_name: str, cell_index: str) -> Optional[Dict[str, Any]]:
         """
         Register an untrained model with MLflow and tag it with cell_index.
+        Uses MLflow's standard sklearn format for compatibility.
 
         Args:
-            model: Model instance
+            model: Model instance (RandomForest or XGBoost)
             model_name: Name for the model in MLflow
             cell_index: Cell identifier
 
@@ -227,11 +228,20 @@ class CellModelManager:
                 mlflow.set_tag("status", "untrained")
                 mlflow.log_param("cell_index", cell_index)
 
-                # Serialize and log the model as artifact
-                model_bytes = model.serialize()
-                mlflow.log_text(model_bytes.hex(), f"{model_name}.hex")
+                # Log the sklearn model using MLflow's standard format
+                # The underlying sklearn model is stored in model.model
+                mlflow.sklearn.log_model(
+                    sk_model=model,
+                    artifact_path="model",
+                    registered_model_name=model_name,
+                    tags={
+                        "cell_index": cell_index,
+                        "model_type": model.__class__.__name__,
+                        "status": "untrained"
+                    }
+                )
 
-                logger.info(f"Logged untrained model {model_name} with run_id {run.info.run_id}")
+                logger.info(f"Logged and registered untrained model {model_name} with run_id {run.info.run_id}")
 
                 return {
                     'model_name': model_name,
