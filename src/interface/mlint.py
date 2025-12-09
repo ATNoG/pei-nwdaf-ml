@@ -16,6 +16,7 @@ import urllib.error
 import urllib.parse
 from threading import Thread
 from typing import Optional, List, Dict, Any
+from src.performance_monitor.cell_model_manager import CellModelManager
 
 from src.mlflow.mlf import MLFlowBridge
 
@@ -30,6 +31,11 @@ logger = logging.getLogger(__name__)
 
 
 class MLInterface():
+
+    class _topics():
+        #'ml.inference.request',
+        NETWORK_DATA_PROCESSED='network.data.processed'
+        #'network.data.request'
     def __init__(self,
                  kafka_host: str = 'localhost',
                  kafka_port: str = '9092',
@@ -45,6 +51,7 @@ class MLInterface():
             'data_storage': {'status': 'unknown', 'last_request': None}
         }
 
+        self.cell_model_manager:CellModelManager = CellModelManager(self)
         self.bridge = PyKafBridge(
             hostname=kafka_host,
             port=kafka_port,
@@ -55,7 +62,6 @@ class MLInterface():
             'network.data.processed',
             #'network.data.request'
         ]
-
         self.mlflow_bridge = MLFlowBridge()
         self._mlflow_connected = False
 
@@ -119,8 +125,18 @@ class MLInterface():
         def kafka_worker():
             """Worker function that runs in background thread"""
             try:
+                # Bind the handler BEFORE starting consumer
                 self.bridge.add_n_topics(self.topics)
-                asyncio.run(self.start_consumer())
+                self.bridge.bind_topic(self._topics.NETWORK_DATA_PROCESSED, self.cell_model_manager.process_network_data)
+
+                # Start consumer (without adding topics again)
+                async def start():
+                    await self.bridge.start_consumer()
+                    logger.info("Started PyKaf Consumer")
+                    if self.bridge._consumer_task:
+                        await self.bridge._consumer_task
+
+                asyncio.run(start())
                 logger.info("Kafka consumer thread started successfully")
 
             except Exception as e:
