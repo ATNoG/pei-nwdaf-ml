@@ -41,21 +41,16 @@ async def lifespan(app: FastAPI):
 
         app.state.ml_interface = ml_interface
 
-        if KAFKA_TOPICS and KAFKA_TOPICS[0].strip():
-            topics_to_subscribe = [t.strip() for t in KAFKA_TOPICS if t.strip()]
 
-            for topic in topics_to_subscribe:
-                ml_interface.subscribe_topic(topic)
-
-            logger.info(f"Subscribed to topics: {topics_to_subscribe}")
-
-        await ml_interface.start_consumer()
+        # Start Kafka consumer in background thread
+        ml_interface.start_consumer_background()
 
         logger.info("ML Service ready to accept requests")
         logger.info(f"Kafka: {KAFKA_HOST}:{KAFKA_PORT}")
         logger.info(f"Topics: {KAFKA_TOPICS}")
         logger.info(f"MLFlow: {MLFLOW_TRACKING_URI}")
         logger.info(f"Data Storage API: {DATA_STORAGE_API_URL}")
+        logger.info("Kafka consumer connecting in background")
 
     except Exception as e:
         logger.error(f"Failed to initialize ML Service: {e}")
