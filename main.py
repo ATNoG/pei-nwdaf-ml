@@ -1,4 +1,3 @@
-import asyncio
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -11,7 +10,7 @@ from src.routers.data import router as data_router
 
 logging.basicConfig(
     level=logging.DEBUG,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s %(name)-20s %(levelname)-8s %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -42,21 +41,16 @@ async def lifespan(app: FastAPI):
 
         app.state.ml_interface = ml_interface
 
-        if KAFKA_TOPICS and KAFKA_TOPICS[0].strip():
-            topics_to_subscribe = [t.strip() for t in KAFKA_TOPICS if t.strip()]
 
-            for topic in topics_to_subscribe:
-                ml_interface.subscribe_topic(topic)
-
-            logger.info(f"Subscribed to topics: {topics_to_subscribe}")
-
-        await ml_interface.start_consumer()
+        # Start Kafka consumer in background thread
+        ml_interface.start_consumer_background()
 
         logger.info("ML Service ready to accept requests")
         logger.info(f"Kafka: {KAFKA_HOST}:{KAFKA_PORT}")
         logger.info(f"Topics: {KAFKA_TOPICS}")
         logger.info(f"MLFlow: {MLFLOW_TRACKING_URI}")
         logger.info(f"Data Storage API: {DATA_STORAGE_API_URL}")
+        logger.info("Kafka consumer connecting in background")
 
     except Exception as e:
         logger.error(f"Failed to initialize ML Service: {e}")
@@ -147,7 +141,7 @@ if __name__ == "__main__":
     import uvicorn
 
     api_host = os.getenv("API_HOST", "0.0.0.0")
-    api_port = int(os.getenv("API_PORT", "8000"))
+    api_port = int(os.getenv("API_PORT", "8060"))
     api_reload = os.getenv("API_RELOAD", "true").lower() == "true"
 
     logger.info(f"Starting server on {api_host}:{api_port}")

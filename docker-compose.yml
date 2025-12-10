@@ -3,6 +3,22 @@ volumes:
   minio-data:
 
 services:
+  mlservice:
+    container_name: pei-ml
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8060:8060"
+    env_file: ".env"
+    networks:
+      - nwdaf-ml
+      - nwdaf-network
+    restart: unless-stopped
+    depends_on:
+      mlflow:
+        condition: service_healthy
+
   postgres:
     image: postgres:15
     container_name: mlflow-postgres
@@ -12,6 +28,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    networks:
+      - nwdaf-ml
     ports:
       - "5432:5432"
     healthcheck:
@@ -30,8 +48,10 @@ services:
       - minio-data:/data
     command: server /data --console-address ":9001"
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${MINIO_HOST_PORT}:9000"
+      - "${MINIO_CONSOLE_HOST_PORT}:9001"
+    networks:
+      - nwdaf-ml
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${MINIO_PORT}/minio/health/live"]
       interval: 5s
@@ -51,6 +71,8 @@ services:
         mc alias set myminio "http://${MINIO_HOST}:${MINIO_PORT}" \
           "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}"
         mc mb --ignore-existing "myminio/${MINIO_BUCKET:-mlflow}"
+    networks:
+      - nwdaf-ml
     restart: "no"
 
   mlflow:
@@ -63,6 +85,8 @@ services:
         condition: service_healthy
       create-bucket:
         condition: service_completed_successfully
+    networks:
+      - nwdaf-ml
     environment:
       # Backend store URI built from vars
       MLFLOW_BACKEND_STORE_URI: ${MLFLOW_BACKEND_STORE_URI}
@@ -79,6 +103,7 @@ services:
       MLFLOW_HOST: ${MLFLOW_HOST}
       MLFLOW_PORT: ${MLFLOW_PORT}
 
+    # FIX: ASTERISK IS AN AWFUL CHOICE!!! DEVELOPMENT ONLY
     command:
       - /bin/bash
       - -c
@@ -88,7 +113,8 @@ services:
           --backend-store-uri "${MLFLOW_BACKEND_STORE_URI}" \
           --default-artifact-root "${MLFLOW_DEFAULT_ARTIFACT_ROOT}" \
           --host "${MLFLOW_HOST}" \
-          --port "${MLFLOW_PORT}"
+          --port "${MLFLOW_PORT}" \
+          --allowed-hosts "*"
     ports:
       - "${MLFLOW_PORT}:${MLFLOW_PORT}"
     healthcheck:
@@ -104,5 +130,7 @@ services:
       retries: 30
 
 networks:
-  default:
-    name: mlflow-network
+  nwdaf-ml:
+    driver: bridge
+  nwdaf-network:
+      external: true
