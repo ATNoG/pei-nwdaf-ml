@@ -1,4 +1,5 @@
 from src.models.modelI import ModelI
+from src.config.inference_type import get_inference_config
 from typing import Optional, Any, Dict, Union, List
 import logging
 import pandas as pd
@@ -95,23 +96,30 @@ class InferenceMaker:
         # default to xgboost if no type specified
         return f"cell_{cell_str}_xgboost"
 
+    def _get_inference_type_model_name(self, inference_type: str, model_type: str) -> str:
+        """construct model name for an inference type"""
+        config = get_inference_config(inference_type)
+        if not config:
+            raise ValueError(f"config not found: {inference_type}")
+        return config.get_model_name(model_type)
+
     def _load_cell_model(self, cell_index: Union[str, float], model_type: Optional[str] = None) -> Any:
         """load model for a specific cell"""
         model_name = self._get_cell_model_name(cell_index, model_type)
-        
+
         # check cache first
         if model_name in self._model_cache:
             logger.debug(f"Using cached model: {model_name}")
             return self._model_cache[model_name]
-        
+
         try:
             # try to load from production stage
             model = self.ml_interface.get_model_by_name(model_name, stage='Production')
-            
+
             if not model:
                 # try latest version if production doesn't exist
                 model = self.ml_interface.get_model_by_name(model_name, stage=None)
-            
+
             if model:
                 self._model_cache[model_name] = model
                 logger.info(f"Loaded model for cell {cell_index}: {model_name}")
@@ -119,9 +127,42 @@ class InferenceMaker:
             else:
                 logger.warning(f"No model found for cell {cell_index}: {model_name}")
                 return None
-                
+
         except Exception as e:
             logger.error(f"Error loading model for cell {cell_index}: {e}")
+            return None
+
+    def _load_inference_type_model(self, inference_type: str, model_type: str) -> Any:
+        """load model for an inference type"""
+        try:
+            model_name = self._get_inference_type_model_name(inference_type, model_type)
+        except ValueError as e:
+            logger.error(str(e))
+            return None
+
+        # check cache first
+        if model_name in self._model_cache:
+            logger.debug(f"Using cached model: {model_name}")
+            return self._model_cache[model_name]
+
+        try:
+            # try to load from production stage
+            model = self.ml_interface.get_model_by_name(model_name, stage='Production')
+
+            if not model:
+                # try latest version if production doesn't exist
+                model = self.ml_interface.get_model_by_name(model_name, stage=None)
+
+            if model:
+                self._model_cache[model_name] = model
+                logger.info(f"Loaded model for inference type {inference_type}: {model_name}")
+                return model
+            else:
+                logger.warning(f"model not found for {inference_type}: {model_name}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Error loading model for inference type {inference_type}: {e}")
             return None
 
     def _load_model(self) -> Any:
