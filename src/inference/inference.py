@@ -270,15 +270,15 @@ class InferenceMaker:
 
     def infer(self, **kwargs) -> Optional[Any]:
         """
-        produces inference using selected model or cell-specific models
+        Produces inference using selected model or cell-specific models.
         
-        supports:
-        - single cell inference with cell_index
-        - batch inference with cell_indices
-        - traditional model-based inference
+        Supports:
+        - Single cell inference with cell_index
+        - Batch inference with cell_indices
+        - Traditional model-based inference
         
-        returns:
-            inference result or none if failed
+        Returns:
+            Inference result or None if failed.
         """
         try:
             self.ml_interface.update_component_status('inference', 'inferring')
