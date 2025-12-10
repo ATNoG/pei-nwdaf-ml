@@ -75,6 +75,7 @@ async def ml_inference(req: InferenceRequest, request: Request, background_tasks
     - Auto-selected (best performing model)
     - Manually specified by name/version/stage, in the request
     - Configured with the /set-model endpoint
+    - Cell-specific (when cell_index or cell_indices provided)
     """
     ml_interface = request.app.state.ml_interface
 
@@ -84,53 +85,136 @@ async def ml_inference(req: InferenceRequest, request: Request, background_tasks
     try:
         inference_maker = get_inference_maker(ml_interface)
 
-        # If specific model requested, temporarily set it
-        model_used = None
-        if req.model_name:
-            logger.info(f"Using requested model: {req.model_name}")
-            success = inference_maker.set_model_by_name(
-                req.model_name,
-                version=req.model_version,
-                stage=req.model_stage
+        # cell-specific inference (batch or single)
+        if req.cell_indices:
+            logger.info(f"Batch inference for {len(req.cell_indices)} cells")
+            result = inference_maker.infer(
+                cell_indices=req.cell_indices,
+                data=req.data,
+                model_type=req.model_type
             )
-            if not success:
+            
+            if result is None or not result:
                 raise HTTPException(
-                    status_code=404,
-                    detail=f"Model not found: {req.model_name}"
+                    status_code=500,
+                    detail="Batch inference failed"
                 )
-            model_used = f"{req.model_name}:{req.model_version or req.model_stage}"
-
-        result = inference_maker.infer(data=req.data)
-
-        if result is None:
-            raise HTTPException(
-                status_code=500,
-                detail="Inference failed - check model availability"
+            
+            # model_used will be a dict mapping cell to model
+            model_used = {
+                str(cell): inference_maker._get_cell_model_name(cell, req.model_type)
+                for cell in req.cell_indices
+            }
+            
+            published = False
+            if req.publish_result and ml_interface:
+                try:
+                    result_message = json.dumps({
+                        "model_used": model_used,
+                        "result": result,
+                        "timestamp": datetime.datetime.now().timestamp(),
+                        "type": "batch_inference"
+                    })
+                    pub_result = ml_interface.produce_to_kafka('ml.inference.complete', result_message)
+                    published = pub_result if pub_result is not None else False
+                except Exception as e:
+                    logger.error(f"Failed to publish batch inference result: {e}")
+            
+            return InferenceResponse(
+                status="success",
+                model_used=model_used,
+                predictions=result,
+                published_to_kafka=published
             )
+        
+        # single cell inference
+        elif req.cell_index is not None:
+            logger.info(f"Cell-specific inference for cell {req.cell_index}")
+            result = inference_maker.infer(
+                cell_index=req.cell_index,
+                data=req.data,
+                model_type=req.model_type
+            )
+            
+            if result is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Inference failed for cell {req.cell_index}"
+                )
+            
+            model_used = inference_maker._get_cell_model_name(req.cell_index, req.model_type)
+            
+            published = False
+            if req.publish_result and ml_interface:
+                try:
+                    result_message = json.dumps({
+                        "cell_index": str(req.cell_index),
+                        "model_used": model_used,
+                        "result": result if isinstance(result, (dict, list, str, int, float)) else str(result),
+                        "timestamp": datetime.datetime.now().timestamp()
+                    })
+                    pub_result = ml_interface.produce_to_kafka('ml.inference.complete', result_message)
+                    published = pub_result if pub_result is not None else False
+                except Exception as e:
+                    logger.error(f"Failed to publish inference result: {e}")
+            
+            return InferenceResponse(
+                status="success",
+                model_used=model_used,
+                predictions=result,
+                published_to_kafka=published,
+                cell_index=req.cell_index
+            )
+        
+        # traditional model-based inference (legacy)
+        else:
+            model_used = None
+            if req.model_name:
+                logger.info(f"Using requested model: {req.model_name}")
+                success = inference_maker.set_model_by_name(
+                    req.model_name,
+                    version=req.model_version,
+                    stage=req.model_stage
+                )
+                if not success:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Model not found: {req.model_name}"
+                    )
+                model_used = f"{req.model_name}:{req.model_version or req.model_stage}"
 
-        model_info = inference_maker.get_current_model_info()
-        model_used = model_used or model_info.get('model_id', 'unknown')
+            result = inference_maker.infer(data=req.data)
 
-        published = False
-        if req.publish_result and ml_interface:
-            try:
-                result_message = json.dumps({
-                    "model_used": model_used,
-                    "result": result if isinstance(result, (dict, list, str, int, float)) else str(result),
-                    "timestamp": None  # TODO: add timestamp
-                })
-                published = ml_interface.produce_to_kafka(req.result_topic, result_message)
-                if published:
-                    logger.info(f"Published inference result to {req.result_topic}")
-            except Exception as e:
-                logger.error(f"Failed to publish inference result: {e}")
+            if result is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Inference failed - check model availability"
+                )
 
-        return InferenceResponse(
-            status="success",
-            model_used=model_used,
-            predictions=result,
-            published_to_kafka=published
-        )
+            model_info = inference_maker.get_current_model_info()
+            model_used = model_used or model_info.get('model_id', 'unknown')
+
+            published = False
+            if req.publish_result and ml_interface:
+                try:
+                    result_message = json.dumps({
+                        "model_used": model_used,
+                        "result": result if isinstance(result, (dict, list, str, int, float)) else str(result),
+                        "timestamp": datetime.datetime.now().timestamp()
+                    })
+                    pub_result = ml_interface.produce_to_kafka('ml.inference.complete', result_message)
+                    published = pub_result if pub_result is not None else False
+                    if published:
+                        logger.info("Published inference result to ml.inference.complete")
+                except Exception as e:
+                    logger.error(f"Failed to publish inference result: {e}")
+
+            return InferenceResponse(
+                status="success",
+                model_used=model_used,
+                predictions=result,
+                published_to_kafka=published
+            )
 
     except HTTPException:
         raise
