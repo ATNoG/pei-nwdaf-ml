@@ -7,7 +7,7 @@ import mlflow
 import logging
 
 logging.basicConfig(level=logging.DEBUG,
-                    format="%(asctime)s %(name)-12s %(levelname)-8s %(message)s",
+                    format="%(asctime)s %(name)-20s %(levelname)-8s %(message)s",
                     datefmt="%m-%d %H:%M:%S",
                     handlers=[
                         # logging.FileHandler(f"./logs/student_{datetime.datetime.now().strftime("%d_%m_%y_at_%H_%M_%S")}.log"),
