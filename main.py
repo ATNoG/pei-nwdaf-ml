@@ -8,6 +8,7 @@ from src.routers.inference import router as inference_router
 from src.routers.kafka import router as kafka_router
 from src.routers.data import router as data_router
 from src.routers.v1 import v1_router
+from src.models.initializer import initialize_models
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -42,6 +43,10 @@ async def lifespan(app: FastAPI):
 
         app.state.ml_interface = ml_interface
 
+        # Initialize models (create missing models on startup)
+        logger.info("Initializing models...")
+        init_results = initialize_models(ml_interface)
+        logger.info(f"Model initialization results: {init_results}")
 
         # Start Kafka consumer in background thread
         ml_interface.start_consumer_background()

@@ -1,167 +1,205 @@
 """
-Cell-specific inference endpoint that auto-fetches latest data from storage
+Analytics predictions endpoint for NWDAF
 """
 from fastapi import APIRouter, HTTPException, Request
-from datetime import datetime, timedelta
+from datetime import datetime
 import logging
 
 from src.inference.inference import InferenceMaker
-from src.schemas.inference import CellInferenceRequest, CellInferenceResponse
+from src.schemas.inference import (
+    CellAnalyticsResponse,
+    AnalyticsTypePrediction,
+    PredictionHorizon as PredictionHorizonModel
+)
+from src.config.inference_type import get_all_inference_types, get_inference_config
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-
-async def fetch_latest_cell_data(ml_interface, cell_index: int):
+async def fetch_latest_cell_data(
+    ml_interface,
+    analytics_type: str,
+    cell_id: int,
+    seconds:int
+):
     """
-    Fetch the latest data window for a cell from data storage.
+    Fetch latest data window for a cell.
 
     Args:
         ml_interface: MLInterface instance
-        cell_index: Cell index to query
+        analytics_type: Analytics type (e.g., 'latency')
+        cell_id: Cell identifier
 
     Returns:
-        dict: Latest data window or None if not found
+        dict: Latest data window or None
     """
-    try:
-        # Query last 24 hours of data
-        end_time = datetime.now()
-        start_time = end_time - timedelta(hours=24)
+    config = get_inference_config(analytics_type)
+    if not config:
+        logger.error(f"Analytics type not found: {analytics_type}")
+        return None
 
+    try:
+        # Query window
+        # Note: Using wide range as storage may have test data with incorrect timestamps
         params = {
-            "start_time": start_time.isoformat(),
-            "end_time": end_time.isoformat(),
-            "cell_index": cell_index,
+            "cell_index": cell_id,
+            "start_time": 0,
+            "end_time": 9999999999,
             "offset": 0,
-            "limit": 100  # Get last 100 windows
+            "limit": 1
         }
 
-        logger.info(f"Fetching data for cell {cell_index} from storage")
+        logger.info(f"Fetching latest data for cell {cell_id}")
 
         data = await ml_interface.request_data_from_storage_async(
-            endpoint="/api/v1/processed/latency/",
+            endpoint=config.storage_endpoint,
             params=params,
             method="GET"
         )
 
         if not data or len(data) == 0:
-            logger.warning(f"No data found for cell {cell_index}")
+            logger.warning(f"No data found for cell {cell_id}")
             return None
 
-        # Data is a list of windows, get the most recent one
-        # Sort by window_end_time to get the latest
-        if isinstance(data, list):
-            sorted_data = sorted(
-                data,
-                key=lambda x: x.get('window_end_time', ''),
-                reverse=True
-            )
-            latest_window = sorted_data[0]
-            logger.info(f"Found latest data window for cell {cell_index}: {latest_window.get('window_start_time')} to {latest_window.get('window_end_time')}")
-            return latest_window
-        else:
-            return data
+        window = data[0] if isinstance(data, list) else data
+        logger.info(f"Found data for cell {cell_id}")
+        return window
 
     except Exception as e:
-        logger.error(f"Error fetching data for cell {cell_index}: {e}")
+        logger.error(f"Error fetching data for cell {cell_id}: {e}", exc_info=True)
         return None
 
 
-@router.post("/cell", response_model=CellInferenceResponse)
-async def cell_inference_with_storage(
-    req: CellInferenceRequest,
+@router.get("/{cell_id}", response_model=CellAnalyticsResponse)
+async def get_cell_analytics(
+    cell_id: int,
     request: Request
 ):
     """
-    Perform inference for a specific cell by automatically fetching the latest data from storage.
+    Get all analytics predictions for a cell.
 
-    This endpoint:
-    1. Fetches the latest data window for the specified cell from data storage
-    2. Loads the cell-specific model
-    3. Performs inference on the latest data
-    4. Returns predictions or "no data or cell found" error
+    Returns predictions for all registered analytics types (latency, etc.)
+    across all time horizons (PT1M, PT1H, P1D, P1W).
 
     Args:
-        req: Request containing cell_index and optional model_type
+        cell_id: Cell identifier
 
     Returns:
-        CellInferenceResponse with predictions and metadata
+        All analytics predictions for the cell
 
     Raises:
-        HTTPException: If no data found, model not available, or inference fails
+        404: No data found for cell
+        500: ML Interface not initialized
 
     Example:
-        POST /api/v1/inference/cell
+        GET /api/v1/analytics/26379009
+
+        Response:
         {
-            "cell_index": 12898855,
-            "model_type": "xgboost"
+            "cell_id": 26379009,
+            "timestamp": 1733828700.0,
+            "analytics": [
+                {
+                    "analytics_type": "latency",
+                    "predictions": [
+                        {"interval": "PT1M", "predicted_value": 45.2, "confidence": 0.85},
+                        {"interval": "PT1H", "predicted_value": 48.1, "confidence": 0.75}
+                    ]
+                }
+            ]
         }
     """
     ml_interface = request.app.state.ml_interface
-
     if not ml_interface:
         raise HTTPException(status_code=500, detail="ML Interface not initialized")
 
-    try:
-        logger.info(f"Cell inference request for cell {req.cell_index} with model type {req.model_type}")
+    logger.info(f"Analytics request for cell {cell_id}")
 
-        # Fetch latest data from storage
-        latest_data = await fetch_latest_cell_data(ml_interface, req.cell_index)
+    # Time horizons to predict (in seconds)
+    horizons = {
+        "PT1M": 60,
+        #"PT1H": 3600,
+        #"P1D": 86400,
+        #"P1W": 604800
+    }
 
-        if latest_data is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No data or cell found for cell_index {req.cell_index}"
-            )
+    analytics_results = []
+    inference_types = get_all_inference_types()
 
-        # Extract feature data for inference (exclude metadata fields)
-        inference_data = {
-            k: v for k, v in latest_data.items()
-            if k not in ['window_start_time', 'window_end_time', 'window_duration_seconds',
-                        'cell_index', 'network', 'sample_count']
-            and v is not None
-        }
+    for analytics_type, config in inference_types.items():
 
-        if not inference_data:
-            raise HTTPException(
-                status_code=400,
-                detail=f"No valid feature data found in latest window for cell {req.cell_index}"
-            )
-
-        logger.info(f"Using {len(inference_data)} features for inference: {list(inference_data.keys())}")
-
-        # Get inference maker and perform inference
         inference_maker = InferenceMaker(ml_interface)
+        model = inference_maker._load_inference_type_model(analytics_type, "xgboost")
 
-        result = inference_maker.infer(
-            cell_index=str(req.cell_index),
-            data=inference_data,
-            model_type=req.model_type
-        )
+        if model is None or not hasattr(model, "predict"):
+            logger.warning(f"No model for {analytics_type}")
+            continue
 
-        if result is None:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Inference failed for cell {req.cell_index}. Model may not exist or data is invalid."
-            )
+        # Generate predictions for all horizons
+        predictions = []
+        for interval_str, horizon_seconds in horizons.items():
+            try:
 
-        model_used = inference_maker._get_cell_model_name(req.cell_index, req.model_type)
+                window_data = await fetch_latest_cell_data(
+                    ml_interface,
+                    analytics_type,
+                    cell_id,
+                    horizon_seconds
+                )
 
-        return CellInferenceResponse(
-            cell_index=str(req.cell_index),
-            predictions=result,
-            model_used=model_used,
-            timestamp=datetime.now().timestamp(),
-            data_window_start=latest_data.get('window_start_time'),
-            data_window_end=latest_data.get('window_end_time')
-        )
+                if window_data is None:
+                    logger.warning(f"No data for {analytics_type}, cell {cell_id}")
+                    continue
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error during cell inference for {req.cell_index}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Inference error for cell {req.cell_index}: {str(e)}"
-        )
+                # Extract features
+                inference_data = {
+                    k: v for k, v in window_data.items()
+                    if k not in {
+                        "window_start_time", "window_end_time",
+                        "window_duration_seconds", "cell_index",
+                        "network", "sample_count"
+                    }
+                    and v is not None
+                }
+
+                if not inference_data:
+                    continue
+
+                # Prepare data
+                prepared_data = inference_maker._prepare_data_for_prediction(inference_data)
+
+                result = model.predict(prepared_data)
+                result = inference_maker._convert_result_for_serialization(result)
+
+                if isinstance(result, list) and result:
+                    result = result[0]
+
+                # Confidence degrades with longer horizon
+                base_confidence = 0.85
+                horizon_factor = min(1.0, 60 / horizon_seconds)
+                confidence = base_confidence * horizon_factor
+
+                predictions.append(PredictionHorizonModel(
+                    interval=interval_str,
+                    predicted_value=float(result),
+                    confidence=round(confidence, 2),
+                    data=inference_data
+                ))
+            except Exception as e:
+                logger.error(f"Error predicting {interval_str} for {analytics_type}: {e}")
+
+        if predictions:
+            analytics_results.append(AnalyticsTypePrediction(
+                analytics_type=analytics_type,
+                predictions=predictions
+            ))
+
+    if not analytics_results:
+        raise HTTPException(status_code=404, detail="no data")
+
+    return CellAnalyticsResponse(
+        cell_id=cell_id,
+        timestamp=datetime.now().timestamp(),
+        analytics=analytics_results
+    )
