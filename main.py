@@ -7,6 +7,7 @@ from src.interface.mlint import MLInterface
 from src.routers.inference import router as inference_router
 from src.routers.kafka import router as kafka_router
 from src.routers.data import router as data_router
+from src.routers.v1 import v1_router
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -79,6 +80,7 @@ app = FastAPI(
 app.include_router(kafka_router, prefix="/kafka", tags=["Kafka"])
 app.include_router(inference_router, prefix="/ml", tags=["ML"])
 app.include_router(data_router, prefix="/data", tags=["Data"])
+app.include_router(v1_router, prefix="/api/v1", tags=["API v1"])
 
 
 @app.get("/", tags=["Health"])
