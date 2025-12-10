@@ -48,3 +48,39 @@ class ModelSelectionRequest(BaseModel):
 class AutoModeRequest(BaseModel):
     """Request to toggle auto-select mode"""
     auto_mode: bool
+
+
+class CellInferenceRequest(BaseModel):
+    """Request model for cell-specific inference that auto-fetches latest data from storage"""
+    cell_index: int
+    model_type: Optional[str] = "xgboost"  # e.g., 'xgboost', 'randomforest'
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "cell_index": 12898855,
+                "model_type": "xgboost"
+            }
+        }
+
+
+class CellInferenceResponse(BaseModel):
+    """Response model for cell-specific inference"""
+    cell_index: str
+    predictions: Any
+    model_used: str
+    timestamp: float
+    data_window_start: Optional[str] = None
+    data_window_end: Optional[str] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "cell_index": "12898855",
+                "predictions": [0.85, 0.12, 0.03],
+                "model_used": "cell_12898855_xgboost",
+                "timestamp": 1702310400.0,
+                "data_window_start": "2024-12-10T10:00:00Z",
+                "data_window_end": "2024-12-10T10:05:00Z"
+            }
+        }

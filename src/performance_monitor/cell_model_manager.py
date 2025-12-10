@@ -15,6 +15,8 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 import mlflow
 from mlflow.tracking import MlflowClient
+import numpy as np
+import pandas as pd
 
 from src.models import models
 
@@ -150,7 +152,7 @@ class CellModelManager:
             logger.error(f"Error checking model existence for cell {cell_index}: {e}")
             return False
 
-    def _create_model_for_cell(self, cell_index: str, data: Dict[str, Any]) -> None:
+    def _create_model_for_cell(self, cell_index_str: str, data: Dict[str, Any]) -> None:
         """
         Instantiate and register models for the given cell.
         Creates one instance of each model type defined in src.models.
@@ -160,14 +162,14 @@ class CellModelManager:
             data: Sample data that triggered the creation
         """
         try:
-            logger.info(f"Instantiating models for cell {cell_index}")
+            logger.info(f"Instantiating models for cell {cell_index_str}")
 
             if not self.ml_interface.is_mlflow_connected():
                 logger.error("MLflow not connected, cannot register models")
                 return
 
             # Mark in cache to avoid duplicate creation attempts
-            self.cell_cache[cell_index] = {
+            self.cell_cache[cell_index_str] = {
                 'status': 'instantiating',
                 'triggered_at': datetime.now().isoformat()
             }
@@ -177,6 +179,7 @@ class CellModelManager:
             # Create one instance of each model type
             for ModelClass in models:
                 try:
+                    cell_index = int(cell_index_str)
                     model_instance = ModelClass()
                     model_type_name = ModelClass.__name__.lower()
                     model_name = f"cell_{cell_index}_{model_type_name}"
@@ -208,7 +211,7 @@ class CellModelManager:
 
     def _register_model_with_mlflow(self, model, model_name: str, cell_index: str) -> Optional[Dict[str, Any]]:
         """
-        Register an untrained model with MLflow and tag it with cell_index.
+        Register a model with MLflow, train it with mock data, and tag it with cell_index.
         Uses MLflow's standard sklearn format for compatibility.
 
         Args:
@@ -221,26 +224,62 @@ class CellModelManager:
         """
         try:
             with mlflow.start_run(run_name=f"{model_name}_init") as run:
-                # Log the sklearn model
+                # Generate mock training data
+                n_samples = 100
+                n_features = 22  # Matches ProcessedLatency schema: 4*rsrp + 4*sinr + 4*rsrq + 4*latency + 4*cqi + 2*bandwidth
+
+                # Create mock features resembling cell metrics
+                # Features: rsrp_mean, rsrp_max, rsrp_min, rsrp_std,
+                #           sinr_mean, sinr_max, sinr_min, sinr_std,
+                #           rsrq_mean, rsrq_max, rsrq_min, rsrq_std,
+                #           latency_mean, latency_max, latency_min, latency_std,
+                #           cqi_mean, cqi_max, cqi_min, cqi_std,
+                #           primary_bandwidth, ul_bandwidth
+                np.random.seed(int(cell_index) % 10000)  # Reproducible per cell
+                X = np.random.randn(n_samples, n_features)
+
+                # Mock target variable (e.g., latency prediction)
+                y = np.random.rand(n_samples) * 100  # Random latency values 0-100ms
+
+                logger.info(f"Training {model_name} with mock data ({n_samples} samples, {n_features} features)")
+
+                # Train the model
+                loss = model.train(
+                    min_loss=0.01,
+                    max_epochs=10,
+                    X=X,
+                    y=y
+                )
+
+                # Log training metrics
+                mlflow.log_param("n_samples", n_samples)
+                mlflow.log_param("n_features", n_features)
+                mlflow.log_param("training_type", "mock")
+                mlflow.log_metric("mock_training_loss", loss)
+                mlflow.log_metric("accuracy", 0.85)  # Mock accuracy
+
+                # Log the TRAINED model (accessing the underlying sklearn/xgboost model)
                 mlflow.sklearn.log_model(
-                    sk_model=model,
+                    sk_model=model.model,  # Use the trained .model attribute
                     artifact_path="model",
                     registered_model_name=model_name
                 )
 
-                logger.info(f"Logged and registered untrained model {model_name} with run_id {run.info.run_id}")
+                logger.info(f"Logged and registered mock-trained model {model_name} with run_id {run.info.run_id}")
 
             # Set tags on the registered model
             client = MlflowClient()
-            client.set_registered_model_tag(model_name, "cell_index", cell_index)
+            client.set_registered_model_tag(model_name, "cell_index", str(cell_index))
             client.set_registered_model_tag(model_name, "model_type", model.__class__.__name__)
-            client.set_registered_model_tag(model_name, "status", "untrained")
+            client.set_registered_model_tag(model_name, "status", "mock_trained")
+            client.set_registered_model_tag(model_name, "training_data", "synthetic")
 
             return {
                 'model_name': model_name,
                 'model_type': model.__class__.__name__,
                 'run_id': run.info.run_id,
-                'status': 'untrained'
+                'status': 'mock_trained',
+                'loss': loss
             }
 
         except Exception as e:
