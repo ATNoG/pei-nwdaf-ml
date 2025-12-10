@@ -1,6 +1,8 @@
 from src.models.modelI import ModelI
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, Union, List
 import logging
+import pandas as pd
+import numpy as np
 
 logger = logging.getLogger("Inference")
 
@@ -8,20 +10,25 @@ class InferenceMaker:
     """
     Cooks an inference
     Loads models from MLFlow (communicated with via MLInterface) for producing predictions
+    Supports cell-specific models and batch inference
     """
-    def __init__(self, ml_interface, selected_model_id: Optional[str] = None) -> None:
+
+    def __init__(self, ml_interface, selected_model_id: Optional[str] = None, selected_cell_id: Optional[float] = None) -> None:
         """
         Initialize the inference maker
 
         Args:
             ml_interface: MLInterface instance for communicating with MLFlow
             selected_model_id: Specific model to use, or None for auto-selection
+            selected_cell_id: Specific cell to work with (optional)
         """
         self.ml_interface = ml_interface
-        self._auto_mode: bool = False   # whether inference should auto-select best model or use provided model
-        self._failed_retrieves: int = 0 # times that couldn't retrieve model from repository
-        self._current_model = None      # cached loaded model
+        self._auto_mode: bool = False    # whether inference should auto-select best model or use provided model
+        self._failed_retrieves: int = 0  # times that couldn't retrieve model from repository
+        self._current_model = None       # cached loaded model
         self._current_model_id: Optional[str] = None
+        self._selected_cell_id = selected_cell_id
+        self._model_cache: Dict[str, Any] = {}  # cache for multiple cell models
 
         self.ml_interface.update_component_status('inference', 'initializing')
 
@@ -79,6 +86,43 @@ class InferenceMaker:
             mode=mode,
             current_model=self._current_model_id
         )
+
+    def _get_cell_model_name(self, cell_index: Union[str, float], model_type: Optional[str] = None) -> str:
+        """construct model name for a specific cell"""
+        cell_str = str(cell_index).replace('.', '_')
+        if model_type:
+            return f"cell_{cell_str}_{model_type.lower()}"
+        # default to xgboost if no type specified
+        return f"cell_{cell_str}_xgboost"
+
+    def _load_cell_model(self, cell_index: Union[str, float], model_type: Optional[str] = None) -> Any:
+        """load model for a specific cell"""
+        model_name = self._get_cell_model_name(cell_index, model_type)
+        
+        # check cache first
+        if model_name in self._model_cache:
+            logger.debug(f"Using cached model: {model_name}")
+            return self._model_cache[model_name]
+        
+        try:
+            # try to load from production stage
+            model = self.ml_interface.get_model_by_name(model_name, stage='Production')
+            
+            if not model:
+                # try latest version if production doesn't exist
+                model = self.ml_interface.get_model_by_name(model_name, stage=None)
+            
+            if model:
+                self._model_cache[model_name] = model
+                logger.info(f"Loaded model for cell {cell_index}: {model_name}")
+                return model
+            else:
+                logger.warning(f"No model found for cell {cell_index}: {model_name}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error loading model for cell {cell_index}: {e}")
+            return None
 
     def _load_model(self) -> Any:
         """Loads selected model from MLFlow repository via the interface"""
@@ -226,30 +270,46 @@ class InferenceMaker:
 
     def infer(self, **kwargs) -> Optional[Any]:
         """
-        Produces an inference using the selected model
-
+        Produces inference using selected model or cell-specific models.
+        
+        Supports:
+        - Single cell inference with cell_index
+        - Batch inference with cell_indices
+        - Traditional model-based inference
+        
         Returns:
-            Inference result or None if failed
+            Inference result or None if failed.
         """
         try:
             self.ml_interface.update_component_status('inference', 'inferring')
-
+            
+            # check for cell-specific inference
+            cell_index = kwargs.get('cell_index')
+            cell_indices = kwargs.get('cell_indices')
+            model_type = kwargs.get('model_type')
+            data = kwargs.get('data')
+            
+            # batch inference for multiple cells
+            if cell_indices and isinstance(cell_indices, list):
+                return self._infer_batch(cell_indices, data, model_type)
+            
+            # single cell inference
+            if cell_index is not None:
+                return self._infer_cell(cell_index, data, model_type)
+            
+            # traditional inference (legacy support)
             model = self._load_model()
             if model is None:
                 logger.warning("Couldn't load model for inference")
                 self.ml_interface.update_component_status('inference', 'error', error='model_load_failed')
                 return None
 
-            # Perform inference
             logger.debug("Performing inference...")
 
             if isinstance(model, ModelI):
                 result = model.infer(**kwargs)
             else:
-                # MLFlow pyfunc models use predict()
                 if hasattr(model, 'predict'):
-                    # Expect 'data' key in kwargs for MLFlow models
-                    data = kwargs.get('data')
                     if data is None:
                         logger.error("No 'data' provided for inference")
                         return None
@@ -258,9 +318,7 @@ class InferenceMaker:
                     logger.error("Model does not have infer() or predict() method")
                     return None
 
-            self.ml_interface.log_inference_metrics({
-                'inference_count': 1,
-            })
+            self.ml_interface.log_inference_metrics({'inference_count': 1})
 
             # Log model_used as a tag or parameter instead of a metric
             if hasattr(self.ml_interface, "log_inference_tag"):
@@ -294,18 +352,119 @@ class InferenceMaker:
             )
             return None
 
+    def _prepare_data_for_prediction(self, data: Any) -> Any:
+        """Convert data to a format suitable for model.predict()"""
+        if isinstance(data, pd.DataFrame):
+            return data
+        elif isinstance(data, dict):
+            # Convert dict to DataFrame (single row)
+            return pd.DataFrame([data])
+        elif isinstance(data, list):
+            if len(data) > 0 and isinstance(data[0], dict):
+                # List of dicts -> DataFrame
+                return pd.DataFrame(data)
+            else:
+                # Assume it's already array-like
+                return data
+        else:
+            # Return as-is and let the model handle it
+            return data
+
+    def _convert_result_for_serialization(self, result: Any) -> Any:
+        """Convert prediction result to JSON-serializable format"""
+        if isinstance(result, np.ndarray):
+            return result.tolist()
+        elif isinstance(result, (np.integer, np.floating)):
+            return result.item()
+        elif isinstance(result, pd.DataFrame):
+            return result.to_dict('records')
+        elif isinstance(result, pd.Series):
+            return result.tolist()
+        else:
+            return result
+
+    def _infer_cell(self, cell_index: Union[str, float], data: Any, model_type: Optional[str] = None) -> Optional[Any]:
+        """perform inference for a single cell"""
+        try:
+            model = self._load_cell_model(cell_index, model_type)
+            if model is None:
+                logger.warning(f"No model available for cell {cell_index}")
+                return None
+            
+            # Convert data to appropriate format for prediction
+            prepared_data = self._prepare_data_for_prediction(data)
+            
+            if isinstance(model, ModelI):
+                result = model.infer(data=prepared_data)
+            else:
+                if hasattr(model, 'predict'):
+                    result = model.predict(prepared_data)
+                else:
+                    logger.error(f"Model for cell {cell_index} has no predict method")
+                    return None
+            
+            # Convert result to JSON-serializable format
+            result = self._convert_result_for_serialization(result)
+            
+            model_name = self._get_cell_model_name(cell_index, model_type)
+            self.ml_interface.log_inference_metrics({
+                'inference_count': 1,
+                'cell_index': float(cell_index) if isinstance(cell_index, (int, float)) else hash(str(cell_index))
+            })
+            
+            logger.info(f"Inference completed for cell {cell_index}")
+            self.ml_interface.update_component_status(
+                'inference',
+                'ready',
+                current_model=model_name,
+                last_inference='success'
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in cell inference for {cell_index}: {e}")
+            return None
+
+    def _infer_batch(self, cell_indices: List[Union[str, float]], data: Any, model_type: Optional[str] = None) -> Dict[str, Any]:
+        """perform batch inference for multiple cells"""
+        results = {}
+        
+        for cell_index in cell_indices:
+            try:
+                # if data is a list, match by index; if dict with cell keys, extract
+                cell_data = data
+                if isinstance(data, list) and len(data) == len(cell_indices):
+                    idx = cell_indices.index(cell_index)
+                    cell_data = data[idx]
+                elif isinstance(data, dict) and str(cell_index) in data:
+                    cell_data = data[str(cell_index)]
+                
+                result = self._infer_cell(cell_index, cell_data, model_type)
+                results[str(cell_index)] = result
+                
+            except Exception as e:
+                logger.error(f"Error in batch inference for cell {cell_index}: {e}")
+                results[str(cell_index)] = None
+        
+        logger.info(f"Batch inference completed for {len(cell_indices)} cells")
+        return results
+
     def get_current_model_info(self) -> Dict[str, Any]:
         """Get information about the currently loaded model"""
         return {
             'model_id': self._current_model_id,
             'auto_mode': self._auto_mode,
             'model_loaded': self._current_model is not None,
-            'failed_retrieves': self._failed_retrieves
+            'failed_retrieves': self._failed_retrieves,
+            'cached_models': list(self._model_cache.keys()),
+            'selected_cell_id': self._selected_cell_id
         }
 
     def clear_cache(self) -> None:
         """Clear the cached model, forcing reload on next inference"""
         self._current_model = None
+        self._model_cache.clear()
         logger.info("Model cache cleared")
         self.ml_interface.update_component_status(
             'inference',

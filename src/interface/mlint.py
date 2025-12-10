@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 class MLInterface():
 
     class _topics():
-        #'ml.inference.request',
+        ML_INFERENCE_REQUEST='ml.inference.request'
+        ML_INFERENCE_COMPLETE='ml.inference.complete'
         NETWORK_DATA_PROCESSED='network.data.processed'
         #'network.data.request'
     def __init__(self,
@@ -58,7 +59,8 @@ class MLInterface():
             debug_label='ML Interface Bridge'
         )
         self.topics = [
-            #'ml.inference.request',
+            'ml.inference.request',
+            #'ml.inference.complete',
             'network.data.processed',
             #'network.data.request'
         ]
@@ -128,6 +130,7 @@ class MLInterface():
                 # Bind the handler BEFORE starting consumer
                 self.bridge.add_n_topics(self.topics)
                 self.bridge.bind_topic(self._topics.NETWORK_DATA_PROCESSED, self.cell_model_manager.process_network_data)
+                self.bridge.bind_topic(self._topics.ML_INFERENCE_REQUEST, self._handle_inference_request)
 
                 # Start consumer (without adding topics again)
                 async def start():
@@ -150,6 +153,122 @@ class MLInterface():
         kafka_thread.start()
         logger.info("Kafka consumer starting in background thread")
         return kafka_thread
+
+    def _handle_inference_request(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle incoming inference requests from Kafka.
+        Called automatically when messages arrive on ml.inference.request topic.
+
+        Expected message format: (FOR NOW)
+        {
+            "cell_index": "12898855",
+            "model_type": "xgboost",  # optional, defaults to xgboost
+            "data": {
+                "rsrp_mean": -86.0, "rsrp_max": -81.0, ...
+            },
+            "request_id": "unique-request-id"  # optional, for tracking
+        }
+
+        Args:
+            message_data: Message data (from Kafka consumer)
+
+        Returns the processed message data
+        """
+        import json
+        import datetime
+        from src.inference.inference import InferenceMaker
+
+        logger.info(f"=== INFERENCE REQUEST HANDLER === Message keys: {list(message_data.keys()) if message_data else 'None'}")
+
+        try:
+            content = message_data.get('content', '')
+            if not content:
+                logger.debug("Empty message content, skipping")
+                return message_data
+
+            # Parse JSON content
+            try:
+                data = json.loads(content)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse inference request JSON: {e}")
+                self._publish_inference_error(None, f"Invalid JSON: {e}")
+                return message_data
+
+            # Extract request parameters
+            cell_index = data.get('cell_index')
+            cell_indices = data.get('cell_indices')
+            model_type = data.get('model_type', 'xgboost')
+            inference_data = data.get('data')
+            request_id = data.get('request_id', 'unknown')
+
+            if not inference_data:
+                logger.error("No 'data' field in inference request")
+                self._publish_inference_error(request_id, "Missing 'data' field")
+                return message_data
+
+            if not cell_index and not cell_indices:
+                logger.error("No cell_index or cell_indices in inference request")
+                self._publish_inference_error(request_id, "Missing cell_index or cell_indices")
+                return message_data
+
+            logger.info(f"Processing inference request {request_id} for cell(s): {cell_index or cell_indices}")
+
+            # Create inference maker and perform inference
+            inference_maker = InferenceMaker(self)
+
+            if cell_indices:
+                # Batch inference
+                result = inference_maker.infer(
+                    cell_indices=cell_indices,
+                    data=inference_data,
+                    model_type=model_type
+                )
+                model_used = {
+                    str(cell): inference_maker._get_cell_model_name(cell, model_type)
+                    for cell in cell_indices
+                }
+            else:
+                # Single cell inference
+                result = inference_maker.infer(
+                    cell_index=cell_index,
+                    data=inference_data,
+                    model_type=model_type
+                )
+                model_used = inference_maker._get_cell_model_name(cell_index, model_type)
+
+            # Publish result to ml.inference.complete
+            result_message = json.dumps({
+                "request_id": request_id,
+                "cell_index": cell_index,
+                "cell_indices": cell_indices,
+                "model_used": model_used,
+                "result": result,
+                "status": "success" if result is not None else "failed",
+                "timestamp": datetime.datetime.now().timestamp()
+            })
+
+            self.produce_to_kafka(self._topics.ML_INFERENCE_COMPLETE, result_message)
+            logger.info(f"Inference result published for request {request_id}")
+
+            return message_data
+
+        except Exception as e:
+            logger.error(f"Error processing inference request: {e}")
+            self._publish_inference_error(data.get('request_id', 'unknown') if 'data' in dir() else 'unknown', str(e))
+            return message_data
+
+    def _publish_inference_error(self, request_id: Optional[str], error: str) -> None:
+        """Publish an inference error to the completion topic"""
+        import json
+        import datetime
+
+        error_message = json.dumps({
+            "request_id": request_id,
+            "status": "error",
+            "error": error,
+            "timestamp": datetime.datetime.now().timestamp()
+        })
+        self.produce_to_kafka(self._topics.ML_INFERENCE_COMPLETE, error_message)
 
     async def shutdown_bridge(self) -> None:
         """Shutdown Kafka bridge"""
@@ -344,16 +463,16 @@ class MLInterface():
     def get_training_data(self,
                          start_time: Optional[str] = None,
                          end_time: Optional[str] = None,
-                         data_type: str = 'timeseries',
+                         data_type: str = 'latency',
                          filters: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """
         Request training data from Data Storage component
 
         Args:
-            start_time: Start timestamp for data query
-            end_time: End timestamp for data query
-            data_type: Type of data to fetch ('timeseries', 'analytics')
-            filters: Additional filters for the query
+            start_time: Start timestamp for data query (ISO format)
+            end_time: End timestamp for data query (ISO format)
+            data_type: Type of data to fetch ('latency')
+            filters: Additional filters for the query (e.g., cell_index, offset, limit)
 
         Returns:
             Training data dictionary or None if request failed
@@ -367,7 +486,8 @@ class MLInterface():
         if filters:
             params.update(filters)
 
-        endpoint = f'/query/{data_type}'
+        # Use the actual Data Storage API endpoint
+        endpoint = '/api/v1/processed/latency/'
 
         logger.info(f"Requesting training data: {data_type} from {start_time} to {end_time}")
         return self.request_data_from_storage(endpoint, params=params)
@@ -375,16 +495,16 @@ class MLInterface():
     async def get_training_data_async(self,
                                      start_time: Optional[str] = None,
                                      end_time: Optional[str] = None,
-                                     data_type: str = 'timeseries',
+                                     data_type: str = 'latency',
                                      filters: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """
         Async version of get_training_data
 
         Args:
-            start_time: Start timestamp for data query
-            end_time: End timestamp for data query
-            data_type: Type of data to fetch
-            filters: Additional filters for the query
+            start_time: Start timestamp for data query (ISO format)
+            end_time: End timestamp for data query (ISO format)
+            data_type: Type of data to fetch ('latency')
+            filters: Additional filters for the query (e.g., cell_index, offset, limit)
 
         Returns:
             Training data dictionary or None if request failed
@@ -398,9 +518,74 @@ class MLInterface():
         if filters:
             params.update(filters)
 
-        endpoint = f'/query/{data_type}'
+        # Use the actual Data Storage API endpoint
+        endpoint = '/api/v1/processed/latency/'
 
         logger.info(f"Requesting training data (async): {data_type} from {start_time} to {end_time}")
+        return await self.request_data_from_storage_async(endpoint, params=params)
+
+    def get_latency_data(self,
+                        start_time: str,
+                        end_time: str,
+                        cell_index: int,
+                        offset: int = 0,
+                        limit: int = 100) -> Optional[Dict[str, Any]]:
+        """
+        Request latency data from Data Storage component
+
+        Args:
+            start_time: Start timestamp for data query (ISO format)
+            end_time: End timestamp for data query (ISO format)
+            cell_index: Cell index (required)
+            offset: Number of records to skip (default: 0)
+            limit: Maximum number of records to return (default: 100, max: 1000)
+
+        Returns:
+            Latency data dictionary or None if request failed
+        """
+        params = {
+            'start_time': start_time,
+            'end_time': end_time,
+            'cell_index': cell_index,
+            'offset': offset,
+            'limit': limit
+        }
+
+        endpoint = '/api/v1/processed/latency/'
+
+        logger.info(f"Requesting latency data for cell {cell_index} from {start_time} to {end_time}")
+        return self.request_data_from_storage(endpoint, params=params)
+
+    async def get_latency_data_async(self,
+                                    start_time: str,
+                                    end_time: str,
+                                    cell_index: int,
+                                    offset: int = 0,
+                                    limit: int = 100) -> Optional[Dict[str, Any]]:
+        """
+        Async version of get_latency_data
+
+        Args:
+            start_time: Start timestamp for data query (ISO format)
+            end_time: End timestamp for data query (ISO format)
+            cell_index: Cell index (required)
+            offset: Number of records to skip (default: 0)
+            limit: Maximum number of records to return (default: 100, max: 1000)
+
+        Returns:
+            Latency data dictionary or None if request failed
+        """
+        params = {
+            'start_time': start_time,
+            'end_time': end_time,
+            'cell_index': cell_index,
+            'offset': offset,
+            'limit': limit
+        }
+
+        endpoint = '/api/v1/processed/latency/'
+
+        logger.info(f"Requesting latency data (async) for cell {cell_index} from {start_time} to {end_time}")
         return await self.request_data_from_storage_async(endpoint, params=params)
 
     def check_data_storage_connection(self) -> bool:

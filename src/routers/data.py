@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 import logging
 
-from src.schemas.data import DataQueryRequest, DataStorageRequest
+from src.schemas.data import DataQueryRequest, DataStorageRequest, LatencyQueryRequest
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,72 @@ async def query_training_data(req: DataQueryRequest, request: Request):
         raise
     except Exception as e:
         logger.error(f"Error querying training data: {e}")
+        raise HTTPException(status_code=500, detail=f"Query error: {str(e)}")
+
+
+@router.post("/query/latency")
+async def query_latency_data(req: LatencyQueryRequest, request: Request):
+    """
+    Query latency data from Data Storage component
+
+    This endpoint fetches processed latency data from the Data Storage API's
+    /api/v1/processed/latency/ endpoint for model training or analysis.
+
+    Required parameters:
+    - start_time: Window start time in ISO format
+    - end_time: Window end time in ISO format
+    - cell_index: Cell index to query
+
+    Optional parameters:
+    - offset: Number of records to skip (default: 0)
+    - limit: Maximum number of records to return (default: 100, max: 1000)
+    """
+    ml_interface = request.app.state.ml_interface
+
+    if not ml_interface:
+        raise HTTPException(status_code=500, detail="ML Interface not initialized")
+
+    try:
+        logger.info(f"Querying latency data for cell {req.cell_index} from {req.start_time} to {req.end_time}")
+
+        # Build query parameters matching the Data Storage API requirements
+        params = {
+            "start_time": req.start_time,
+            "end_time": req.end_time,
+            "cell_index": req.cell_index,
+            "offset": req.offset,
+            "limit": req.limit
+        }
+
+        # Query the Data Storage API /api/v1/processed/latency/ endpoint
+        data = await ml_interface.request_data_from_storage_async(
+            endpoint="/api/v1/processed/latency/",
+            params=params,
+            method="GET"
+        )
+
+        if data is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Failed to retrieve latency data from Data Storage API"
+            )
+
+        return {
+            "status": "success",
+            "data": data,
+            "query": {
+                "start_time": req.start_time,
+                "end_time": req.end_time,
+                "cell_index": req.cell_index,
+                "offset": req.offset,
+                "limit": req.limit
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error querying latency data: {e}")
         raise HTTPException(status_code=500, detail=f"Query error: {str(e)}")
 
 
