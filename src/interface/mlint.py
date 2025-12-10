@@ -60,7 +60,7 @@ class MLInterface():
         )
         self.topics = [
             'ml.inference.request',
-            'ml.inference.complete',
+            #'ml.inference.complete',
             'network.data.processed',
             #'network.data.request'
         ]
