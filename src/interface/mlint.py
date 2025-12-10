@@ -16,7 +16,6 @@ import urllib.error
 import urllib.parse
 from threading import Thread
 from typing import Optional, List, Dict, Any
-from src.performance_monitor.cell_model_manager import CellModelManager
 
 from src.mlflow.mlf import MLFlowBridge
 
@@ -52,7 +51,6 @@ class MLInterface():
             'data_storage': {'status': 'unknown', 'last_request': None}
         }
 
-        self.cell_model_manager:CellModelManager = CellModelManager(self)
         self.bridge = PyKafBridge(
             hostname=kafka_host,
             port=kafka_port,
@@ -129,7 +127,6 @@ class MLInterface():
             try:
                 # Bind the handler BEFORE starting consumer
                 self.bridge.add_n_topics(self.topics)
-                self.bridge.bind_topic(self._topics.NETWORK_DATA_PROCESSED, self.cell_model_manager.process_network_data)
                 self.bridge.bind_topic(self._topics.ML_INFERENCE_REQUEST, self._handle_inference_request)
 
                 # Start consumer (without adding topics again)
@@ -671,7 +668,6 @@ class MLInterface():
             return []
 
         try:
-            import mlflow
             from mlflow.tracking import MlflowClient
 
             client = MlflowClient()
