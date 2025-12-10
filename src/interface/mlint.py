@@ -463,16 +463,16 @@ class MLInterface():
     def get_training_data(self,
                          start_time: Optional[str] = None,
                          end_time: Optional[str] = None,
-                         data_type: str = 'timeseries',
+                         data_type: str = 'latency',
                          filters: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """
         Request training data from Data Storage component
 
         Args:
-            start_time: Start timestamp for data query
-            end_time: End timestamp for data query
-            data_type: Type of data to fetch ('timeseries', 'analytics')
-            filters: Additional filters for the query
+            start_time: Start timestamp for data query (ISO format)
+            end_time: End timestamp for data query (ISO format)
+            data_type: Type of data to fetch ('latency')
+            filters: Additional filters for the query (e.g., cell_index, offset, limit)
 
         Returns:
             Training data dictionary or None if request failed
@@ -486,7 +486,8 @@ class MLInterface():
         if filters:
             params.update(filters)
 
-        endpoint = f'/query/{data_type}'
+        # Use the actual Data Storage API endpoint
+        endpoint = '/api/v1/processed/latency/'
 
         logger.info(f"Requesting training data: {data_type} from {start_time} to {end_time}")
         return self.request_data_from_storage(endpoint, params=params)
@@ -494,16 +495,16 @@ class MLInterface():
     async def get_training_data_async(self,
                                      start_time: Optional[str] = None,
                                      end_time: Optional[str] = None,
-                                     data_type: str = 'timeseries',
+                                     data_type: str = 'latency',
                                      filters: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """
         Async version of get_training_data
 
         Args:
-            start_time: Start timestamp for data query
-            end_time: End timestamp for data query
-            data_type: Type of data to fetch
-            filters: Additional filters for the query
+            start_time: Start timestamp for data query (ISO format)
+            end_time: End timestamp for data query (ISO format)
+            data_type: Type of data to fetch ('latency')
+            filters: Additional filters for the query (e.g., cell_index, offset, limit)
 
         Returns:
             Training data dictionary or None if request failed
@@ -517,9 +518,74 @@ class MLInterface():
         if filters:
             params.update(filters)
 
-        endpoint = f'/query/{data_type}'
+        # Use the actual Data Storage API endpoint
+        endpoint = '/api/v1/processed/latency/'
 
         logger.info(f"Requesting training data (async): {data_type} from {start_time} to {end_time}")
+        return await self.request_data_from_storage_async(endpoint, params=params)
+
+    def get_latency_data(self,
+                        start_time: str,
+                        end_time: str,
+                        cell_index: int,
+                        offset: int = 0,
+                        limit: int = 100) -> Optional[Dict[str, Any]]:
+        """
+        Request latency data from Data Storage component
+
+        Args:
+            start_time: Start timestamp for data query (ISO format)
+            end_time: End timestamp for data query (ISO format)
+            cell_index: Cell index (required)
+            offset: Number of records to skip (default: 0)
+            limit: Maximum number of records to return (default: 100, max: 1000)
+
+        Returns:
+            Latency data dictionary or None if request failed
+        """
+        params = {
+            'start_time': start_time,
+            'end_time': end_time,
+            'cell_index': cell_index,
+            'offset': offset,
+            'limit': limit
+        }
+
+        endpoint = '/api/v1/processed/latency/'
+
+        logger.info(f"Requesting latency data for cell {cell_index} from {start_time} to {end_time}")
+        return self.request_data_from_storage(endpoint, params=params)
+
+    async def get_latency_data_async(self,
+                                    start_time: str,
+                                    end_time: str,
+                                    cell_index: int,
+                                    offset: int = 0,
+                                    limit: int = 100) -> Optional[Dict[str, Any]]:
+        """
+        Async version of get_latency_data
+
+        Args:
+            start_time: Start timestamp for data query (ISO format)
+            end_time: End timestamp for data query (ISO format)
+            cell_index: Cell index (required)
+            offset: Number of records to skip (default: 0)
+            limit: Maximum number of records to return (default: 100, max: 1000)
+
+        Returns:
+            Latency data dictionary or None if request failed
+        """
+        params = {
+            'start_time': start_time,
+            'end_time': end_time,
+            'cell_index': cell_index,
+            'offset': offset,
+            'limit': limit
+        }
+
+        endpoint = '/api/v1/processed/latency/'
+
+        logger.info(f"Requesting latency data (async) for cell {cell_index} from {start_time} to {end_time}")
         return await self.request_data_from_storage_async(endpoint, params=params)
 
     def check_data_storage_connection(self) -> bool:
