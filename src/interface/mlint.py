@@ -29,6 +29,12 @@ logger = logging.getLogger(__name__)
 
 
 class MLInterface():
+
+    class _topics():
+        ML_INFERENCE_REQUEST='ml.inference.request'
+        ML_INFERENCE_COMPLETE='ml.inference.complete'
+        NETWORK_DATA_PROCESSED='network.data.processed'
+        #'network.data.request'
     def __init__(self,
                  kafka_host: str = 'localhost',
                  kafka_port: str = '9092',
@@ -43,9 +49,7 @@ class MLInterface():
         )
         self.topics = [
             'ml.inference.request',
-            'ml.inference.response',
-            'ml.training.request',
-            'ml.training.complete',
+            'ml.inference.complete',
             'network.data.processed',
             'network.data.request'
         ]
@@ -106,6 +110,160 @@ class MLInterface():
         except Exception as e:
             logger.error(f"Failed to start PyKaf consumer: {e}")
             return False
+
+    def start_consumer_background(self) -> Thread:
+        """
+        Start the Kafka consumer in a background thread with its own event loop.
+        This prevents rdkafka from blocking the main application.
+
+        Returns:
+            The background thread object
+        """
+        def kafka_worker():
+            """Worker function that runs in background thread"""
+            try:
+                # Bind the handler BEFORE starting consumer
+                self.bridge.add_n_topics(self.topics)
+                self.bridge.bind_topic(self._topics.NETWORK_DATA_PROCESSED, self.cell_model_manager.process_network_data)
+                self.bridge.bind_topic(self._topics.ML_INFERENCE_REQUEST, self._handle_inference_request)
+
+                # Start consumer (without adding topics again)
+                async def start():
+                    await self.bridge.start_consumer()
+                    logger.info("Started PyKaf Consumer")
+                    if self.bridge._consumer_task:
+                        await self.bridge._consumer_task
+
+                asyncio.run(start())
+                logger.info("Kafka consumer thread started successfully")
+
+            except Exception as e:
+                logger.error(f"Kafka consumer thread crashed: {e}")
+
+        kafka_thread = Thread(
+            target=kafka_worker,
+            daemon=True,
+            name="ml-kafka-consumer-thread"
+        )
+        kafka_thread.start()
+        logger.info("Kafka consumer starting in background thread")
+        return kafka_thread
+
+    def _handle_inference_request(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle incoming inference requests from Kafka.
+        Called automatically when messages arrive on ml.inference.request topic.
+
+        Expected message format: (FOR NOW)
+        {
+            "cell_index": "12898855",
+            "model_type": "xgboost",  # optional, defaults to xgboost
+            "data": {
+                "rsrp_mean": -86.0, "rsrp_max": -81.0, ...
+            },
+            "request_id": "unique-request-id"  # optional, for tracking
+        }
+
+        Args:
+            message_data: Message data (from Kafka consumer)
+
+        Returns the processed message data
+        """
+        import json
+        import datetime
+        from src.inference.inference import InferenceMaker
+
+        logger.info(f"=== INFERENCE REQUEST HANDLER === Message keys: {list(message_data.keys()) if message_data else 'None'}")
+
+        try:
+            content = message_data.get('content', '')
+            if not content:
+                logger.debug("Empty message content, skipping")
+                return message_data
+
+            # Parse JSON content
+            try:
+                data = json.loads(content)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse inference request JSON: {e}")
+                self._publish_inference_error(None, f"Invalid JSON: {e}")
+                return message_data
+
+            # Extract request parameters
+            cell_index = data.get('cell_index')
+            cell_indices = data.get('cell_indices')
+            model_type = data.get('model_type', 'xgboost')
+            inference_data = data.get('data')
+            request_id = data.get('request_id', 'unknown')
+
+            if not inference_data:
+                logger.error("No 'data' field in inference request")
+                self._publish_inference_error(request_id, "Missing 'data' field")
+                return message_data
+
+            if not cell_index and not cell_indices:
+                logger.error("No cell_index or cell_indices in inference request")
+                self._publish_inference_error(request_id, "Missing cell_index or cell_indices")
+                return message_data
+
+            logger.info(f"Processing inference request {request_id} for cell(s): {cell_index or cell_indices}")
+
+            # Create inference maker and perform inference
+            inference_maker = InferenceMaker(self)
+
+            if cell_indices:
+                # Batch inference
+                result = inference_maker.infer(
+                    cell_indices=cell_indices,
+                    data=inference_data,
+                    model_type=model_type
+                )
+                model_used = {
+                    str(cell): inference_maker._get_cell_model_name(cell, model_type)
+                    for cell in cell_indices
+                }
+            else:
+                # Single cell inference
+                result = inference_maker.infer(
+                    cell_index=cell_index,
+                    data=inference_data,
+                    model_type=model_type
+                )
+                model_used = inference_maker._get_cell_model_name(cell_index, model_type)
+
+            # Publish result to ml.inference.complete
+            result_message = json.dumps({
+                "request_id": request_id,
+                "cell_index": cell_index,
+                "cell_indices": cell_indices,
+                "model_used": model_used,
+                "result": result,
+                "status": "success" if result is not None else "failed",
+                "timestamp": datetime.datetime.now().timestamp()
+            })
+
+            self.produce_to_kafka(self._topics.ML_INFERENCE_COMPLETE, result_message)
+            logger.info(f"Inference result published for request {request_id}")
+
+            return message_data
+
+        except Exception as e:
+            logger.error(f"Error processing inference request: {e}")
+            self._publish_inference_error(data.get('request_id', 'unknown') if 'data' in dir() else 'unknown', str(e))
+            return message_data
+
+    def _publish_inference_error(self, request_id: Optional[str], error: str) -> None:
+        """Publish an inference error to the completion topic"""
+        import json
+        import datetime
+
+        error_message = json.dumps({
+            "request_id": request_id,
+            "status": "error",
+            "error": error,
+            "timestamp": datetime.datetime.now().timestamp()
+        })
+        self.produce_to_kafka(self._topics.ML_INFERENCE_COMPLETE, error_message)
 
     async def shutdown_bridge(self) -> None:
         """Shutdown Kafka bridge"""
