@@ -65,14 +65,16 @@ class AutoModeRequest(BaseModel):
 
 class AnalyticsRequest(BaseModel):
     """NWDAF analytics prediction request"""
-    analytics_type: str
     cell_id: int
+    horizon: int = 60
+    model_type: str = "xgboost"
 
     class Config:
         json_schema_extra = {
             "example": {
-                "analytics_type": "latency",
-                "cell_id": 26379009
+                "cell_id": 26379009,
+                "horizon": 60,
+                "model_type": "xgboost"
             }
         }
 
@@ -82,7 +84,9 @@ class PredictionHorizon(BaseModel):
     interval: str
     predicted_value: float
     confidence: float
-    data:dict
+    data: dict
+    target_start_time: float
+    target_end_time: float
 
 
 
