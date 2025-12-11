@@ -96,11 +96,12 @@ class InferenceMaker:
         # default to xgboost if no type specified
         return f"cell_{cell_str}_xgboost"
 
-    def _get_inference_type_model_name(self, inference_type: str, model_type: str) -> str:
+    def _get_inference_type_model_name(self, inference_type: str, horizon: int, model_type: str) -> str:
         """construct model name for an inference type"""
-        config = get_inference_config(inference_type)
+        key = (inference_type, horizon)
+        config = get_inference_config(key)
         if not config:
-            raise ValueError(f"config not found: {inference_type}")
+            raise ValueError(f"config not found: {inference_type} with horizon {horizon}s")
         return config.get_model_name(model_type)
 
     def _load_cell_model(self, cell_index: Union[str, float], model_type: Optional[str] = None) -> Any:
@@ -132,10 +133,10 @@ class InferenceMaker:
             logger.error(f"Error loading model for cell {cell_index}: {e}")
             return None
 
-    def _load_inference_type_model(self, inference_type: str, model_type: str) -> Any:
+    def _load_inference_type_model(self, inference_type: str, horizon: int, model_type: str) -> Any:
         """load model for an inference type"""
         try:
-            model_name = self._get_inference_type_model_name(inference_type, model_type)
+            model_name = self._get_inference_type_model_name(inference_type, horizon, model_type)
         except ValueError as e:
             logger.error(str(e))
             return None
@@ -155,10 +156,10 @@ class InferenceMaker:
 
             if model:
                 self._model_cache[model_name] = model
-                logger.info(f"Loaded model for inference type {inference_type}: {model_name}")
+                logger.info(f"Loaded model for inference type {inference_type} (horizon={horizon}s): {model_name}")
                 return model
             else:
-                logger.warning(f"model not found for {inference_type}: {model_name}")
+                logger.warning(f"model not found for {inference_type} (horizon={horizon}s): {model_name}")
                 return None
 
         except Exception as e:
