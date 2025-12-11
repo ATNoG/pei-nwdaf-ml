@@ -30,21 +30,22 @@ class InferenceConfig:
 
 
 # Registry of all available inference types
-INFERENCE_TYPES: Dict[str, InferenceConfig] = {}
+INFERENCE_TYPES: Dict[tuple[str,int], InferenceConfig] = {}
 
 
 def register_inference_type(config: InferenceConfig) -> InferenceConfig:
     """Register an inference type configuration."""
-    INFERENCE_TYPES[config.name] = config
+    key = (config.name,config.window_duration_seconds)
+    INFERENCE_TYPES[key] = config
     return config
 
 
-def get_inference_config(inference_type: str) -> Optional[InferenceConfig]:
+def get_inference_config(key:tuple[str,int]) -> Optional[InferenceConfig]:
     """Get inference configuration by name."""
-    return INFERENCE_TYPES.get(inference_type)
+    return INFERENCE_TYPES.get(key)
 
 
-def get_all_inference_types() -> Dict[str, InferenceConfig]:
+def get_all_inference_types() -> Dict[tuple[str,int], InferenceConfig]:
     """Get all registered inference types."""
     return INFERENCE_TYPES
 

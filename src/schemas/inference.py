@@ -65,6 +65,7 @@ class AutoModeRequest(BaseModel):
 
 class AnalyticsRequest(BaseModel):
     """NWDAF analytics prediction request"""
+    analytics_type:str
     cell_id: int
     horizon: int = 60
     model_type: str = "xgboost"
@@ -72,6 +73,7 @@ class AnalyticsRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
+                "analytics_type": "latency",
                 "cell_id": 26379009,
                 "horizon": 60,
                 "model_type": "xgboost"
@@ -94,31 +96,6 @@ class AnalyticsTypePrediction(BaseModel):
     """Predictions for all time horizons of an analytics type"""
     analytics_type: str
     predictions: List[PredictionHorizon]
-
-
-class CellAnalyticsResponse(BaseModel):
-    """All analytics predictions for a cell"""
-    cell_id: int
-    timestamp: float
-    analytics: List[AnalyticsTypePrediction]
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "cell_id": 26379009,
-                "timestamp": 1733828700.0,
-                "analytics": [
-                    {
-                        "analytics_type": "latency",
-                        "predictions": [
-                            {"interval": "PT1M", "predicted_value": 45.2, "confidence": 0.85},
-                            {"interval": "PT1H", "predicted_value": 48.1, "confidence": 0.75},
-                            {"interval": "P1D", "predicted_value": 50.3, "confidence": 0.65}
-                        ]
-                    }
-                ]
-            }
-        }
 
 
 # Legacy single-prediction response

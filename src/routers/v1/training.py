@@ -12,7 +12,7 @@ from src.schemas.training import (
     ModelTrainingStartResponse,
     ModelTrainingInfo
 )
-from src.config.inference_type import  get_all_inference_types
+from src.config.inference_type import get_inference_config
 
 logger = logging.getLogger(__name__)
 
@@ -69,19 +69,16 @@ async def start_training(
         raise HTTPException(status_code=500, detail="ML Interface not initialized")
 
     # Validate analytics type and horizon match
-    found_config = None
-    for config in get_all_inference_types().values():
-        if config.name == training_request.analytics_type and config.window_duration_seconds == training_request.horizon:
-            found_config = config
-            break
+    key = (training_request.analytics_type, training_request.horizon)
+    config = get_inference_config(key)
 
-    if not found_config:
+    if not config:
         raise HTTPException(
             status_code=404,
             detail=f"No model configuration found for analytics_type={training_request.analytics_type} with horizon={training_request.horizon}s"
         )
 
-    model_name = found_config.get_model_name(training_request.model_type)
+    model_name = config.get_model_name(training_request.model_type)
 
     logger.info(
         f"Starting background training for {model_name} "
@@ -131,14 +128,11 @@ async def get_training_info(
     if not ml_interface:
         raise HTTPException(status_code=500, detail="ML Interface not initialized")
 
-    # Find config matching analytics_type and horizon
-    found_config = None
-    for config in get_all_inference_types().values():
-        if config.name == analytics_type and config.window_duration_seconds == horizon:
-            found_config = config
-            break
+    # Get config using key lookup
+    key = (analytics_type, horizon)
+    config = get_inference_config(key)
 
-    if not found_config:
+    if not config:
         raise HTTPException(
             status_code=404,
             detail=f"No model configuration found for analytics_type={analytics_type} with horizon={horizon}s"
