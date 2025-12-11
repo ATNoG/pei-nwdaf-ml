@@ -96,11 +96,12 @@ class InferenceMaker:
         # default to xgboost if no type specified
         return f"cell_{cell_str}_xgboost"
 
-    def _get_inference_type_model_name(self, inference_type: str, model_type: str) -> str:
+    def _get_inference_type_model_name(self, inference_type: str, horizon: int, model_type: str) -> str:
         """construct model name for an inference type"""
-        config = get_inference_config(inference_type)
+        key = (inference_type, horizon)
+        config = get_inference_config(key)
         if not config:
-            raise ValueError(f"config not found: {inference_type}")
+            raise ValueError(f"config not found: {inference_type} with horizon {horizon}s")
         return config.get_model_name(model_type)
 
     def _load_cell_model(self, cell_index: Union[str, float], model_type: Optional[str] = None) -> Any:
@@ -132,10 +133,10 @@ class InferenceMaker:
             logger.error(f"Error loading model for cell {cell_index}: {e}")
             return None
 
-    def _load_inference_type_model(self, inference_type: str, model_type: str) -> Any:
+    def _load_inference_type_model(self, inference_type: str, horizon: int, model_type: str) -> Any:
         """load model for an inference type"""
         try:
-            model_name = self._get_inference_type_model_name(inference_type, model_type)
+            model_name = self._get_inference_type_model_name(inference_type, horizon, model_type)
         except ValueError as e:
             logger.error(str(e))
             return None
@@ -155,10 +156,10 @@ class InferenceMaker:
 
             if model:
                 self._model_cache[model_name] = model
-                logger.info(f"Loaded model for inference type {inference_type}: {model_name}")
+                logger.info(f"Loaded model for inference type {inference_type} (horizon={horizon}s): {model_name}")
                 return model
             else:
-                logger.warning(f"model not found for {inference_type}: {model_name}")
+                logger.warning(f"model not found for {inference_type} (horizon={horizon}s): {model_name}")
                 return None
 
         except Exception as e:
@@ -312,32 +313,32 @@ class InferenceMaker:
     def infer(self, **kwargs) -> Optional[Any]:
         """
         Produces inference using selected model or cell-specific models.
-        
+
         Supports:
         - Single cell inference with cell_index
         - Batch inference with cell_indices
         - Traditional model-based inference
-        
+
         Returns:
             Inference result or None if failed.
         """
         try:
             self.ml_interface.update_component_status('inference', 'inferring')
-            
+
             # check for cell-specific inference
             cell_index = kwargs.get('cell_index')
             cell_indices = kwargs.get('cell_indices')
             model_type = kwargs.get('model_type')
             data = kwargs.get('data')
-            
+
             # batch inference for multiple cells
             if cell_indices and isinstance(cell_indices, list):
                 return self._infer_batch(cell_indices, data, model_type)
-            
+
             # single cell inference
             if cell_index is not None:
                 return self._infer_cell(cell_index, data, model_type)
-            
+
             # traditional inference (legacy support)
             model = self._load_model()
             if model is None:
@@ -348,7 +349,7 @@ class InferenceMaker:
             logger.debug("Performing inference...")
 
             if isinstance(model, ModelI):
-                result = model.infer(**kwargs)
+                result = model.predict(**kwargs)
             else:
                 if hasattr(model, 'predict'):
                     if data is None:
@@ -431,28 +432,28 @@ class InferenceMaker:
             if model is None:
                 logger.warning(f"No model available for cell {cell_index}")
                 return None
-            
+
             # Convert data to appropriate format for prediction
             prepared_data = self._prepare_data_for_prediction(data)
-            
+
             if isinstance(model, ModelI):
-                result = model.infer(data=prepared_data)
+                result = model.predict(data=prepared_data)
             else:
                 if hasattr(model, 'predict'):
                     result = model.predict(prepared_data)
                 else:
                     logger.error(f"Model for cell {cell_index} has no predict method")
                     return None
-            
+
             # Convert result to JSON-serializable format
             result = self._convert_result_for_serialization(result)
-            
+
             model_name = self._get_cell_model_name(cell_index, model_type)
             self.ml_interface.log_inference_metrics({
                 'inference_count': 1,
                 'cell_index': float(cell_index) if isinstance(cell_index, (int, float)) else hash(str(cell_index))
             })
-            
+
             logger.info(f"Inference completed for cell {cell_index}")
             self.ml_interface.update_component_status(
                 'inference',
@@ -460,9 +461,9 @@ class InferenceMaker:
                 current_model=model_name,
                 last_inference='success'
             )
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Error in cell inference for {cell_index}: {e}")
             return None
@@ -470,7 +471,7 @@ class InferenceMaker:
     def _infer_batch(self, cell_indices: List[Union[str, float]], data: Any, model_type: Optional[str] = None) -> Dict[str, Any]:
         """perform batch inference for multiple cells"""
         results = {}
-        
+
         for cell_index in cell_indices:
             try:
                 # if data is a list, match by index; if dict with cell keys, extract
@@ -480,14 +481,14 @@ class InferenceMaker:
                     cell_data = data[idx]
                 elif isinstance(data, dict) and str(cell_index) in data:
                     cell_data = data[str(cell_index)]
-                
+
                 result = self._infer_cell(cell_index, cell_data, model_type)
                 results[str(cell_index)] = result
-                
+
             except Exception as e:
                 logger.error(f"Error in batch inference for cell {cell_index}: {e}")
                 results[str(cell_index)] = None
-        
+
         logger.info(f"Batch inference completed for {len(cell_indices)} cells")
         return results
 
