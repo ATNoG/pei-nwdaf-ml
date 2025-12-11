@@ -13,7 +13,6 @@ from mlflow.tracking import MlflowClient
 from datetime import datetime
 from typing import Dict, Any
 
-from src.config.inference_type import get_inference_config
 from src.models import models
 
 logger = logging.getLogger(__name__)
@@ -47,14 +46,11 @@ class ModelTrainer:
         Returns:
             dict: Training results with status, model_name, metrics, etc.
         """
-        # Find config matching analytics_type and horizon
-        from src.config.inference_type import get_all_inference_types
+        # Get config using key lookup
+        from src.config.inference_type import get_inference_config
 
-        config = None
-        for cfg in get_all_inference_types().values():
-            if cfg.name == analytics_type and cfg.window_duration_seconds == horizon:
-                config = cfg
-                break
+        key = (analytics_type, horizon)
+        config = get_inference_config(key)
 
         if not config:
             return {
@@ -182,14 +178,11 @@ class ModelTrainer:
         Returns:
             dict: Model information including training history
         """
-        # Find config matching analytics_type and horizon
-        from src.config.inference_type import get_all_inference_types
+        # Get config using key lookup
+        from src.config.inference_type import get_inference_config
 
-        config = None
-        for cfg in get_all_inference_types().values():
-            if cfg.name == analytics_type and cfg.window_duration_seconds == horizon:
-                config = cfg
-                break
+        key = (analytics_type, horizon)
+        config = get_inference_config(key)
 
         if not config:
             return {"status": "error", "message": f"No config found for analytics_type={analytics_type} with horizon={horizon}s"}

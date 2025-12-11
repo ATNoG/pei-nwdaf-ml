@@ -1,25 +1,22 @@
 """
 Analytics predictions endpoint for NWDAF
 """
-from fastapi import APIRouter, HTTPException, Request, Depends
-from datetime import datetime
+from fastapi import APIRouter, HTTPException, Request
 import logging
 
 from src.inference.inference import InferenceMaker
 from src.schemas.inference import (
     AnalyticsRequest,
-    CellAnalyticsResponse,
-    AnalyticsTypePrediction,
     PredictionHorizon as PredictionHorizonModel
 )
-from src.config.inference_type import get_all_inference_types
+from src.config.inference_type import get_inference_config
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-@router.post("", response_model=CellAnalyticsResponse)
+@router.post("", response_model=PredictionHorizonModel)
 async def get_cell_analytics(
     analytics_request: AnalyticsRequest,
     request: Request
@@ -38,35 +35,16 @@ async def get_cell_analytics(
 
     Raises:
         404: No data found for cell
+        404: Analytics type not registered
         500: ML Interface not initialized
 
-    Example:
-        POST /api/v1/analytics
-        {
-            "cell_id": 26379009,
-            "horizon": 60,
-            "model_type": "xgboost"
-        }
-
-        Response:
-        {
-            "cell_id": 26379009,
-            "timestamp": 1733828700.0,
-            "analytics": [
-                {
-                    "analytics_type": "latency",
-                    "predictions": [
-                        {"interval": "PT1M", "predicted_value": 45.2, "confidence": 0.85}
-                    ]
-                }
-            ]
-        }
     """
     ml_interface = request.app.state.ml_interface
     if not ml_interface:
         raise HTTPException(status_code=500, detail="ML Interface not initialized")
 
     cell_id = analytics_request.cell_id
+    analytics_type = analytics_request.analytics_type
     horizon = analytics_request.horizon
     model_type = analytics_request.model_type
 
@@ -88,92 +66,73 @@ async def get_cell_analytics(
         weeks = horizon // 604800
         interval_str = f"P{weeks}W"
 
-    analytics_results = []
-    inference_types = get_all_inference_types()
+    key = (analytics_type,horizon)
+    config = get_inference_config(key)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Analytics type not registered or analytics not allowed for given horizon")
 
-    for analytics_type, config in inference_types.items():
-        # Skip if config window duration doesn't match requested horizon
-        if config.window_duration_seconds != horizon:
-            logger.debug(f"Skipping {analytics_type}: window_duration={config.window_duration_seconds}, requested={horizon}")
-            continue
 
-        inference_maker = InferenceMaker(ml_interface)
-        model = inference_maker._load_inference_type_model(analytics_type, model_type)
+    inference_maker = InferenceMaker(ml_interface)
+    model = inference_maker._load_inference_type_model(analytics_type, horizon, model_type)
 
-        if model is None or not hasattr(model, "predict"):
-            logger.warning(f"No model for {analytics_type} with type {model_type}")
-            continue
+    if model is None or not hasattr(model, "predict"):
+        raise HTTPException(status_code=404,detail=f"No model for {analytics_type} (horizon={horizon}s) with type {model_type}")
 
-        # Generate prediction for the requested horizon
-        predictions = []
-        try:
-            window_data = await ml_interface.fetch_latest_cell_data(
-                endpoint=config.storage_endpoint,
-                cell_id=cell_id,
-                window_duration_seconds=config.window_duration_seconds
-            )
+    # Generate prediction for the requested horizon
+    try:
+        window_data = await ml_interface.fetch_latest_cell_data(
+            endpoint=config.storage_endpoint,
+            cell_id=cell_id,
+            window_duration_seconds=config.window_duration_seconds
+        )
 
-            if window_data is None:
-                logger.warning(f"No data for {analytics_type}, cell {cell_id}")
-                continue
+        if window_data is None:
+            raise HTTPException(status_code=404,detaul=f"No data for {analytics_type}, cell {cell_id}")
 
-            # Extract features (exclude metadata and target columns)
-            inference_data = {
-                k: v for k, v in window_data.items()
-                if k not in {
-                    "window_start_time", "window_end_time",
-                    "window_duration_seconds", "cell_index",
-                    "network", "sample_count"
-                }
-                and not k.startswith(analytics_type + '_')  # Exclude target columns (latency_*, throughput_*, etc.)
-                and v is not None
+        # Extract features (exclude metadata and target columns)
+        inference_data = {
+            k: v for k, v in window_data.items()
+            if k not in {
+                "window_start_time", "window_end_time",
+                "window_duration_seconds", "cell_index",
+                "network", "sample_count"
             }
+            and not k.startswith(analytics_type + '_')  # Exclude target columns (latency_*, throughput_*, etc.)
+            and v is not None
+        }
 
-            if not inference_data:
-                continue
+        if not inference_data:
+            raise HTTPException(status_code=404,detaul=f"No data for {analytics_type}, cell {cell_id}")
 
-            # Prepare data
-            prepared_data = inference_maker._prepare_data_for_prediction(inference_data)
+        # Prepare data
+        prepared_data = inference_maker._prepare_data_for_prediction(inference_data)
 
-            result = model.predict(prepared_data)
-            result = inference_maker._convert_result_for_serialization(result)
+        result = model.predict(prepared_data)
+        result = inference_maker._convert_result_for_serialization(result)
 
-            if isinstance(result, list) and result:
-                result = result[0]
+        if isinstance(result, list) and result:
+            result = result[0]
 
-            # Confidence degrades with longer horizon
-            base_confidence = 0.85
-            horizon_factor = min(1.0, 60 / horizon)
-            confidence = base_confidence * horizon_factor
+        # TODO: compute confidence
+        # maybe based on number of samples and stability
+        base_confidence = 0.85
+        horizon_factor = min(1.0, 60 / horizon)
+        confidence = base_confidence * horizon_factor
 
-            # Calculate prediction window
-            inference_data_end = window_data.get("window_end_time", 0)
-            target_start = inference_data_end
-            target_end = inference_data_end + horizon
+        # Calculate prediction window
+        inference_data_end = window_data.get("window_end_time", 0)
+        target_start = inference_data_end
+        target_end = inference_data_end + horizon
 
-            predictions.append(PredictionHorizonModel(
-                interval=interval_str,
-                predicted_value=float(result),
-                confidence=round(confidence, 2),
-                data=inference_data,
-                target_start_time=target_start,
-                target_end_time=target_end,
-            ))
+        return PredictionHorizonModel(
+            interval=interval_str,
+            predicted_value=float(result),
+            confidence=round(confidence, 2),
+            data=inference_data,
+            target_start_time=target_start,
+            target_end_time=target_end,
+        )
 
-        except Exception as e:
-            logger.error(f"Error predicting for {analytics_type}: {e}")
-
-        if predictions:
-            analytics_results.append(AnalyticsTypePrediction(
-                analytics_type=analytics_type,
-                predictions=predictions
-            ))
-
-    if not analytics_results:
-        raise HTTPException(status_code=404, detail="no data")
-
-    return CellAnalyticsResponse(
-        cell_id=cell_id,
-        timestamp=datetime.now().timestamp(),
-        analytics=analytics_results
-    )
+    except Exception as e:
+        logger.error(f"Error predicting for {analytics_type}: {e}")
+        raise HTTPException(status_code=400,detail="Failed to predict")
