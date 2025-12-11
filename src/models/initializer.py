@@ -9,7 +9,7 @@ import numpy as np
 import mlflow
 from mlflow.tracking import MlflowClient
 
-from src.config.inference_type import get_all_inference_types
+from src.config.inference_type import InferenceConfig, get_all_inference_types
 from src.models import models
 
 logger = logging.getLogger(__name__)
@@ -88,14 +88,14 @@ def _model_exists(ml_interface, model_name: str) -> bool:
         try:
             client.get_registered_model(model_name)
             return True
-        except:
+        except Exception:
             return False
     except Exception as e:
         logger.error(f"Error checking model existence: {e}")
         return False
 
 
-def _create_model(ml_interface, inf_config, model_type: str, model_name: str) -> bool:
+def _create_model(ml_interface, inf_config:InferenceConfig, model_type: str, model_name: str) -> bool:
     """
     Create and register a model in MLflow.
 
@@ -134,7 +134,7 @@ def _create_model(ml_interface, inf_config, model_type: str, model_name: str) ->
                     k for k in sample.keys()
                     if k not in ['window_start_time', 'window_end_time',
                                 'window_duration_seconds', 'cell_index',
-                                'network', 'sample_count']
+                                'network', 'sample_count'] and not k.startswith(inf_config.name)
                 ]
                 n_features = len(feature_keys)
                 logger.info(f"Detected {n_features} features from example data")
@@ -161,7 +161,6 @@ def _create_model(ml_interface, inf_config, model_type: str, model_name: str) ->
             # Create and train model instance
             model_instance = ModelClass()
             loss = model_instance.train(
-                min_loss=0.01,
                 max_epochs=10,
                 X=X,
                 y=y
