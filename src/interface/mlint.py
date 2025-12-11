@@ -585,6 +585,137 @@ class MLInterface():
         logger.info(f"Requesting latency data (async) for cell {cell_index} from {start_time} to {end_time}")
         return await self.request_data_from_storage_async(endpoint, params=params)
 
+    def fetch_known_cells(self) -> Optional[List[int]]:
+        """
+        Fetch list of known cell indexes from storage.
+
+        Returns:
+            List of cell indexes or None if request failed
+        """
+        try:
+            #TODO: maybe don't hardcode this
+            cells = self.request_data_from_storage(
+                endpoint="/api/v1/cell/",
+                method="GET"
+            )
+
+            if cells and isinstance(cells, list):
+                logger.info(f"Fetched {len(cells)} known cells from storage")
+                return cells
+
+            logger.warning("No cells returned from storage")
+            return []
+
+        except Exception as e:
+            logger.error(f"Error fetching known cells: {e}", exc_info=True)
+            return None
+
+    async def fetch_known_cells_async(self) -> Optional[List[int]]:
+        """
+        Async version of fetch_known_cells.
+
+        Returns:
+            List of cell indexes or None if request failed
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.fetch_known_cells)
+
+    async def fetch_latest_cell_data(
+        self,
+        endpoint: str,
+        cell_id: int,
+        window_duration_seconds: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Fetch latest data window for a cell.
+
+        Args:
+            endpoint: Storage endpoint to query
+            cell_id: Cell identifier
+            window_duration_seconds: Duration of window in seconds
+
+        Returns:
+            Latest data window or None if not found
+        """
+        try:
+            params = {
+                "cell_index": cell_id,
+                "start_time": 0,
+                "end_time": 9999999999,
+                "offset": 0,
+                "limit": 1,
+                "window_duration_seconds": window_duration_seconds,
+            }
+
+            logger.info(f"Fetching latest data for cell {cell_id} with window {window_duration_seconds}s")
+
+            data = await self.request_data_from_storage_async(
+                endpoint=endpoint,
+                params=params,
+                method="GET"
+            )
+
+            if not data or len(data) == 0:
+                logger.warning(f"No data found for cell {cell_id}")
+                return None
+
+            window = data[0] if isinstance(data, list) else data
+            logger.info(f"Found data for cell {cell_id}")
+            return window
+
+        except Exception as e:
+            logger.error(f"Error fetching data for cell {cell_id}: {e}", exc_info=True)
+            return None
+
+    def fetch_training_data_for_cells(
+        self,
+        endpoint: str,
+        cell_indexes: List[int],
+        window_duration_seconds: int,
+        data_limit_per_cell: int = 100
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch training data from storage for multiple cells.
+
+        Args:
+            endpoint: Storage endpoint to query
+            cell_indexes: List of cell indexes to fetch data from
+            window_duration_seconds: Duration of window in seconds
+            data_limit_per_cell: Maximum samples to fetch per cell
+
+        Returns:
+            List of all data samples collected from all cells
+        """
+        all_data = []
+
+        for cell_index in cell_indexes:
+            try:
+                params = {
+                    "cell_index": cell_index,
+                    "start_time": 0,
+                    "end_time": 9999999999,
+                    "offset": 0,
+                    "limit": data_limit_per_cell,
+                    "window_duration_seconds": window_duration_seconds
+                }
+
+                data = self.request_data_from_storage(
+                    endpoint=endpoint,
+                    params=params,
+                    method="GET"
+                )
+
+                if data and len(data) > 0:
+                    all_data.extend(data)
+                    logger.info(f"Fetched {len(data)} samples from cell {cell_index}")
+
+            except Exception as e:
+                logger.warning(f"Error fetching data for cell {cell_index}: {e}")
+                continue
+
+        logger.info(f"Total collected: {len(all_data)} samples from {len(cell_indexes)} cells")
+        return all_data
+
     def check_data_storage_connection(self) -> bool:
         """
         Check if Data Storage API is reachable
