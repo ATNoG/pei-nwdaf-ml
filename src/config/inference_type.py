@@ -1,3 +1,5 @@
+"""Author: T.Vicente"""
+
 from dataclasses import dataclass
 from typing import Optional, Dict
 
@@ -11,6 +13,7 @@ class InferenceConfig:
     storage_endpoint: str              # datastorage endpoint for fetching processed data
     example_endpoint: str              # endpoint to fetch example data format. Used to "format" models
     model_prefix: str                  # Prefix for model names in MLFlow
+    window_duration_seconds:int        # Duration of window for this model
     description: Optional[str] = None  # Human-readable description
 
     def get_model_name(self, model_type: str) -> str:
@@ -23,34 +26,36 @@ class InferenceConfig:
         Returns:
             Model name string
         """
-        return f"{self.model_prefix}_{model_type.lower()}"
+        return f"{self.model_prefix}_{model_type.lower()}_{self.window_duration_seconds}"
 
 
 # Registry of all available inference types
-INFERENCE_TYPES: Dict[str, InferenceConfig] = {}
+INFERENCE_TYPES: Dict[tuple[str,int], InferenceConfig] = {}
 
 
 def register_inference_type(config: InferenceConfig) -> InferenceConfig:
     """Register an inference type configuration."""
-    INFERENCE_TYPES[config.name] = config
+    key = (config.name,config.window_duration_seconds)
+    INFERENCE_TYPES[key] = config
     return config
 
 
-def get_inference_config(inference_type: str) -> Optional[InferenceConfig]:
+def get_inference_config(key:tuple[str,int]) -> Optional[InferenceConfig]:
     """Get inference configuration by name."""
-    return INFERENCE_TYPES.get(inference_type)
+    return INFERENCE_TYPES.get(key)
 
 
-def get_all_inference_types() -> Dict[str, InferenceConfig]:
+def get_all_inference_types() -> Dict[tuple[str,int], InferenceConfig]:
     """Get all registered inference types."""
     return INFERENCE_TYPES
 
 
 # Define available inference types
-LATENCY = register_inference_type(InferenceConfig(
+LATENCY_60 = register_inference_type(InferenceConfig(
     name="latency",
     storage_endpoint="/api/v1/processed/latency/",
     example_endpoint="/api/v1/processed/latency/example",
     model_prefix="latency",
+    window_duration_seconds=60,
     description="Network latency prediction and analysis"
 ))

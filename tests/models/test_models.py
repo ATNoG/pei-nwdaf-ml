@@ -58,14 +58,14 @@ def test_xgboost_train_infer_serialize(mock_data):
     model = XGBoost()
     loss = model.train(min_loss=0.01, max_epochs=10, X=X, y=y)
     assert isinstance(loss, float)
-    preds = model.infer(data=X[:5])
+    preds = model.predict(data=X[:5])
     assert preds.shape[0] == 5
 
     serialized = model.serialize()
     loaded_model = XGBoost.deserialize(serialized)
 
     # test if the same model was loaded
-    preds_loaded = loaded_model.infer(data=X[:5])
+    preds_loaded = loaded_model.predict(data=X[:5])
     np.testing.assert_allclose(preds, preds_loaded, rtol=1e-5)
 
 def test_randomforest_train_infer_serialize(mock_data):
@@ -73,12 +73,12 @@ def test_randomforest_train_infer_serialize(mock_data):
     model = RandomForest()
     loss = model.train(min_loss=0.01, max_epochs=10, X=X, y=y)
     assert isinstance(loss, float)
-    preds = model.infer(data=X[:5])
+    preds = model.predict(data=X[:5])
     assert preds.shape[0] == 5
 
     serialized = model.serialize()
     loaded_model = RandomForest.deserialize(serialized)
 
     # test if the same model was loaded
-    preds_loaded = loaded_model.infer(data=X[:5])
+    preds_loaded = loaded_model.predict(data=X[:5])
     np.testing.assert_allclose(preds, preds_loaded, rtol=1e-5)
