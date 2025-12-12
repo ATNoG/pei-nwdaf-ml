@@ -56,7 +56,7 @@ def mock_data():
 def test_xgboost_train_infer_serialize(mock_data):
     X, y = mock_data
     model = XGBoost()
-    loss = model.train(min_loss=0.01, max_epochs=10, X=X, y=y)
+    loss = model.train( max_epochs=10, X=X, y=y)
     assert isinstance(loss, float)
     preds = model.predict(data=X[:5])
     assert preds.shape[0] == 5
@@ -71,7 +71,7 @@ def test_xgboost_train_infer_serialize(mock_data):
 def test_randomforest_train_infer_serialize(mock_data):
     X, y = mock_data
     model = RandomForest()
-    loss = model.train(min_loss=0.01, max_epochs=10, X=X, y=y)
+    loss = model.train(max_epochs=10, X=X, y=y)
     assert isinstance(loss, float)
     preds = model.predict(data=X[:5])
     assert preds.shape[0] == 5
