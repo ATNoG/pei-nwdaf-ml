@@ -51,6 +51,8 @@ def initialize_models(ml_interface) -> dict:
                 if _model_exists(ml_interface, model_name):
                     logger.info(f"Model already exists: {model_name}")
                     results["existing"].append(model_name)
+                    if inf_config.default_model is None:
+                        inf_config.set_default_model(model_type)
                 else:
                     # Create and register model
                     logger.info(f"Creating model: {model_name}")
@@ -63,6 +65,9 @@ def initialize_models(ml_interface) -> dict:
                     if success:
                         results["created"].append(model_name)
                         logger.info(f"Successfully created: {model_name}")
+                        if inf_config.default_model is None:
+                            inf_config.set_default_model(model_type)
+
                     else:
                         results["failed"].append(model_name)
                         logger.error(f"Failed to create: {model_name}")
