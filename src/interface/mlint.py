@@ -624,8 +624,9 @@ class MLInterface():
         self,
         endpoint: str,
         cell_id: int,
-        window_duration_seconds: int
-    ) -> Optional[Dict[str, Any]]:
+        window_duration_seconds: int,
+        num_windows:int
+    ) -> Optional[list[Dict[str, Any]]]:
         """
         Fetch latest data window for a cell.
 
@@ -643,7 +644,7 @@ class MLInterface():
                 "start_time": 0,
                 "end_time": 9999999999,
                 "offset": 0,
-                "limit": 1,
+                "limit": num_windows,
                 "window_duration_seconds": window_duration_seconds,
             }
 
@@ -659,9 +660,8 @@ class MLInterface():
                 logger.warning(f"No data found for cell {cell_id}")
                 return None
 
-            window = data[0] if isinstance(data, list) else data
             logger.info(f"Found data for cell {cell_id}")
-            return window
+            return data
 
         except Exception as e:
             logger.error(f"Error fetching data for cell {cell_id}: {e}", exc_info=True)
