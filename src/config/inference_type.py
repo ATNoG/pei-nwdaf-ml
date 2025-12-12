@@ -57,5 +57,14 @@ LATENCY_60 = register_inference_type(InferenceConfig(
     example_endpoint="/api/v1/processed/latency/example",
     model_prefix="latency",
     window_duration_seconds=60,
-    description="Network latency prediction and analysis"
+    description="Predict next window"
+))
+
+LATENCY_300 = register_inference_type(InferenceConfig(
+    name="latency",
+    storage_endpoint="/api/v1/processed/latency/",
+    example_endpoint="/api/v1/processed/latency/example",
+    model_prefix="latency",
+    window_duration_seconds=300,
+    description=""
 ))

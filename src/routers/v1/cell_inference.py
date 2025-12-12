@@ -3,6 +3,7 @@ Analytics predictions endpoint for NWDAF
 """
 from fastapi import APIRouter, HTTPException, Request
 import logging
+import numpy as np
 
 from src.inference.inference import InferenceMaker
 from src.schemas.inference import (
@@ -10,6 +11,7 @@ from src.schemas.inference import (
     PredictionHorizon as PredictionHorizonModel
 )
 from src.config.inference_type import get_inference_config
+from src.models import models_dict
 
 logger = logging.getLogger(__name__)
 
@@ -66,51 +68,93 @@ async def get_cell_analytics(
         weeks = horizon // 604800
         interval_str = f"P{weeks}W"
 
-    key = (analytics_type,horizon)
+    key = (analytics_type, horizon)
     config = get_inference_config(key)
     if config is None:
         raise HTTPException(status_code=404, detail="Analytics type not registered or analytics not allowed for given horizon")
 
-
-    inference_maker = InferenceMaker(ml_interface)
-    model = inference_maker._load_inference_type_model(analytics_type, horizon, model_type)
-
-    if model is None or not hasattr(model, "predict"):
-        raise HTTPException(status_code=404,detail=f"No model for {analytics_type} (horizon={horizon}s) with type {model_type}")
+    model_class = models_dict.get(model_type.lower())
+    if model_class is None:
+        raise HTTPException(status_code=404, detail=f"Model type not found: {model_type}")
 
     # Generate prediction for the requested horizon
     try:
-        window_data = await ml_interface.fetch_latest_cell_data(
+        # Fetch data based on model's sequence length requirement
+        windows_data = await ml_interface.fetch_latest_cell_data(
             endpoint=config.storage_endpoint,
             cell_id=cell_id,
-            window_duration_seconds=config.window_duration_seconds
+            window_duration_seconds=config.window_duration_seconds,
+            num_windows=model_class.SEQUENCE_LENGTH
         )
 
-        if window_data is None:
-            raise HTTPException(status_code=404,detaul=f"No data for {analytics_type}, cell {cell_id}")
+        if windows_data is None:
+            raise HTTPException(status_code=404, detail=f"No data for {analytics_type}, cell {cell_id}")
 
-        # Extract features (exclude metadata and target columns)
-        inference_data = {
-            k: v for k, v in window_data.items()
-            if k not in {
-                "window_start_time", "window_end_time",
-                "window_duration_seconds", "cell_index",
-                "network", "sample_count"
+        # Ensure we have a list of windows
+        if isinstance(windows_data, dict):
+            windows_data = [windows_data]
+
+        if len(windows_data) < model_class.SEQUENCE_LENGTH:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Not enough data to use model [{model_type}]. Need {model_class.SEQUENCE_LENGTH} windows, got {len(windows_data)}"
+            )
+
+        # Load the trained model from MLflow
+        inference_maker = InferenceMaker(ml_interface)
+        model = inference_maker._load_inference_type_model(analytics_type, horizon, model_type)
+
+        if model is None or not hasattr(model, "predict"):
+            raise HTTPException(status_code=404, detail=f"No model for {analytics_type} (horizon={horizon}s) with type {model_type}")
+
+        # Extract features from windows
+        def extract_features(window_dict):
+            return {
+                k: v for k, v in window_dict.items()
+                if k not in {
+                    "window_start_time", "window_end_time",
+                    "window_duration_seconds", "cell_index",
+                    "network", "sample_count"
+                }
+                and not k.startswith(analytics_type + '_')  # Exclude target columns (latency_*, throughput_*, etc.)
+                and v is not None
             }
-            and not k.startswith(analytics_type + '_')  # Exclude target columns (latency_*, throughput_*, etc.)
-            and v is not None
-        }
+
+        # Handle both single window and sequence cases
+        if model_class.SEQUENCE_LENGTH == 1:
+            # Single window model: extract features from first (and only) window
+            inference_data = extract_features(windows_data[0])
+            prepared_data = inference_maker._prepare_data_for_prediction(inference_data)
+            last_window = windows_data[0]
+        else:
+            # Sequence model: extract features from all windows and stack
+            features_list = [extract_features(w) for w in windows_data]
+
+            if not features_list or not features_list[0]:
+                raise HTTPException(status_code=404, detail=f"No valid features for {analytics_type}, cell {cell_id}")
+
+            # Prepare each window and stack them
+            prepared_list = [inference_maker._prepare_data_for_prediction(f) for f in features_list]
+            prepared_data = np.array(prepared_list)
+
+            inference_data = features_list[0]
+            last_window = windows_data[-1]
 
         if not inference_data:
-            raise HTTPException(status_code=404,detaul=f"No data for {analytics_type}, cell {cell_id}")
+            raise HTTPException(status_code=404, detail=f"No valid features for {analytics_type}, cell {cell_id}")
 
-        # Prepare data
-        prepared_data = inference_maker._prepare_data_for_prediction(inference_data)
+        # Ensure data is float32 for PyTorch models
+        if isinstance(prepared_data, np.ndarray):
+            prepared_data = prepared_data.astype(np.float32)
+        elif hasattr(prepared_data, 'astype'):  # pandas DataFrame
+            prepared_data = prepared_data.astype(np.float32)
 
+        # Get prediction
         result = model.predict(prepared_data)
         result = inference_maker._convert_result_for_serialization(result)
 
-        if isinstance(result, list) and result:
+        # Extract scalar value from nested lists/arrays
+        while isinstance(result, (list, np.ndarray)) and len(result) > 0:
             result = result[0]
 
         # TODO: compute confidence
@@ -119,12 +163,14 @@ async def get_cell_analytics(
         horizon_factor = min(1.0, 60 / horizon)
         confidence = base_confidence * horizon_factor
 
-        # Calculate prediction window
-        inference_data_end = window_data.get("window_end_time", 0)
-        target_start = inference_data_end
-        target_end = inference_data_end + horizon
+        # Calculate prediction window from last data window
+        last_window_end = last_window.get("window_end_time", 0)
+        target_start = last_window_end
+        target_end = last_window_end + horizon
 
         return PredictionHorizonModel(
+            used_model=model_type,
+            cell_index=cell_id,
             interval=interval_str,
             predicted_value=float(result),
             confidence=round(confidence, 2),
@@ -133,6 +179,8 @@ async def get_cell_analytics(
             target_end_time=target_end,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error predicting for {analytics_type}: {e}")
-        raise HTTPException(status_code=400,detail="Failed to predict")
+        logger.error(f"Error predicting for {analytics_type}: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail="Failed to predict")
