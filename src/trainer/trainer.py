@@ -115,12 +115,19 @@ class ModelTrainer:
                 mlflow.log_param("max_epochs", max_epochs)
                 mlflow.log_metric("training_loss", loss)
 
-                # Log model to MLflow
-                mlflow.sklearn.log_model(
-                    sk_model=model_instance.model,
-                    artifact_path="model",
-                    registered_model_name=model_name
-                )
+                # Log model to MLflow based on framework
+                if ModelClass.FRAMEWORK == "pytorch":
+                    mlflow.pytorch.log_model(
+                        pytorch_model=model_instance.model,
+                        artifact_path="model",
+                        registered_model_name=model_name
+                    )
+                else:  # sklearn
+                    mlflow.sklearn.log_model(
+                        sk_model=model_instance.model,
+                        artifact_path="model",
+                        registered_model_name=model_name
+                    )
 
                 run_id = run.info.run_id
                 logger.info(f"Model {model_name} trained with run_id {run_id}")

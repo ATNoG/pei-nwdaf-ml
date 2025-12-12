@@ -32,7 +32,6 @@ def initialize_models(ml_interface) -> dict:
         return {"status": "error", "message": "MLflow not connected"}
 
     inference_types = get_all_inference_types()
-    model_types = ["xgboost", "randomforest"]
 
     results = {
         "created": [],
@@ -42,8 +41,9 @@ def initialize_models(ml_interface) -> dict:
 
     logger.info(f"Initializing models for {len(inference_types)} inference types")
 
-    for inf_type_name, inf_config in inference_types.items():
-        for model_type in model_types:
+    for _, inf_config in inference_types.items():
+        for model_cls in models:
+            model_type = model_cls.__name__.lower()
             model_name = inf_config.get_model_name(model_type)
 
             try:
@@ -57,7 +57,7 @@ def initialize_models(ml_interface) -> dict:
                     success = _create_model(
                         ml_interface,
                         inf_config,
-                        model_type,
+                        model_cls,
                         model_name
                     )
                     if success:
@@ -95,7 +95,7 @@ def _model_exists(ml_interface, model_name: str) -> bool:
         return False
 
 
-def _create_model(ml_interface, inf_config:InferenceConfig, model_type: str, model_name: str) -> bool:
+def _create_model(ml_interface, inf_config:InferenceConfig, ModelClass, model_name: str) -> bool:
     """
     Create and register a model in MLflow.
 
@@ -108,17 +108,8 @@ def _create_model(ml_interface, inf_config:InferenceConfig, model_type: str, mod
     Returns:
         bool: Success status
     """
+    model_type = ModelClass.__name__.lower()
     try:
-        # Get model class
-        ModelClass = None
-        for model_cls in models:
-            if model_cls.__name__.lower() == model_type:
-                ModelClass = model_cls
-                break
-
-        if not ModelClass:
-            logger.error(f"Model class not found for type: {model_type}")
-            return False
 
         # Fetch example data to determine feature count
         try:
@@ -174,12 +165,19 @@ def _create_model(ml_interface, inf_config:InferenceConfig, model_type: str, mod
             mlflow.log_metric("training_loss", loss)
             mlflow.log_metric("accuracy", 0.85)  # Mock accuracy
 
-            # Log model
-            mlflow.sklearn.log_model(
-                sk_model=model_instance.model,
-                artifact_path="model",
-                registered_model_name=model_name
-            )
+            # Log model based on framework
+            if ModelClass.FRAMEWORK == "pytorch":
+                mlflow.pytorch.log_model(
+                    pytorch_model=model_instance.model,
+                    artifact_path="model",
+                    registered_model_name=model_name
+                )
+            else:  # sklearn
+                mlflow.sklearn.log_model(
+                    sk_model=model_instance.model,
+                    artifact_path="model",
+                    registered_model_name=model_name
+                )
 
             logger.info(f"Registered model {model_name} with run_id {run.info.run_id}")
 
