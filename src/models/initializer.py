@@ -165,12 +165,19 @@ def _create_model(ml_interface, inf_config:InferenceConfig, ModelClass, model_na
             mlflow.log_metric("training_loss", loss)
             mlflow.log_metric("accuracy", 0.85)  # Mock accuracy
 
-            # Log model
-            mlflow.sklearn.log_model(
-                sk_model=model_instance.model,
-                artifact_path="model",
-                registered_model_name=model_name
-            )
+            # Log model based on framework
+            if ModelClass.FRAMEWORK == "pytorch":
+                mlflow.pytorch.log_model(
+                    pytorch_model=model_instance.model,
+                    artifact_path="model",
+                    registered_model_name=model_name
+                )
+            else:  # sklearn
+                mlflow.sklearn.log_model(
+                    sk_model=model_instance.model,
+                    artifact_path="model",
+                    registered_model_name=model_name
+                )
 
             logger.info(f"Registered model {model_name} with run_id {run.info.run_id}")
 

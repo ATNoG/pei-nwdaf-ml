@@ -7,20 +7,18 @@ import numpy as np
 
 class RandomForest(ModelI):
     HEADER = b"RANDOMFOREST_MODEL"
+    FRAMEWORK = "sklearn"
 
     def __init__(self):
         super().__init__()
         self.model = None
 
-    def predict(self, **args):
-        data = args.get("data")
+    def predict(self, data):
         if self.model is None:
             raise RuntimeError("Model not trained.")
         return self.model.predict(data)
 
-    def train(self, max_epochs: int, **args):
-        X = args["X"]
-        y = args["y"]
+    def train(self, max_epochs: int, X, y):
         model = RandomForestRegressor(n_estimators=max_epochs)
         model.fit(X, y)
         self.model = model

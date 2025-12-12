@@ -83,6 +83,8 @@ class AnalyticsRequest(BaseModel):
 
 class PredictionHorizon(BaseModel):
     """Single prediction for a time horizon"""
+    used_model: str
+    cell_index: int
     interval: str
     predicted_value: float
     confidence: float
