@@ -1,9 +1,17 @@
 """Configuration endpoint for API metadata"""
-from fastapi import APIRouter
-from src.config.inference_type import get_all_inference_types
-from src.schemas.config import ConfigResponse, InferenceTypeConfig
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from src.services.config import ConfigService
+from src.schemas.config import ConfigResponse
 
 router = APIRouter()
+
+
+class UpdateDefaultModelRequest(BaseModel):
+    analytics_type: str
+    horizon: int
+    model_type: str
 
 
 @router.get("", response_model=ConfigResponse)
@@ -16,33 +24,44 @@ async def get_config():
     Returns:
         ConfigResponse: Available inference types and supported models
     """
-    inference_configs = get_all_inference_types()
+    return ConfigService.get_system_config()
 
-    # Group horizons by inference type
-    inference_types_list = []
-    seen_types = set()
 
-    for (type_name, _), config in inference_configs.items():
-        if type_name not in seen_types:
-            # Collect all horizons for this type
-            horizons = [
-                h for (t, h) in inference_configs.keys()
-                if t == type_name
-            ]
-            inference_types_list.append(
-                InferenceTypeConfig(
-                    name=config.name,
-                    description=config.description,
-                    supported_horizons=sorted(horizons)
-                )
-            )
-            seen_types.add(type_name)
+@router.patch("")
+async def update_default_model(request: UpdateDefaultModelRequest):
+    """
+    Update the default model for a specific inference type configuration.
 
-    # Get supported model types from models directory
-    from src.models import models
-    supported_model_types = [model_cls.__name__.lower() for model_cls in models]
+    Args:
+        request: Analytics type, horizon, and new model type
 
-    return ConfigResponse(
-        inference_types=inference_types_list,
-        supported_model_types=supported_model_types
-    )
+    Returns:
+        Success message with updated configuration
+
+    Raises:
+        404: Config not found
+        400: Invalid model type
+
+    Example:
+        PATCH /api/v1/config
+        {
+            "analytics_type": "latency",
+            "horizon": 60,
+            "model_type": "xgboost"
+        }
+    """
+    try:
+        result = ConfigService.update_default_model(
+            analytics_type=request.analytics_type,
+            horizon=request.horizon,
+            model_type=request.model_type
+        )
+        return result
+    except ValueError as e:
+        error_msg = str(e)
+        if "not found" in error_msg.lower():
+            raise HTTPException(status_code=404, detail=error_msg)
+        else:
+            raise HTTPException(status_code=400, detail=error_msg)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
