@@ -26,7 +26,7 @@ class TestInferenceMaker:
         # Create simple mock data for training
         X = np.random.rand(10, 5)
         y = np.random.rand(10)
-        model.train(min_loss=0.01, max_epochs=5, X=X, y=y)
+        model.train( max_epochs=5, X=X, y=y)
         return model
 
     def test_inference_maker_init_auto_mode(self, mock_ml_interface):
