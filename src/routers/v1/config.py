@@ -6,7 +6,7 @@ from src.schemas.config import ConfigResponse, InferenceTypeConfig
 router = APIRouter()
 
 
-@router.get("/", response_model=ConfigResponse)
+@router.get("", response_model=ConfigResponse)
 async def get_config():
     """
     Get all available configurations.
