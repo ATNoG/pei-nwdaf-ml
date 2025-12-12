@@ -4,20 +4,36 @@ Author: T. Vicente
 
 from abc import ABC, abstractmethod
 from typing import Type
+import numpy as np
 
 class ModelI(ABC):
+    SEQUENCE_LENGTH = 1
     @abstractmethod
-    def predict(self,**arg) -> ...:
+    def predict(self, data: np.ndarray) -> np.ndarray:
         """
         Model receives data and
         produces an inference over it
+
+        Args:
+            data: Input features for prediction
+
+        Returns:
+            Predictions as numpy array
         """
         raise NotImplementedError
 
     @abstractmethod
-    def train(self, max_epochs:int, **args) -> ...:
+    def train(self, max_epochs: int, X: np.ndarray, y: np.ndarray) -> float:
         """
         Model trains over provided data and returns the final loss
+
+        Args:
+            max_epochs: Number of training epochs
+            X: Training features
+            y: Training targets
+
+        Returns:
+            Final loss value
         """
         raise NotImplementedError
 

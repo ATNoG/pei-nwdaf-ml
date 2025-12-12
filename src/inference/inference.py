@@ -349,7 +349,10 @@ class InferenceMaker:
             logger.debug("Performing inference...")
 
             if isinstance(model, ModelI):
-                result = model.predict(**kwargs)
+                if data is None:
+                    logger.error("No 'data' provided for inference")
+                    return None
+                result = model.predict(data)
             else:
                 if hasattr(model, 'predict'):
                     if data is None:
@@ -437,7 +440,7 @@ class InferenceMaker:
             prepared_data = self._prepare_data_for_prediction(data)
 
             if isinstance(model, ModelI):
-                result = model.predict(data=prepared_data)
+                result = model.predict(prepared_data)
             else:
                 if hasattr(model, 'predict'):
                     result = model.predict(prepared_data)
