@@ -11,8 +11,6 @@ class PredictionInterval(str, Enum):
     P1W = "P1W"        # 1 week
 
 
-# Legacy alias
-PredictionHorizon = PredictionInterval
 
 
 class InferenceRequest(BaseModel):
@@ -65,10 +63,10 @@ class AutoModeRequest(BaseModel):
 
 class AnalyticsRequest(BaseModel):
     """NWDAF analytics prediction request"""
-    analytics_type:str
+    analytics_type: str
     cell_id: int
     horizon: int = 60
-    model_type: str = "xgboost"
+    model_type: Optional[str] = None  # None = use default model from config
 
     class Config:
         json_schema_extra = {
@@ -76,7 +74,7 @@ class AnalyticsRequest(BaseModel):
                 "analytics_type": "latency",
                 "cell_id": 26379009,
                 "horizon": 60,
-                "model_type": "xgboost"
+                "model_type": "lstm"
             }
         }
 
@@ -88,7 +86,7 @@ class PredictionHorizon(BaseModel):
     interval: str
     predicted_value: float
     confidence: float
-    data: dict
+    data: list[dict]
     target_start_time: float
     target_end_time: float
 

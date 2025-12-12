@@ -1,9 +1,9 @@
 """Author: T.Vicente"""
 
 from dataclasses import dataclass
-from typing import Optional, Dict
+from typing import Dict
 
-@dataclass(frozen=True)
+@dataclass
 class InferenceConfig:
     """
     Configuration for each inference type.
@@ -14,7 +14,16 @@ class InferenceConfig:
     example_endpoint: str              # endpoint to fetch example data format. Used to "format" models
     model_prefix: str                  # Prefix for model names in MLFlow
     window_duration_seconds:int        # Duration of window for this model
-    description: Optional[str] = None  # Human-readable description
+    description: None|str = None       # Human-readable description
+    _default_model:None|str = None      # Default model for the config
+
+    @property
+    def default_model(self)->str|None:
+        return self._default_model
+
+    def set_default_model(self,model:str)->None:
+        """Change config default model. DOES NOT VALIDATE MODEL EXISTENCE"""
+        self._default_model = model
 
     def get_model_name(self, model_type: str) -> str:
         """
@@ -40,7 +49,7 @@ def register_inference_type(config: InferenceConfig) -> InferenceConfig:
     return config
 
 
-def get_inference_config(key:tuple[str,int]) -> Optional[InferenceConfig]:
+def get_inference_config(key:tuple[str,int]) -> InferenceConfig|None:
     """Get inference configuration by name."""
     return INFERENCE_TYPES.get(key)
 
@@ -57,7 +66,7 @@ LATENCY_60 = register_inference_type(InferenceConfig(
     example_endpoint="/api/v1/processed/latency/example",
     model_prefix="latency",
     window_duration_seconds=60,
-    description="Predict next window"
+    description="Predict next 1 minute window",
 ))
 
 LATENCY_300 = register_inference_type(InferenceConfig(
@@ -66,5 +75,5 @@ LATENCY_300 = register_inference_type(InferenceConfig(
     example_endpoint="/api/v1/processed/latency/example",
     model_prefix="latency",
     window_duration_seconds=300,
-    description=""
+    description="Predict next 5 minute window"
 ))

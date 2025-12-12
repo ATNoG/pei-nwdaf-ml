@@ -6,8 +6,9 @@ from typing import List, Optional
 class InferenceTypeConfig(BaseModel):
     """Configuration details for an inference type"""
     name: str
+    horizon:int
+    default_model:str
     description: Optional[str] = None
-    supported_horizons: List[int]
 
 
 class ConfigResponse(BaseModel):
@@ -21,10 +22,11 @@ class ConfigResponse(BaseModel):
                 "inference_types": [
                     {
                         "name": "latency",
+                        "horizon":60,
+                        "default_model": "lstm",
                         "description": "Network latency prediction and analysis",
-                        "supported_horizons": [60, 300, 3600]
                     }
                 ],
-                "supported_model_types": ["xgboost", "randomforest"]
+                "supported_model_types": ["lstm"]
             }
         }
