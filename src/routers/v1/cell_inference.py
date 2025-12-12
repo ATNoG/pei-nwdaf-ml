@@ -87,7 +87,7 @@ async def get_cell_analytics(
         )
 
         if window_data is None:
-            raise HTTPException(status_code=404,detaul=f"No data for {analytics_type}, cell {cell_id}")
+            raise HTTPException(status_code=404,detail=f"No data for {analytics_type}, cell {cell_id}")
 
         # Extract features (exclude metadata and target columns)
         inference_data = {
