@@ -1,21 +1,21 @@
 from fastapi import APIRouter
-from src.routers.v1 import cell_inference, training, config
+from src.routers.v1 import inference_router, training_router, config_router
 
 v1_router = APIRouter()
 
 v1_router.include_router(
-    cell_inference.router,
+    inference_router.router,
     prefix="/analytics",
     tags=["v1", "analytics"]
 )
 
 v1_router.include_router(
-    training.router,
+    training_router.router,
     prefix="/training",
     tags=["v1", "training"]
 )
 v1_router.include_router(
-    config.router,
+    config_router.router,
     prefix="/config",
     tags=["v1", "config"]
 )

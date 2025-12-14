@@ -64,7 +64,7 @@ class AutoModeRequest(BaseModel):
 class AnalyticsRequest(BaseModel):
     """NWDAF analytics prediction request"""
     analytics_type: str
-    cell_id: int
+    cell_index: int
     horizon: int = 60
     model_type: Optional[str] = None  # None = use default model from config
 
@@ -72,7 +72,7 @@ class AnalyticsRequest(BaseModel):
         json_schema_extra = {
             "example": {
                 "analytics_type": "latency",
-                "cell_id": 26379009,
+                "cell_index": 26379009,
                 "horizon": 60,
                 "model_type": "lstm"
             }
@@ -102,7 +102,7 @@ class AnalyticsTypePrediction(BaseModel):
 class AnalyticsResponse(BaseModel):
     """NWDAF analytics prediction response"""
     analytics_type: str
-    cell_id: int
+    cell_index: int
     prediction_interval: str
     predicted_value: float
     confidence: float
@@ -114,7 +114,7 @@ class AnalyticsResponse(BaseModel):
         json_schema_extra = {
             "example": {
                 "analytics_type": "latency",
-                "cell_id": 26379009,
+                "cell_index": 26379009,
                 "prediction_interval": "PT1M",
                 "predicted_value": 45.2,
                 "confidence": 0.92,

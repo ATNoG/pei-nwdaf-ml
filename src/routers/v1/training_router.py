@@ -6,7 +6,7 @@ Author: T.Vicente
 from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
 import logging
 
-from src.services.training import TrainingService
+from src.services.training_service import TrainingService
 from src.schemas.training import (
     ModelTrainingRequest,
     ModelTrainingStartResponse,

@@ -9,6 +9,7 @@ import numpy as np
 import mlflow
 from mlflow.tracking import MlflowClient
 
+from src.utils.features import extract_features
 from src.config.inference_type import InferenceConfig, get_all_inference_types
 from src.models import models
 
@@ -126,13 +127,8 @@ def _create_model(ml_interface, inf_config:InferenceConfig, ModelClass, model_na
             if example_data and isinstance(example_data, list) and len(example_data) > 0:
                 # Extract feature fields (exclude metadata)
                 sample = example_data[0]
-                feature_keys = [
-                    k for k in sample.keys()
-                    if k not in ['window_start_time', 'window_end_time',
-                                'window_duration_seconds', 'cell_index',
-                                'network', 'sample_count'] and not k.startswith(inf_config.name)
-                ]
-                n_features = len(feature_keys)
+                features = extract_features(sample,inf_config.name)
+                n_features = len(features)
                 logger.info(f"Detected {n_features} features from example data")
             else:
                 # Fallback to default
@@ -142,6 +138,8 @@ def _create_model(ml_interface, inf_config:InferenceConfig, ModelClass, model_na
         except Exception as e:
             logger.warning(f"Error fetching example data: {e}, using default 22 features")
             n_features = 22
+
+        sequence_length = getattr(ModelClass, "SEQUENCE_LENGTH", 1)
 
         # Create and train model with mock data
         with mlflow.start_run(run_name=f"{model_name}_init") as run:
@@ -153,6 +151,10 @@ def _create_model(ml_interface, inf_config:InferenceConfig, ModelClass, model_na
             y = np.random.rand(n_samples) * 100  # Mock target values
 
             logger.info(f"Training {model_name} with mock data ({n_samples} samples, {n_features} features)")
+
+            if sequence_length > 1:
+                # For simplicity, repeat the same features for the sequence
+                X = np.repeat(X[:, np.newaxis, :], sequence_length, axis=1)
 
             # Create and train model instance
             model_instance = ModelClass()

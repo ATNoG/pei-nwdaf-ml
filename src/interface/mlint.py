@@ -623,7 +623,7 @@ class MLInterface():
     async def fetch_latest_cell_data(
         self,
         endpoint: str,
-        cell_id: int,
+        cell_index: int,
         window_duration_seconds: int,
         num_windows:int
     ) -> Optional[list[Dict[str, Any]]]:
@@ -632,7 +632,7 @@ class MLInterface():
 
         Args:
             endpoint: Storage endpoint to query
-            cell_id: Cell identifier
+            cell_index: Cell identifier
             window_duration_seconds: Duration of window in seconds
 
         Returns:
@@ -640,7 +640,7 @@ class MLInterface():
         """
         try:
             params = {
-                "cell_index": cell_id,
+                "cell_index": cell_index,
                 "start_time": 0,
                 "end_time": 9999999999,
                 "offset": 0,
@@ -648,7 +648,7 @@ class MLInterface():
                 "window_duration_seconds": window_duration_seconds,
             }
 
-            logger.info(f"Fetching latest data for cell {cell_id} with window {window_duration_seconds}s")
+            logger.info(f"Fetching latest data for cell {cell_index} with window {window_duration_seconds}s")
 
             data = await self.request_data_from_storage_async(
                 endpoint=endpoint,
@@ -657,14 +657,14 @@ class MLInterface():
             )
 
             if not data or len(data) == 0:
-                logger.warning(f"No data found for cell {cell_id}")
+                logger.warning(f"No data found for cell {cell_index}")
                 return None
 
-            logger.info(f"Found data for cell {cell_id}")
+            logger.info(f"Found data for cell {cell_index}")
             return data
 
         except Exception as e:
-            logger.error(f"Error fetching data for cell {cell_id}: {e}", exc_info=True)
+            logger.error(f"Error fetching data for cell {cell_index}: {e}", exc_info=True)
             return None
 
     def fetch_training_data_for_cells(
@@ -1018,3 +1018,22 @@ class MLInterface():
         logger.info("Shutting down ML Interface...")
         await self.shutdown_bridge()
         logger.info("ML Interface shutdown complete")
+
+
+    def download_model_artifact(self, model_name: str, artifact_path: str, dst_path: str) -> str:
+        """
+        Download an artifact file from MLflow for the given model.
+        Returns local path to downloaded file.
+        """
+        import mlflow
+
+        # Find latest production model version
+        from mlflow.tracking import MlflowClient
+        client = MlflowClient()
+        versions = client.get_latest_versions(model_name, stages=["Production"])
+        if not versions:
+            raise ValueError(f"No Production version found for {model_name}")
+
+        run_id = versions[0].run_id
+        local_path = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path=artifact_path, dst_path=dst_path)
+        return local_path
