@@ -1,8 +1,7 @@
-from src.models.randomforest import RandomForest
-from src.models.xgboost import XGBoost
 from src.models.lstm import LSTM
+from src.models.model_interface import ModelInterface
 
-models = [RandomForest, XGBoost, LSTM]
+models = [LSTM]
 
 # Dictionary for O(1) model lookup by name
 models_dict = {
