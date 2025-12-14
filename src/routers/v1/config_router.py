@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from src.services.config import ConfigService
+from src.services.config_service import ConfigService
 from src.schemas.config import ConfigResponse
 
 router = APIRouter()
