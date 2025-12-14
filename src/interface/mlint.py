@@ -1018,3 +1018,22 @@ class MLInterface():
         logger.info("Shutting down ML Interface...")
         await self.shutdown_bridge()
         logger.info("ML Interface shutdown complete")
+
+
+    def download_model_artifact(self, model_name: str, artifact_path: str, dst_path: str) -> str:
+        """
+        Download an artifact file from MLflow for the given model.
+        Returns local path to downloaded file.
+        """
+        import mlflow
+
+        # Find latest production model version
+        from mlflow.tracking import MlflowClient
+        client = MlflowClient()
+        versions = client.get_latest_versions(model_name, stages=["Production"])
+        if not versions:
+            raise ValueError(f"No Production version found for {model_name}")
+
+        run_id = versions[0].run_id
+        local_path = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path=artifact_path, dst_path=dst_path)
+        return local_path
