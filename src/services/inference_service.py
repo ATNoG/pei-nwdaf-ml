@@ -4,8 +4,8 @@ import logging
 from typing import List, Dict, Any
 from src.models import ModelInterface, models_dict
 from src.config.inference_type import get_inference_config
-from src.config import EXCLUDED_FIELDS
 from src.schemas.inference import PredictionHorizon
+from src.utils.features import extract_features
 logger = logging.getLogger(__name__)
 
 
@@ -96,17 +96,7 @@ class InferenceService:
             last_window: last raw window
         """
 
-        def extract_features(window: Dict[str, Any]) -> Dict[str, float]:
-            return {
-                k: float(v)
-                for k, v in window.items()
-                if k not in EXCLUDED_FIELDS
-                and not k.startswith(analytics_type + "_")
-                and isinstance(v, (int, float))
-                and v is not None
-            }
-
-        features_list = [extract_features(w) for w in windows_data]
+        features_list = [extract_features(w,analytics_type) for w in windows_data]
 
         if not features_list or not features_list[0]:
             raise ValueError("No valid features extracted")

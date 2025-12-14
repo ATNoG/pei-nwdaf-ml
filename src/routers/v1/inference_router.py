@@ -4,7 +4,7 @@ Analytics predictions endpoint for NWDAF
 from fastapi import APIRouter, HTTPException, Request
 import logging
 
-from src.services.inference import InferenceService
+from src.services.inference_service import InferenceService
 from src.schemas.inference import (
     AnalyticsRequest,
     PredictionHorizon
