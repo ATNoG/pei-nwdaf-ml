@@ -1,7 +1,8 @@
 from src.models.lstm import LSTM
+from src.models.ann import ANN
 from src.models.model_interface import ModelInterface
 
-models = [LSTM]
+models = [ANN,LSTM]
 
 # Dictionary for O(1) model lookup by name
 models_dict = {

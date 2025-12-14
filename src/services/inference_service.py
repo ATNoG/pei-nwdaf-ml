@@ -62,10 +62,17 @@ class InferenceService:
                 f"Not enough data: need {sequence_length}, got {len(windows) if windows else 0}"
             )
 
+        model_name = config.get_model_name(model_type)
+        feature_mean,feature_std = self._load_normalization(model_name)
+        if feature_mean is None or feature_std is None:
+            raise RuntimeError(f"Normalization artifacts missing for model {model_name}")
+
         # 4. Prepare data
         X, features_list, last_window = self._prepare_data(
             windows,
             analytics_type,
+            feature_mean,
+            feature_std
         )
         interval_str = self._horizon_to_iso8601(horizon)
         last_window_end = last_window.get("window_end_time", 0)
@@ -88,6 +95,8 @@ class InferenceService:
         self,
         windows_data: List[Dict[str, Any]],
         analytics_type: str,
+        feature_mean,
+        feature_std
     ):
         """
         Returns:
@@ -110,6 +119,12 @@ class InferenceService:
         X = np.array(sequence, dtype=np.float32)
         X = np.nan_to_num(X)
         X = X[np.newaxis, :, :]
+
+
+        if X.ndim == 3:
+            X = (X - feature_mean[None, None, :]) / (feature_std[None, None, :] + 1e-8)
+        else:
+            X = (X - feature_mean) / (feature_std + 1e-8)
 
         return X, features_list, windows_data[-1]
 
@@ -170,3 +185,33 @@ class InferenceService:
         else:
             weeks = horizon // 604800
             return f"P{weeks}W"
+
+    def _load_normalization(self, model_name: str):
+        """
+        Download mean/std normalization artifacts from MLflow for a given model.
+        Returns:
+            mean: np.ndarray
+            std: np.ndarray
+        """
+        import tempfile
+
+        try:
+            # Download artifacts to a temp directory
+            with tempfile.TemporaryDirectory() as tmpdir:
+                mean_path = self.ml_interface.download_model_artifact(
+                    model_name=model_name,
+                    artifact_path="normalization/{}_mean.npy".format(model_name),
+                    dst_path=tmpdir
+                )
+                std_path = self.ml_interface.download_model_artifact(
+                    model_name=model_name,
+                    artifact_path="normalization/{}_std.npy".format(model_name),
+                    dst_path=tmpdir
+                )
+
+                mean = np.load(mean_path)
+                std = np.load(std_path)
+                return mean, std
+        except Exception as e:
+            logger.warning(f"Failed to load normalization artifacts for {model_name}: {e}")
+            return None, None

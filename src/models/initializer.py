@@ -139,6 +139,8 @@ def _create_model(ml_interface, inf_config:InferenceConfig, ModelClass, model_na
             logger.warning(f"Error fetching example data: {e}, using default 22 features")
             n_features = 22
 
+        sequence_length = getattr(ModelClass, "SEQUENCE_LENGTH", 1)
+
         # Create and train model with mock data
         with mlflow.start_run(run_name=f"{model_name}_init") as run:
             n_samples = 100
@@ -149,6 +151,10 @@ def _create_model(ml_interface, inf_config:InferenceConfig, ModelClass, model_na
             y = np.random.rand(n_samples) * 100  # Mock target values
 
             logger.info(f"Training {model_name} with mock data ({n_samples} samples, {n_features} features)")
+
+            if sequence_length > 1:
+                # For simplicity, repeat the same features for the sequence
+                X = np.repeat(X[:, np.newaxis, :], sequence_length, axis=1)
 
             # Create and train model instance
             model_instance = ModelClass()

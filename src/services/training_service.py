@@ -5,7 +5,7 @@ from mlflow.tracking import MlflowClient
 from datetime import datetime
 from typing import Dict, Any, List
 from collections import defaultdict
-
+import tempfile
 from src.models import models_dict
 from src.config.inference_type import get_inference_config
 from src.utils.features import extract_features
@@ -113,12 +113,34 @@ class TrainingService:
         if X is None or len(X) == 0:
             return {"status": "error", "message": "No valid training samples"}
 
+        #TODO: normalize
+        feature_axes = (0, 1) if X.ndim == 3 else 0
+        feature_mean = X.mean(axis=feature_axes, keepdims=True)
+        feature_std = X.std(axis=feature_axes, keepdims=True) + 1e-8
+
+        # Apply normalization
+        X = (X - feature_mean) / feature_std
+
+
         n_samples = len(X)
         n_features = X.shape[-1]
 
         with mlflow.start_run(run_name=f"{model_name}_training") as run:
             model = ModelClass()
             loss = model.train(X=X, y=y, max_epochs=max_epochs)
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                mean_f_name = f"{model_name}_mean.npy"
+                std_f_name = f"{model_name}_std.npy"
+
+                mean_path = f"{tmpdir}/{mean_f_name}"
+                std_path = f"{tmpdir}/{std_f_name}"
+
+                np.save(mean_path, feature_mean)
+                np.save(std_path, feature_std)
+
+                mlflow.log_artifact(mean_path, artifact_path="normalization")
+                mlflow.log_artifact(std_path, artifact_path="normalization")
 
             mlflow.log_params({
                 "analytics_type": analytics_type,
