@@ -1,5 +1,5 @@
 # src/models/xgboost_model.py
-from src.models.modelI import ModelI
+from src.models.model_interface import ModelInterface
 import pickle
 from typing import Type
 import xgboost as xgb

@@ -9,6 +9,7 @@ import numpy as np
 import mlflow
 from mlflow.tracking import MlflowClient
 
+from src.config import EXCLUDED_FIELDS
 from src.config.inference_type import InferenceConfig, get_all_inference_types
 from src.models import models
 
@@ -128,9 +129,7 @@ def _create_model(ml_interface, inf_config:InferenceConfig, ModelClass, model_na
                 sample = example_data[0]
                 feature_keys = [
                     k for k in sample.keys()
-                    if k not in ['window_start_time', 'window_end_time',
-                                'window_duration_seconds', 'cell_index',
-                                'network', 'sample_count'] and not k.startswith(inf_config.name)
+                    if k not in EXCLUDED_FIELDS and not k.startswith(inf_config.name)
                 ]
                 n_features = len(feature_keys)
                 logger.info(f"Detected {n_features} features from example data")
