@@ -27,14 +27,3 @@ class ModelInterface(ABC):
     def predict(self, X: Any) -> float:
         """Predict a single scalar value"""
         pass
-
-    @abstractmethod
-    def serialize(self) -> bytes:
-        """Serialize model to bytes"""
-        pass
-
-    @classmethod
-    @abstractmethod
-    def deserialize(cls, b: bytes) -> "ModelInterface":
-        """Deserialize model from bytes"""
-        pass
