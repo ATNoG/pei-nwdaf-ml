@@ -3,8 +3,9 @@ import numpy as np
 import mlflow
 from mlflow.tracking import MlflowClient
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Callable, Optional
 from collections import defaultdict
+import asyncio
 import tempfile
 from src.models import models_dict
 from src.config.inference_type import get_inference_config
@@ -67,6 +68,7 @@ class TrainingService:
         model_type: str,
         max_epochs: int = 100,
         data_limit_per_cell: int = 100,
+        status_callback: Optional[Callable[[int, int, Optional[float]], None]] = None,
     ) -> Dict[str, Any]:
 
         config = get_inference_config((analytics_type, horizon))
@@ -127,7 +129,16 @@ class TrainingService:
 
         with mlflow.start_run(run_name=f"{model_name}_training") as run:
             model = ModelClass()
-            loss = model.train(X=X, y=y, max_epochs=max_epochs)
+
+            # Create callback wrapper for status updates
+            def training_callback(current_epoch: int, total_epochs: int, loss: Optional[float]):
+                if status_callback:
+                    try:
+                        status_callback(current_epoch, total_epochs, loss)
+                    except Exception as e:
+                        logger.warning(f"Status callback error: {e}")
+
+            loss = model.train(X=X, y=y, max_epochs=max_epochs, status_callback=training_callback)
 
             with tempfile.TemporaryDirectory() as tmpdir:
                 mean_f_name = f"{model_name}_mean.npy"
