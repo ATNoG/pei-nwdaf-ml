@@ -17,6 +17,11 @@ import urllib.parse
 from threading import Thread
 from typing import Optional, List, Dict, Any
 
+from src.services.inference_service import InferenceService
+from src.services.performance_monitor_service import PerformanceMonitor
+from src.config.inference_type import InferenceConfig, get_all_inference_types
+from src.routers.websocket import performance_monitor_callback
+
 from src.mlflow.mlf import MLFlowBridge
 
 logging.basicConfig(level=logging.DEBUG,
@@ -127,6 +132,7 @@ class MLInterface():
             try:
                 # Bind the handler BEFORE starting consumer
                 self.bridge.add_n_topics(self.topics)
+                self.bridge.bind_topic(self._topics.NETWORK_DATA_PROCESSED, self._predict_and_evaluate)
                 self.bridge.bind_topic(self._topics.ML_INFERENCE_REQUEST, self._handle_inference_request)
 
                 # Start consumer (without adding topics again)
@@ -150,6 +156,96 @@ class MLInterface():
         kafka_thread.start()
         logger.info("Kafka consumer starting in background thread")
         return kafka_thread
+
+
+    def schedule_async(self,coro):
+        """
+        Schedule an async coroutine from a sync function.
+        Uses existing running loop if possible, otherwise creates one.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+            # Running inside an event loop (e.g., FastAPI/WebSocket)
+            return asyncio.create_task(coro)
+        except RuntimeError:
+            # No loop running, run in new loop (blocking)
+            return asyncio.run(coro)
+
+
+    async def _predict_and_store(self, service: InferenceService, config_name: str, cell_index: int, window_duration: int):
+        """
+        Async helper to run prediction and store result
+        """
+        try:
+            response = await service.predict_cell_analytics(config_name, cell_index, window_duration)
+
+            PerformanceMonitor.store(
+                analytics_type=config_name,
+                predicted_value=response.predicted_value,
+                cell_index=cell_index,
+                window_size=window_duration,
+            )
+
+        except Exception as e:
+            logger.exception(f"Async prediction failed for {config_name}: {e}")
+
+
+    def _predict_and_evaluate(self,  message_data: Dict[str, Any]) ->  Dict[str, Any]:
+        content = message_data.get('content', '')
+        if not content:
+            logger.debug("Empty message content, skipping")
+            return message_data
+
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse inference request JSON: {e}")
+            return message_data
+
+        """    transformed = {
+            "window_start_time": window_start_dt,
+            "window_end_time": window_end_dt,
+            "window_duration_seconds": float(window_duration),
+            "cell_index": data.get("cell_index"),
+            "network": data.get("network") or "Unknown",
+            "sample_count": sample_count,
+            "primary_bandwidth": data.get("primary_bandwidth"),
+            "ul_bandwidth": data.get("ul_bandwidth"),
+        }
+
+        # Flatten nested metric structures
+        # Processor uses "mean_latency", storage uses "latency"
+        metric_mapping = {
+            "rsrp": "rsrp",
+            "sinr": "sinr",
+            "rsrq": "rsrq",
+            "mean_latency": "latency",  # Map mean_latency -> latency
+            "cqi": "cqi"
+        }"""
+        cell_index = data.get("cell_index",1)
+        window_duration = int(data.get("window_duration_seconds",0))
+        service:InferenceService = InferenceService(self)
+        """def eval(cls,analytics_type , true_value:float, cell_index:int,window_size:int, window_start_time:int,   callback_function:Callable):
+        """
+        config:InferenceConfig
+        for _,config in get_all_inference_types().items():
+            try:
+                true_value = data.get(f"mean_{config.name}",{}).get("mean",0)
+                PerformanceMonitor.eval(config.name,
+                    true_value,cell_index,
+                    window_duration,
+                    callback_function=performance_monitor_callback)
+
+                self.schedule_async(
+                    self._predict_and_store(service, config.name, cell_index, window_duration)
+                )
+
+            except Exception as e:
+                logger.warning(f"Performance evaluation failled- {e}")
+                continue
+
+        return message_data
+
 
     def _handle_inference_request(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
         """
