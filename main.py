@@ -45,7 +45,6 @@ async def lifespan(app: FastAPI):
 
         # Initialize models (create missing models on startup)
         logger.info("Initializing models...")
-        logger.info(f"Model initialization results: {init_results}")
 
         # Start Kafka consumer in background thread
         ml_interface.start_consumer_background()
