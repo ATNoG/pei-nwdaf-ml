@@ -1,4 +1,3 @@
-"""Author: T.Vicente"""
 
 from dataclasses import dataclass
 from typing import Dict
