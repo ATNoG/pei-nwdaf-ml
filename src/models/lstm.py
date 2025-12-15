@@ -109,23 +109,3 @@ class LSTM(ModelInterface):
         with torch.no_grad():
             pred = self.model(torch.from_numpy(X).to(self.device)).cpu().numpy()
         return float(np.nan_to_num(pred.flatten()[0]))
-
-    def serialize(self) -> bytes:
-        # check if model was trained
-        if self.model is None:
-            raise RuntimeError("Model not trained")
-        buffer = io.BytesIO()
-        torch.save(self.model.state_dict(), buffer)
-        payload = {"input_size": self.input_size, "model_state": buffer.getvalue()}
-        return self.HEADER + pickle.dumps(payload)
-
-    @classmethod
-    def deserialize(cls: Type["LSTM"], b: bytes) -> "LSTM":
-        if not b.startswith(cls.HEADER):
-            raise TypeError("Invalid model header")
-        data = pickle.loads(b[len(cls.HEADER):])
-        obj = cls(input_size=data["input_size"])
-        obj._ensure_model()
-        buffer = io.BytesIO(data["model_state"])
-        obj.model.load_state_dict(torch.load(buffer, map_location=obj.device))
-        return obj
