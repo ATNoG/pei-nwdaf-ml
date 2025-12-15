@@ -4,10 +4,10 @@ Analytics predictions endpoint for NWDAF
 from fastapi import APIRouter, HTTPException, Request
 import logging
 
-from src.services.cell_inference import CellInferenceService
+from src.services.inference_service import InferenceService
 from src.schemas.inference import (
     AnalyticsRequest,
-    PredictionHorizon as PredictionHorizonModel
+    PredictionHorizon
 )
 
 logger = logging.getLogger(__name__)
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("", response_model=PredictionHorizonModel)
+@router.post("", response_model=PredictionHorizon)
 async def get_cell_analytics(
     analytics_request: AnalyticsRequest,
     request: Request
@@ -40,16 +40,15 @@ async def get_cell_analytics(
     if not ml_interface:
         raise HTTPException(status_code=500, detail="ML Interface not initialized")
 
-    service = CellInferenceService(ml_interface)
+    service = InferenceService(ml_interface)
 
     try:
-        result = await service.predict_cell_analytics(
+        return await service.predict_cell_analytics(
             analytics_type=analytics_request.analytics_type,
-            cell_id=analytics_request.cell_id,
+            cell_index=analytics_request.cell_index,
             horizon=analytics_request.horizon,
             model_type=analytics_request.model_type
         )
-        return result
 
     except ValueError as e:
         # Configuration errors, invalid parameters, data issues

@@ -1,4 +1,4 @@
-from src.models.modelI import ModelI
+from src.models.model_interface import ModelInterface
 from src.config.inference_type import get_inference_config
 from typing import Optional, Any, Dict, Union, List
 import logging
