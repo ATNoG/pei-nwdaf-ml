@@ -13,3 +13,4 @@ mlflow-tracing==3.6.0
 xgboost==3.1.2
 httpx==0.28.1
 boto3==1.35.0
+websockets==14.1

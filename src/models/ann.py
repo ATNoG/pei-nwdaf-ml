@@ -10,23 +10,24 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class LSTMNetwork(nn.Module):
-    """Internal LSTM network"""
+class SimpleANNNetwork(nn.Module):
+    """Simple feedforward ANN for time series"""
 
-    def __init__(self, input_size: int, hidden_size: int = 32, num_layers: int = 2):
+    def __init__(self, input_size: int, hidden_size: int = 32):
         super().__init__()
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=0.2)
-        self.fc = nn.Linear(hidden_size, 1)
+        self.fc1 = nn.Linear(input_size, hidden_size)
         self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, 1)
 
     def forward(self, x):
-        lstm_out, _ = self.lstm(x)
-        last_out = lstm_out[:, -1, :]
-        return self.fc(self.relu(last_out))
+        # flatten sequence dimension
+        x = x.view(x.size(0), -1)
+        x = self.relu(self.fc1(x))
+        return self.fc2(x)
 
 
-class LSTM(ModelInterface):
-    HEADER = b"LSTM_MODEL"
+class ANN(ModelInterface):
+    HEADER = b"ANN_MODEL"
     SEQUENCE_LENGTH = 5
     FRAMEWORK = "pytorch"
 
@@ -39,7 +40,7 @@ class LSTM(ModelInterface):
         if self.model is None:
             if self.input_size is None:
                 raise RuntimeError("input_size must be provided to initialize the model")
-            self.model = LSTMNetwork(self.input_size).to(self.device)
+            self.model = SimpleANNNetwork(self.input_size * self.SEQUENCE_LENGTH).to(self.device)
 
     def train(self, X, y, max_epochs: int = 50, status_callback=None) -> float:
         X = np.nan_to_num(np.array(X, dtype=np.float32))
@@ -59,10 +60,8 @@ class LSTM(ModelInterface):
         batch_size = min(32, max(1, len(X)//4))
         num_batches = (len(X)+batch_size-1)//batch_size
 
-        # start pytorch training mode
         self.model.train()
 
-        # train
         for epoch in range(max_epochs):
             total_loss = 0.0
             perm = torch.randperm(len(X))
@@ -71,7 +70,6 @@ class LSTM(ModelInterface):
                 batch_X = X_tensor[idx]
                 batch_y = y_tensor[idx]
 
-                # reset gradient
                 optimizer.zero_grad()
                 pred = self.model(batch_X)
                 loss = criterion(pred, batch_y)
@@ -93,7 +91,6 @@ class LSTM(ModelInterface):
                     except Exception as e:
                         logger.warning(f"Status callback error: {e}")
 
-        # return loss
         return float(total_loss/num_batches)
 
     def predict(self, X):
@@ -102,16 +99,12 @@ class LSTM(ModelInterface):
             X = X[np.newaxis, :, :]
         self._ensure_model()
 
-        # set evaluation mode
         self.model.eval()
-
-        # disable gradient
         with torch.no_grad():
             pred = self.model(torch.from_numpy(X).to(self.device)).cpu().numpy()
         return float(np.nan_to_num(pred.flatten()[0]))
 
     def serialize(self) -> bytes:
-        # check if model was trained
         if self.model is None:
             raise RuntimeError("Model not trained")
         buffer = io.BytesIO()
@@ -120,7 +113,7 @@ class LSTM(ModelInterface):
         return self.HEADER + pickle.dumps(payload)
 
     @classmethod
-    def deserialize(cls: Type["LSTM"], b: bytes) -> "LSTM":
+    def deserialize(cls: Type["ANN"], b: bytes) -> "ANN":
         if not b.startswith(cls.HEADER):
             raise TypeError("Invalid model header")
         data = pickle.loads(b[len(cls.HEADER):])
