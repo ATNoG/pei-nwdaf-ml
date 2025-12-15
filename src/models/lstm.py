@@ -41,7 +41,7 @@ class LSTM(ModelInterface):
                 raise RuntimeError("input_size must be provided to initialize the model")
             self.model = LSTMNetwork(self.input_size).to(self.device)
 
-    def train(self, X, y, max_epochs: int = 50) -> float:
+    def train(self, X, y, max_epochs: int = 50, status_callback=None) -> float:
         X = np.nan_to_num(np.array(X, dtype=np.float32))
         y = np.nan_to_num(np.array(y, dtype=np.float32)).reshape(-1, 1)
         if X.ndim == 2:
@@ -81,8 +81,17 @@ class LSTM(ModelInterface):
                 loss.backward()
                 optimizer.step()
                 total_loss += loss.item()
+
+            epoch_loss = total_loss / num_batches
             if epoch % 10 == 0:
-                logger.info(f"Epoch {epoch}/{max_epochs}, loss={total_loss/num_batches:.4f}")
+                logger.info(f"Epoch {epoch}/{max_epochs}, loss={epoch_loss:.4f}")
+
+                # Call status callback if provided
+                if status_callback:
+                    try:
+                        status_callback(epoch + 1, max_epochs, epoch_loss)
+                    except Exception as e:
+                        logger.warning(f"Status callback error: {e}")
 
         # return loss
         return float(total_loss/num_batches)
