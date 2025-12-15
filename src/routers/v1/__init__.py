@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from src.routers.v1 import inference_router, training_router, config_router
+from src.routers.v1 import inference_router, training_router, config_router, model_router
 
 v1_router = APIRouter()
 
@@ -18,4 +18,9 @@ v1_router.include_router(
     config_router.router,
     prefix="/config",
     tags=["v1", "config"]
+)
+v1_router.include_router(
+    model_router.router,
+    prefix="/model",
+    tags=["v1", "model"]
 )

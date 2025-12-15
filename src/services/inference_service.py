@@ -120,11 +120,10 @@ class InferenceService:
         X = np.nan_to_num(X)
         X = X[np.newaxis, :, :]
 
-
-        if X.ndim == 3:
-            X = (X - feature_mean[None, None, :]) / (feature_std[None, None, :] + 1e-8)
-        else:
-            X = (X - feature_mean) / (feature_std + 1e-8)
+        # feature_mean and feature_std already have keepdims shape from training
+        # For 3D: (1, 1, features), for 2D: (features,) or (1, features)
+        # Use directly without adding extra dimensions
+        X = (X - feature_mean) / (feature_std + 1e-8)
 
         return X, features_list, windows_data[-1]
 
