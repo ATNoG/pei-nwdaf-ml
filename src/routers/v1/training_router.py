@@ -5,6 +5,7 @@ Author: T.Vicente
 """
 from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
 import logging
+import asyncio
 
 from src.services.training_service import TrainingService
 from src.schemas.training import (
@@ -12,6 +13,7 @@ from src.schemas.training import (
     ModelTrainingStartResponse,
     ModelTrainingInfo
 )
+from src.routers.websocket import get_training_status_manager
 
 logger = logging.getLogger(__name__)
 
@@ -24,18 +26,81 @@ def _train_model_background(
     horizon: int,
     model_type: str
 ):
-    """Background task to train model"""
+    """Background task to train model with WebSocket status updates"""
+    from src.config.inference_type import get_inference_config
+
+    config = get_inference_config((analytics_type, horizon))
+    if not config:
+        logger.error(f"No config found for analytics_type={analytics_type}, horizon={horizon}")
+        return
+
+    model_name = config.get_model_name(model_type)
+    status_manager = get_training_status_manager()
+
+    def status_callback(current_epoch: int, total_epochs: int, loss: float = None):
+        """Callback to update WebSocket clients with training progress"""
+        status = {
+            "current_epoch": current_epoch,
+            "total_epochs": total_epochs,
+            "status": "training" if current_epoch < total_epochs else "completed",
+        }
+        if loss is not None:
+            status["loss"] = float(loss)
+
+        # Run async broadcast in event loop
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(status_manager.update_training_status(model_name, status))
+            loop.close()
+        except Exception as e:
+            logger.warning(f"Failed to update WebSocket status: {e}")
+
     try:
+        # Initial status
+        status_callback(0, 100, None)
+
         service = TrainingService(ml_interface)
-        service.start_training(
+        result = service.start_training(
             analytics_type=analytics_type,
             horizon=horizon,
             model_type=model_type,
             max_epochs=100,
-            data_limit_per_cell=100
+            data_limit_per_cell=100,
+            status_callback=status_callback
         )
+
+        # Final status with result
+        final_status = {
+            "current_epoch": 100,
+            "total_epochs": 100,
+            "status": "completed",
+            "message": "Training completed successfully",
+            "training_loss": result.get("training_loss"),
+            "samples_used": result.get("samples_used"),
+        }
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(status_manager.update_training_status(model_name, final_status))
+        loop.close()
+
     except Exception as e:
         logger.error(f"Background training failed: {e}", exc_info=True)
+
+        # Error status
+        error_status = {
+            "current_epoch": 0,
+            "total_epochs": 100,
+            "status": "error",
+            "message": str(e)
+        }
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(status_manager.update_training_status(model_name, error_status))
+            loop.close()
+        except Exception:
+            pass
 
 
 @router.post("", response_model=ModelTrainingStartResponse)
