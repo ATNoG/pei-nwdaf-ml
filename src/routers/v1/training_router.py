@@ -1,7 +1,6 @@
 """
 Model Training API Endpoint
 
-Author: T.Vicente
 """
 from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
 import logging
