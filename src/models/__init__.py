@@ -1,10 +1,25 @@
-from src.models.lstm import LSTM
-from src.models.ann import ANN
-from src.models.model_interface import ModelInterface
+"""
+ML Models module provides a clean interface for model creation and training.
+"""
 
-models = [ANN,LSTM]
+from src.models.factory import (
+    create_trainer,
+    get_trainer_class,
+    get_available_model_types,
+)
+from src.models.trainers import BaseTrainer, ANNTrainer, LSTMTrainer
+from src.models.networks import ANNNetwork, LSTMNetwork
 
-# Dictionary for O(1) model lookup by name
-models_dict = {
-    cls.__name__.lower(): cls for cls in models
-}
+__all__ = [
+
+    "create_trainer",
+    "get_trainer_class",
+    "get_available_model_types",
+
+    "BaseTrainer",
+    "ANNTrainer",
+    "LSTMTrainer",
+
+    "ANNNetwork",
+    "LSTMNetwork",
+]
