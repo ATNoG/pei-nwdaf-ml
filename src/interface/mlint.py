@@ -1,3 +1,4 @@
+#>TOCHECK< refactor in order to remove unused code and improve code readability
 # Communication Interface for the ML Service component
 #
 # An abstraction layer which mediates messaging from
