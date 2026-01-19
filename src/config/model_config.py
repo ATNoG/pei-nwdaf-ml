@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from enum import Enum
 
-
+#>TODO< add more values to the enums. I just knew these from previous projects (vcnt)
 class OptimizerType(str, Enum):
     """Supported optimizer types"""
     ADAM = "adam"

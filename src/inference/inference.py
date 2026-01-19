@@ -1,4 +1,5 @@
-from src.models.model_interface import ModelInterface
+#>UNUSED<
+
 from src.config.inference_type import get_inference_config
 from typing import Optional, Any, Dict, Union, List
 import logging
@@ -348,20 +349,22 @@ class InferenceMaker:
 
             logger.debug("Performing inference...")
 
-            if isinstance(model, ModelI):
-                if data is None:
-                    logger.error("No 'data' provided for inference")
-                    return None
+            if data is None:
+                logger.error("No 'data' provided for inference")
+                return None
+
+            if hasattr(model, 'predict'):
                 result = model.predict(data)
+            elif hasattr(model, 'forward'):
+                # PyTorch model - use forward/call
+                import torch
+                with torch.no_grad():
+                    if not isinstance(data, torch.Tensor):
+                        data = torch.tensor(data, dtype=torch.float32)
+                    result = model(data).cpu().numpy()
             else:
-                if hasattr(model, 'predict'):
-                    if data is None:
-                        logger.error("No 'data' provided for inference")
-                        return None
-                    result = model.predict(data)
-                else:
-                    logger.error("Model does not have infer() or predict() method")
-                    return None
+                logger.error("Model does not have predict() or forward() method")
+                return None
 
             self.ml_interface.log_inference_metrics({'inference_count': 1})
 
@@ -439,14 +442,18 @@ class InferenceMaker:
             # Convert data to appropriate format for prediction
             prepared_data = self._prepare_data_for_prediction(data)
 
-            if isinstance(model, ModelI):
+            if hasattr(model, 'predict'):
                 result = model.predict(prepared_data)
+            elif hasattr(model, 'forward'):
+                # PyTorch model - use forward/call
+                import torch
+                with torch.no_grad():
+                    if not isinstance(prepared_data, torch.Tensor):
+                        prepared_data = torch.tensor(prepared_data, dtype=torch.float32)
+                    result = model(prepared_data).cpu().numpy()
             else:
-                if hasattr(model, 'predict'):
-                    result = model.predict(prepared_data)
-                else:
-                    logger.error(f"Model for cell {cell_index} has no predict method")
-                    return None
+                logger.error(f"Model for cell {cell_index} has no predict or forward method")
+                return None
 
             # Convert result to JSON-serializable format
             result = self._convert_result_for_serialization(result)
