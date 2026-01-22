@@ -1,19 +1,33 @@
 from pydantic import BaseModel
 from typing import Optional
 
+from src.schemas.model_config import ModelConfigSchema
+
 
 class ModelTrainingRequest(BaseModel):
     """Request to train a model for an analytics type"""
     analytics_type: str
     horizon: int
-    model_type: str = "xgboost"
+    model_type: str = "ann"
+    config: Optional[ModelConfigSchema] = None
 
     class Config:
         json_schema_extra = {
             "example": {
                 "analytics_type": "latency",
                 "horizon": 60,
-                "model_type": "xgboost"
+                "model_type": "lstm",
+                "config": {
+                    "training": {
+                        "learning_rate": 0.001,
+                        "optimizer": "adam",
+                        "max_epochs": 100
+                    },
+                    "architecture": {
+                        "hidden_size": 64,
+                        "dropout": 0.2
+                    }
+                }
             }
         }
 

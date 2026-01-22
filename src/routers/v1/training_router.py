@@ -23,18 +23,24 @@ def _train_model_background(
     ml_interface,
     analytics_type: str,
     horizon: int,
-    model_type: str
+    model_type: str,
+    model_config=None,
 ):
     """Background task to train model with WebSocket status updates"""
     from src.config.inference_type import get_inference_config
 
-    config = get_inference_config((analytics_type, horizon))
-    if not config:
+    inf_config = get_inference_config((analytics_type, horizon))
+    if not inf_config:
         logger.error(f"No config found for analytics_type={analytics_type}, horizon={horizon}")
         return
 
-    model_name = config.get_model_name(model_type)
+    model_name = inf_config.get_model_name(model_type)
     status_manager = get_training_status_manager()
+
+    # Get max_epochs from model config or use default
+    max_epochs = 100
+    if model_config:
+        max_epochs = model_config.training.max_epochs
 
     def status_callback(current_epoch: int, total_epochs: int, loss: float = None):
         """Callback to update WebSocket clients with training progress"""
@@ -57,22 +63,23 @@ def _train_model_background(
 
     try:
         # Initial status
-        status_callback(0, 100, None)
+        status_callback(0, max_epochs, None)
 
         service = TrainingService(ml_interface)
         result = service.start_training(
             analytics_type=analytics_type,
             horizon=horizon,
             model_type=model_type,
-            max_epochs=100,
+            max_epochs=max_epochs,
             data_limit_per_cell=100,
-            status_callback=status_callback
+            status_callback=status_callback,
+            model_config=model_config,
         )
 
         # Final status with result
         final_status = {
-            "current_epoch": 100,
-            "total_epochs": 100,
+            "current_epoch": max_epochs,
+            "total_epochs": max_epochs,
             "status": "completed",
             "message": "Training completed successfully",
             "training_loss": result.get("training_loss"),
@@ -89,7 +96,7 @@ def _train_model_background(
         # Error status
         error_status = {
             "current_epoch": 0,
-            "total_epochs": 100,
+            "total_epochs": max_epochs,
             "status": "error",
             "message": str(e)
         }
@@ -114,7 +121,7 @@ async def start_training(
     Training runs in the background. Use GET endpoint to check status.
 
     Args:
-        training_request: Analytics type, horizon, and model type to train
+        training_request: Analytics type, horizon, model type, and optional config
 
     Returns:
         Confirmation that training has started
@@ -128,7 +135,11 @@ async def start_training(
         {
             "analytics_type": "latency",
             "horizon": 60,
-            "model_type": "xgboost"
+            "model_type": "lstm",
+            "config": {
+                "training": {"learning_rate": 0.001, "max_epochs": 100},
+                "architecture": {"hidden_size": 64}
+            }
         }
     """
     ml_interface = request.app.state.ml_interface
@@ -145,6 +156,11 @@ async def start_training(
             model_type=training_request.model_type
         )
 
+        # Convert Pydantic config to dataclass if provided
+        model_config = None
+        if training_request.config:
+            model_config = training_request.config.to_model_config()
+
         logger.info(
             f"Starting background training for {model_name} "
             f"(analytics_type={training_request.analytics_type}, "
@@ -158,7 +174,8 @@ async def start_training(
             ml_interface,
             training_request.analytics_type,
             training_request.horizon,
-            training_request.model_type
+            training_request.model_type,
+            model_config,
         )
 
         return ModelTrainingStartResponse(
