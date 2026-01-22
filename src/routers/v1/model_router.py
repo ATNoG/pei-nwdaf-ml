@@ -25,7 +25,7 @@ async def create_model_instance(
     Create a new model instance for an analytics type.
 
     Args:
-        model_request: Analytics type, horizon, and model type to create
+        model_request: Analytics type, horizon, model type, and optional config
 
     Returns:
         Confirmation that model instance was created
@@ -36,11 +36,15 @@ async def create_model_instance(
         500: ML Interface not initialized or error creating model
 
     Example:
-        POST /api/v1/model
+        POST /api/v1/model/instance
         {
             "analytics_type": "latency",
             "horizon": 60,
-            "model_type": "ann"
+            "model_type": "ann",
+            "config": {
+                "architecture": {"hidden_size": 64},
+                "sequence": {"sequence_length": 5}
+            }
         }
     """
     ml_interface = request.app.state.ml_interface
@@ -50,21 +54,25 @@ async def create_model_instance(
     service = ModelService(ml_interface)
 
     try:
+        # Convert Pydantic config to dataclass if provided
+        model_config = None
+        if model_request.config:
+            model_config = model_request.config.to_model_config()
+
         logger.info(
             f"Creating model instance for analytics_type={model_request.analytics_type}, "
-            f"horizon={model_request.horizon}s, model_type={model_request.model_type}"
+            f"horizon={model_request.horizon}s, model_type={model_request.model_type}, "
+            f"name={model_request.name or '(auto)'}"
         )
 
-        service.create_model_instance(
+        # Create model and get the actual model name used
+        model_name = service.create_model_instance(
             horizon=model_request.horizon,
             analytics_type=model_request.analytics_type,
-            model_type=model_request.model_type
+            model_type=model_request.model_type,
+            model_config=model_config,
+            name=model_request.name,
         )
-
-        # Get the model name from config for response
-        from src.config.inference_type import get_inference_config
-        config = get_inference_config((model_request.analytics_type, model_request.horizon))
-        model_name = config.get_model_name(model_request.model_type)
 
         logger.info(f"Successfully created model instance: {model_name}")
 

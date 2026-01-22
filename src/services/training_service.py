@@ -1,4 +1,5 @@
 import logging
+import json
 import numpy as np
 import mlflow
 from mlflow.tracking import MlflowClient
@@ -7,9 +8,12 @@ from typing import Dict, Any, List, Callable, Optional
 from collections import defaultdict
 import asyncio
 import tempfile
-from src.models import models_dict
+
+from src.models import create_trainer, get_trainer_class
 from src.config.inference_type import get_inference_config
+from src.config.model_config import ModelConfig
 from src.utils.features import extract_features
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,20 +39,19 @@ class TrainingService:
         Args:
             analytics_type: Analytics type (e.g., 'latency')
             horizon: Prediction horizon in seconds
-            model_type: Model type (e.g., 'xgboost')
+            model_type: Model type (e.g., 'ann', 'lstm')
 
         Returns:
             str: Model name
 
         Raises:
-            ValueError: If config not found
+            ValueError: If config not found or model type invalid
         """
-
-        model_class=models_dict.get(model_type,None)
-        if  model_class is None:
-            raise ValueError(
-                f"Model [{model_type}] is not registered "
-            )
+        # Validate model type exists
+        try:
+            get_trainer_class(model_type)
+        except ValueError as e:
+            raise ValueError(f"Model [{model_type}] is not registered") from e
 
         key = (analytics_type, horizon)
         config = get_inference_config(key)
@@ -69,19 +72,25 @@ class TrainingService:
         max_epochs: int = 100,
         data_limit_per_cell: int = 100,
         status_callback: Optional[Callable[[int, int, Optional[float]], None]] = None,
+        model_config: Optional[ModelConfig] = None,
     ) -> Dict[str, Any]:
 
-        config = get_inference_config((analytics_type, horizon))
-        if not config:
+        inf_config = get_inference_config((analytics_type, horizon))
+        if not inf_config:
             raise ValueError(
                 f"No config found for analytics_type={analytics_type}, horizon={horizon}"
             )
 
-        ModelClass = models_dict.get(model_type.lower())
-        if not ModelClass:
+        # Validate model type and get trainer class
+        try:
+            get_trainer_class(model_type)
+        except ValueError:
             raise ValueError(f"Model type not found: {model_type}")
 
-        model_name = config.get_model_name(model_type)
+        # Use provided config or defaults
+        config = model_config or ModelConfig.default()
+
+        model_name = inf_config.get_model_name(model_type)
         logger.info(f"Starting training for {model_name}")
 
         # ------------------------------------------------------
@@ -92,9 +101,9 @@ class TrainingService:
             return {"status": "error", "message": "No cells found in storage"}
 
         raw_data = self.ml_interface.fetch_training_data_for_cells(
-            endpoint=config.storage_endpoint,
+            endpoint=inf_config.storage_endpoint,
             cell_indexes=known_cells,
-            window_duration_seconds=config.window_duration_seconds,
+            window_duration_seconds=inf_config.window_duration_seconds,
             data_limit_per_cell=data_limit_per_cell,
         )
 
@@ -103,9 +112,12 @@ class TrainingService:
 
         cells_data = self._group_by_cell(raw_data)
 
-        if ModelClass.SEQUENCE_LENGTH > 1:
+        # Get sequence length from config
+        sequence_length = config.sequence.sequence_length
+
+        if sequence_length > 1:
             X, y = self._prepare_sequence_data(
-                cells_data, analytics_type, ModelClass.SEQUENCE_LENGTH
+                cells_data, analytics_type, sequence_length
             )
         else:
             X, y = self._prepare_tabular_data(
@@ -128,7 +140,8 @@ class TrainingService:
         n_features = X.shape[-1]
 
         with mlflow.start_run(run_name=f"{model_name}_training") as run:
-            model = ModelClass()
+            # Create trainer with config
+            trainer = create_trainer(model_type, config)
 
             # Create callback wrapper for status updates
             def training_callback(current_epoch: int, total_epochs: int, loss: Optional[float]):
@@ -138,8 +151,9 @@ class TrainingService:
                     except Exception as e:
                         logger.warning(f"Status callback error: {e}")
 
-            loss = model.train(X=X, y=y, max_epochs=max_epochs, status_callback=training_callback)
+            loss = trainer.train(X=X, y=y, max_epochs=max_epochs, status_callback=training_callback)
 
+            # Save normalization artifacts
             with tempfile.TemporaryDirectory() as tmpdir:
                 mean_f_name = f"{model_name}_mean.npy"
                 std_f_name = f"{model_name}_std.npy"
@@ -153,6 +167,13 @@ class TrainingService:
                 mlflow.log_artifact(mean_path, artifact_path="normalization")
                 mlflow.log_artifact(std_path, artifact_path="normalization")
 
+                # Save model config as JSON artifact
+                config_path = f"{tmpdir}/model_config.json"
+                with open(config_path, 'w') as f:
+                    json.dump(config.to_dict(), f, indent=2)
+                mlflow.log_artifact(config_path, artifact_path="config")
+
+            # Log parameters including model config
             mlflow.log_params({
                 "analytics_type": analytics_type,
                 "model_type": model_type,
@@ -160,22 +181,26 @@ class TrainingService:
                 "n_features": n_features,
                 "n_cells": len(cells_data),
                 "max_epochs": max_epochs,
+                # Training config params
+                "config.learning_rate": config.training.learning_rate,
+                "config.optimizer": config.training.optimizer.value,
+                "config.loss_function": config.training.loss_function.value,
+                # Architecture config params
+                "config.hidden_size": config.architecture.hidden_size,
+                "config.num_layers": config.architecture.num_layers,
+                "config.dropout": config.architecture.dropout,
+                # Sequence config params
+                "config.sequence_length": config.sequence.sequence_length,
             })
 
             mlflow.log_metric("training_loss", float(loss))
 
-            if ModelClass.FRAMEWORK == "pytorch":
-                mlflow.pytorch.log_model(
-                    model.model,
-                    artifact_path="model",
-                    registered_model_name=model_name,
-                )
-            else:
-                mlflow.sklearn.log_model(
-                    model.model,
-                    artifact_path="model",
-                    registered_model_name=model_name,
-                )
+            # Log model to MLflow (all trainers use PyTorch)
+            mlflow.pytorch.log_model(
+                trainer.get_model(),
+                artifact_path="model",
+                registered_model_name=model_name,
+            )
 
             run_id = run.info.run_id
 

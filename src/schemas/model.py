@@ -1,4 +1,7 @@
 from pydantic import BaseModel
+from typing import Optional
+
+from src.schemas.model_config import ModelConfigSchema
 
 
 class ModelCreationRequest(BaseModel):
@@ -6,13 +9,24 @@ class ModelCreationRequest(BaseModel):
     analytics_type: str
     horizon: int
     model_type: str
+    name: Optional[str] = None  # Custom model name, auto-generated if not provided
+    config: Optional[ModelConfigSchema] = None
 
     class Config:
         json_schema_extra = {
             "example": {
                 "analytics_type": "latency",
                 "horizon": 60,
-                "model_type": "ann"
+                "model_type": "ann",
+                "name": "latency_ann_v2",
+                "config": {
+                    "architecture": {
+                        "hidden_size": 64
+                    },
+                    "sequence": {
+                        "sequence_length": 5
+                    }
+                }
             }
         }
 
