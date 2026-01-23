@@ -21,8 +21,8 @@ RUN mkdir utils && cd utils \
 && rm -rf .git \
 && rmdir -p kafka/src
 
-COPY requirements.txt .
-RUN uv pip install --system -r requirements.txt
+COPY pyproject.toml .
+RUN uv sync --no-dev
 
 COPY src/ ./src/
 COPY main.py .
