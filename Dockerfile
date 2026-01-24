@@ -27,4 +27,4 @@ RUN uv sync --no-dev
 COPY src/ ./src/
 COPY main.py .
 
-CMD ["python3", "main.py"]
+CMD ["uv", "run", "python", "main.py"]
