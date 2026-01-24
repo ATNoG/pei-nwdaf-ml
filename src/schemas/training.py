@@ -1,29 +1,15 @@
 from pydantic import BaseModel
 from typing import Optional
 
-from src.schemas.model_config import ModelConfigSchema
-
 
 class ModelTrainingRequest(BaseModel):
-    """Request to train a model by name"""
+    """Request to train a model by name using stored config"""
     model_name: str
-    config: Optional[ModelConfigSchema] = None
 
     class Config:
         json_schema_extra = {
             "example": {
-                "model_name": "latency_lstm_60",
-                "config": {
-                    "training": {
-                        "learning_rate": 0.001,
-                        "optimizer": "adam",
-                        "max_epochs": 100
-                    },
-                    "architecture": {
-                        "hidden_size": 64,
-                        "dropout": 0.2
-                    }
-                }
+                "model_name": "latency_lstm_60"
             }
         }
 
