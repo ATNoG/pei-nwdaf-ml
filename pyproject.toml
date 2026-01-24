@@ -2,7 +2,6 @@
 name = "pei-nwdaf-ml"
 version = "1.0.0"
 description = "ML inference and model management service for the NWDAF platform"
-readme = "README.md"
 requires-python = ">=3.13"
 authors = [
     { name = "PEI Team" }
