@@ -26,6 +26,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest==9.0.1",
+    "testcontainers>=4.14.0",
 ]
 
 [build-system]
@@ -44,3 +45,8 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+
+[dependency-groups]
+dev = [
+    "requests>=2.28.1",
+]

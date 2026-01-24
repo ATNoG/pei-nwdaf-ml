@@ -8,14 +8,13 @@ import json
 import numpy as np
 import mlflow
 from mlflow.tracking import MlflowClient
-from typing import Optional
 import tempfile
 
 from src.utils.features import extract_features
 from src.config.inference_type import InferenceConfig, get_all_inference_types, get_inference_config
 from src.config.model_config import ModelConfig
 from src.models import create_trainer, get_trainer_class
-
+from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
@@ -35,6 +34,60 @@ class ModelService:
         except Exception as e:
             logger.error(f"Error checking model existence: {e}")
             return False
+
+    def get_model_details(self, model_name: str) -> dict:
+        """
+        Get detailed information about a model including architecture and config.
+
+        Args:
+            model_name: Name of the model
+
+        Returns:
+            dict with model details
+
+        Raises:
+            ValueError: If model not found
+        """
+        client = MlflowClient()
+
+        try:
+            model = client.get_registered_model(model_name)
+        except Exception:
+            raise ValueError(f"Model '{model_name}' not found in registry")
+
+        tags = model.tags
+
+        # Get latest version
+        versions = client.search_model_versions(f"name='{model_name}'")
+        if not versions:
+            raise ValueError(f"No versions found for model '{model_name}'")
+
+        latest = max(versions, key=lambda v: int(v.version))
+
+        # Get run to fetch config artifact
+        run = mlflow.get_run(latest.run_id)
+
+        config_dict = None
+        try:
+            # Download config artifact
+            artifact_path = client.download_artifacts(latest.run_id, "config/model_config.json")
+            with open(artifact_path, 'r') as f:
+                config_dict = json.load(f)
+        except Exception as e:
+            logger.warning(f"Could not load config artifact: {e}")
+
+        return {
+            "name": model_name,
+            "model_type": tags.get("model_type"),
+            "analytics_type": tags.get("analytics_type"),
+            "horizon": int(tags.get("horizon", 0)) if tags.get("horizon") else None,
+            "version": latest.version,
+            "stage": latest.current_stage,
+            "config": config_dict,
+            "last_training_time": latest.creation_timestamp / 1000 if latest.creation_timestamp else None,
+            "training_loss": run.data.metrics.get("training_loss"),
+            "run_id": latest.run_id
+        }
 
     def delete_model_instance(self, model_name: str):
         """
@@ -77,9 +130,9 @@ class ModelService:
         horizon: int,
         analytics_type: str,
         model_type: str,
-        model_config: Optional[ModelConfig] = None,
-        name: Optional[str] = None,
-    ) -> str:
+        name: str,
+        model_config: ModelConfig|None = None,
+    ) -> None:
         """
         Create and register a new instance of a model.
 
@@ -112,10 +165,7 @@ class ModelService:
         config = model_config or ModelConfig.default()
 
         # Determine model name
-        if name:
-            model_name = name
-        else:
-            model_name = inf_config.get_model_name(model_type)
+        model_name = name
 
         # Ensure model doesn't exist yet
         if self._model_exists(model_name):
@@ -124,7 +174,6 @@ class ModelService:
         # Create model
         self._instance_model(inf_config, model_type, model_name, config)
 
-        return model_name
 
     def _instance_model(
         self,
@@ -179,10 +228,10 @@ class ModelService:
                 if sequence_length > 1:
                     X = np.repeat(X[:, np.newaxis, :], sequence_length, axis=1)
 
+
                 # Create trainer with config and train
                 trainer = create_trainer(model_type, config)
                 loss = trainer.train(max_epochs=10, X=X, y=y)
-
                 # Log parameters and metrics
                 mlflow.log_param("n_samples", n_samples)
                 mlflow.log_param("n_features", n_features)
@@ -208,9 +257,13 @@ class ModelService:
 
             # Tag the registered model
             client = MlflowClient()
-            client.set_registered_model_tag(model_name, "inference_type", inf_config.name)
+            client.set_registered_model_tag(model_name, "analytics_type", inf_config.name)
             client.set_registered_model_tag(model_name, "model_type", model_type.lower())
             client.set_registered_model_tag(model_name, "auto_created", "true")
+            client.set_registered_model_tag(model_name, "horizon", str(inf_config.window_duration_seconds))
+            client.set_registered_model_tag(
+                model_name, "last_trained", str(datetime.utcnow().timestamp())
+            )
 
             return True
 

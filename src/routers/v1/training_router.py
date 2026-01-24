@@ -21,20 +21,10 @@ router = APIRouter()
 
 def _train_model_background(
     ml_interface,
-    analytics_type: str,
-    horizon: int,
-    model_type: str,
+    model_name: str,
     model_config=None,
 ):
     """Background task to train model with WebSocket status updates"""
-    from src.config.inference_type import get_inference_config
-
-    inf_config = get_inference_config((analytics_type, horizon))
-    if not inf_config:
-        logger.error(f"No config found for analytics_type={analytics_type}, horizon={horizon}")
-        return
-
-    model_name = inf_config.get_model_name(model_type)
     status_manager = get_training_status_manager()
 
     # Get max_epochs from model config or use default
@@ -66,10 +56,8 @@ def _train_model_background(
         status_callback(0, max_epochs, None)
 
         service = TrainingService(ml_interface)
-        result = service.start_training(
-            analytics_type=analytics_type,
-            horizon=horizon,
-            model_type=model_type,
+        result = service.train_model_by_name(
+            model_name=model_name,
             max_epochs=max_epochs,
             data_limit_per_cell=100,
             status_callback=status_callback,
@@ -116,26 +104,24 @@ async def start_training(
     request: Request
 ):
     """
-    Start training a model for an analytics type.
+    Start training a model by name.
 
     Training runs in the background. Use GET endpoint to check status.
 
     Args:
-        training_request: Analytics type, horizon, model type, and optional config
+        training_request: Model name and optional config
 
     Returns:
         Confirmation that training has started
 
     Raises:
-        404: Analytics type/horizon not configured
+        404: Model not found or missing metadata
         500: ML Interface not initialized
 
     Example:
         POST /api/v1/training
         {
-            "analytics_type": "latency",
-            "horizon": 60,
-            "model_type": "lstm",
+            "model_name": "latency_lstm_60",
             "config": {
                 "training": {"learning_rate": 0.001, "max_epochs": 100},
                 "architecture": {"hidden_size": 64}
@@ -149,39 +135,28 @@ async def start_training(
     service = TrainingService(ml_interface)
 
     try:
-        # Validate request
-        model_name = service.validate_training_request(
-            analytics_type=training_request.analytics_type,
-            horizon=training_request.horizon,
-            model_type=training_request.model_type
-        )
+        # Validate model exists and has metadata
+        service.get_model_metadata(training_request.model_name)
 
         # Convert Pydantic config to dataclass if provided
         model_config = None
         if training_request.config:
             model_config = training_request.config.to_model_config()
 
-        logger.info(
-            f"Starting background training for {model_name} "
-            f"(analytics_type={training_request.analytics_type}, "
-            f"horizon={training_request.horizon}s, "
-            f"model_type={training_request.model_type})"
-        )
+        logger.info(f"Starting background training for {training_request.model_name}")
 
         # Start training in background
         background_tasks.add_task(
             _train_model_background,
             ml_interface,
-            training_request.analytics_type,
-            training_request.horizon,
-            training_request.model_type,
+            training_request.model_name,
             model_config,
         )
 
         return ModelTrainingStartResponse(
             status="training_started",
-            model_name=model_name,
-            message=f"Training started for {model_name}"
+            model_name=training_request.model_name,
+            message=f"Training started for {training_request.model_name}"
         )
 
     except ValueError as e:
@@ -191,30 +166,26 @@ async def start_training(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.get("/{analytics_type}/{horizon}/{model_type}", response_model=ModelTrainingInfo)
+@router.get("/{model_name}", response_model=ModelTrainingInfo)
 async def get_training_info(
-    analytics_type: str,
-    horizon: int,
-    model_type: str,
+    model_name: str,
     request: Request
 ):
     """
-    Get training information for a model.
+    Get training information for a model by name.
 
     Args:
-        analytics_type: Analytics type (e.g., 'latency')
-        horizon: Prediction horizon in seconds (e.g., 60)
-        model_type: Model type (e.g., 'xgboost')
+        model_name: Name of the model (e.g., 'latency_ann_60')
 
     Returns:
         Training information including last training time and metrics
 
     Raises:
-        404: Config or model not found
+        404: Model not found
         500: ML Interface not initialized or error retrieving info
 
     Example:
-        GET /api/v1/training/latency/60/xgboost
+        GET /api/v1/training/latency_ann_60
     """
     ml_interface = request.app.state.ml_interface
     if not ml_interface:
@@ -223,7 +194,7 @@ async def get_training_info(
     service = TrainingService(ml_interface)
 
     try:
-        info = service.get_model_info(analytics_type, horizon, model_type)
+        info = service.get_model_info_by_name(model_name)
 
         return ModelTrainingInfo(
             model_name=info["model_name"],

@@ -4,7 +4,7 @@ Tests for v1 API routers (model and training).
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 from src.routers.v1 import model_router, training_router
 
@@ -53,6 +53,7 @@ class TestModelRouter:
                     "analytics_type": "latency",
                     "horizon": 60,
                     "model_type": "ann",
+                    "name": "latency_ann_60"
                 },
             )
 
@@ -82,6 +83,7 @@ class TestModelRouter:
                         "training": {"learning_rate": 0.01, "max_epochs": 200},
                         "architecture": {"hidden_size": 128, "dropout": 0.3},
                     },
+                    "name": "latency_lstm_60"
                 },
             )
 
@@ -139,6 +141,7 @@ class TestModelRouter:
                     "analytics_type": "latency",
                     "horizon": 60,
                     "model_type": "invalid",
+                    "name": "invalid_model"
                 },
             )
 
@@ -162,6 +165,7 @@ class TestModelRouter:
                     "analytics_type": "latency",
                     "horizon": 60,
                     "model_type": "ann",
+                    "name": "latency_ann_60"
                 },
             )
 
@@ -194,15 +198,17 @@ class TestTrainingRouter:
 
         with patch("src.routers.v1.training_router.TrainingService") as mock_service_class:
             mock_service = Mock()
-            mock_service.validate_training_request.return_value = "latency_ann_60"
+            mock_service.get_model_metadata.return_value = {
+                "analytics_type": "latency",
+                "model_type": "ann",
+                "horizon": 60
+            }
             mock_service_class.return_value = mock_service
 
             response = client.post(
                 "/api/v1/training",
                 json={
-                    "analytics_type": "latency",
-                    "horizon": 60,
-                    "model_type": "ann",
+                    "model_name": "latency_ann_60",
                 },
             )
 
@@ -210,6 +216,7 @@ class TestTrainingRouter:
             data = response.json()
             assert data["status"] == "training_started"
             assert data["model_name"] == "latency_ann_60"
+            mock_service.get_model_metadata.assert_called_once_with("latency_ann_60")
 
     def test_start_training_with_config(self, app_with_training_router):
         """Test training start with custom config"""
@@ -217,15 +224,17 @@ class TestTrainingRouter:
 
         with patch("src.routers.v1.training_router.TrainingService") as mock_service_class:
             mock_service = Mock()
-            mock_service.validate_training_request.return_value = "latency_lstm_60"
+            mock_service.get_model_metadata.return_value = {
+                "analytics_type": "latency",
+                "model_type": "lstm",
+                "horizon": 60
+            }
             mock_service_class.return_value = mock_service
 
             response = client.post(
                 "/api/v1/training",
                 json={
-                    "analytics_type": "latency",
-                    "horizon": 60,
-                    "model_type": "lstm",
+                    "model_name": "latency_lstm_60",
                     "config": {
                         "training": {"learning_rate": 0.01, "max_epochs": 150},
                         "architecture": {"hidden_size": 64},
@@ -236,24 +245,23 @@ class TestTrainingRouter:
             assert response.status_code == 200
             data = response.json()
             assert data["status"] == "training_started"
+            assert data["model_name"] == "latency_lstm_60"
 
-    def test_start_training_invalid_analytics_type(self, app_with_training_router):
-        """Test training start with invalid analytics type"""
+    def test_start_training_invalid_model_name(self, app_with_training_router):
+        """Test training start with invalid model name"""
         client = TestClient(app_with_training_router)
 
         with patch("src.routers.v1.training_router.TrainingService") as mock_service_class:
             mock_service = Mock()
-            mock_service.validate_training_request.side_effect = ValueError(
-                "No model configuration found for analytics_type=invalid"
+            mock_service.get_model_metadata.side_effect = ValueError(
+                "Model 'invalid_model' not found in registry"
             )
             mock_service_class.return_value = mock_service
 
             response = client.post(
                 "/api/v1/training",
                 json={
-                    "analytics_type": "invalid",
-                    "horizon": 60,
-                    "model_type": "ann",
+                    "model_name": "invalid_model",
                 },
             )
 
@@ -265,8 +273,7 @@ class TestTrainingRouter:
 
         with patch("src.routers.v1.training_router.TrainingService") as mock_service_class:
             mock_service = Mock()
-            mock_service.get_model_info.return_value = {
-                "status": "found",
+            mock_service.get_model_info_by_name.return_value = {
                 "model_name": "latency_ann_60",
                 "model_version": "1",
                 "last_training_time": 1234567890.0,
@@ -277,10 +284,11 @@ class TestTrainingRouter:
             }
             mock_service_class.return_value = mock_service
 
-            response = client.get("/api/v1/training/latency/60/ann")
+            response = client.get("/api/v1/training/latency_ann_60")
 
             assert response.status_code == 200
             data = response.json()
             assert data["model_name"] == "latency_ann_60"
             assert data["model_version"] == "1"
             assert data["training_loss"] == 0.05
+            mock_service.get_model_info_by_name.assert_called_once_with("latency_ann_60")

@@ -8,7 +8,9 @@ from src.services.model_service import ModelService
 from src.schemas.model import (
     ModelCreationRequest,
     ModelCreationResponse,
-    ModelDeletionResponse
+    ModelDeletionResponse,
+    ModelInfo,
+    ModelDetailedInfo
 )
 
 logger = logging.getLogger(__name__)
@@ -59,6 +61,8 @@ async def create_model_instance(
         if model_request.config:
             model_config = model_request.config.to_model_config()
 
+        model_name = model_request.name
+
         logger.info(
             f"Creating model instance for analytics_type={model_request.analytics_type}, "
             f"horizon={model_request.horizon}s, model_type={model_request.model_type}, "
@@ -66,12 +70,12 @@ async def create_model_instance(
         )
 
         # Create model and get the actual model name used
-        model_name = service.create_model_instance(
+        service.create_model_instance(
             horizon=model_request.horizon,
             analytics_type=model_request.analytics_type,
             model_type=model_request.model_type,
             model_config=model_config,
-            name=model_request.name,
+            name=model_name,
         )
 
         logger.info(f"Successfully created model instance: {model_name}")
@@ -93,6 +97,61 @@ async def create_model_instance(
 
     except Exception as e:
         logger.error(f"Error creating model instance: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@router.get("/models", response_model=list[ModelInfo])
+async def list_models(request: Request):
+    """List all available ML models from MLFlow registry"""
+    ml_interface = request.app.state.ml_interface
+
+    if not ml_interface:
+        raise HTTPException(status_code=500, detail="ML Interface not initialized")
+
+    if not ml_interface.is_mlflow_connected():
+        raise HTTPException(status_code=503, detail="MLFlow not connected")
+
+    try:
+        models = ml_interface.list_registered_models()
+        return [ModelInfo(**model) for model in models]
+    except Exception as e:
+        logger.error(f"Error listing models: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/instance/{model_name}", response_model=ModelDetailedInfo)
+async def get_model_details(
+    model_name: str,
+    request: Request
+):
+    """
+    Get detailed information about a model.
+
+    Args:
+        model_name: Name of the model
+
+    Returns:
+        Detailed model information including architecture and config
+
+    Raises:
+        404: Model not found
+        500: ML Interface not initialized or error
+
+    Example:
+        GET /api/v1/model/instance/latency_ann_60
+    """
+    ml_interface = request.app.state.ml_interface
+    if not ml_interface:
+        raise HTTPException(status_code=500, detail="ML Interface not initialized")
+
+    service = ModelService(ml_interface)
+
+    try:
+        details = service.get_model_details(model_name)
+        return ModelDetailedInfo(**details)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error getting model details: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

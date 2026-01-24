@@ -1,7 +1,29 @@
 from pydantic import BaseModel
-from typing import Optional
-
+from typing import Any
 from src.schemas.model_config import ModelConfigSchema
+
+
+class ModelDetailedInfo(BaseModel):
+    """Detailed model information including architecture and config"""
+    name: str
+    model_type: str
+    analytics_type: str
+    horizon: int
+    version: str|None = None
+    stage: str|None = None
+    config: dict[str, Any]|None = None
+    last_training_time: float|None = None
+    training_loss: float|None = None
+    run_id: str|None = None
+
+
+class ModelInfo(BaseModel):
+    """Model information from MLFlow registry"""
+    name: str
+    creation_timestamp: int|None = None
+    last_updated_timestamp: int|None = None
+    description: str|None = None
+    latest_versions: list[dict[str, Any]]|None = None
 
 
 class ModelCreationRequest(BaseModel):
@@ -9,8 +31,8 @@ class ModelCreationRequest(BaseModel):
     analytics_type: str
     horizon: int
     model_type: str
-    name: Optional[str] = None  # Custom model name, auto-generated if not provided
-    config: Optional[ModelConfigSchema] = None
+    name: str
+    config: ModelConfigSchema|None=None
 
     class Config:
         json_schema_extra = {

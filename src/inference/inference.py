@@ -94,8 +94,8 @@ class InferenceMaker:
         cell_str = str(cell_index).replace('.', '_')
         if model_type:
             return f"cell_{cell_str}_{model_type.lower()}"
-        # default to xgboost if no type specified
-        return f"cell_{cell_str}_xgboost"
+        # default to ann if no type specified
+        return f"cell_{cell_str}_ann"
 
     def _get_inference_type_model_name(self, inference_type: str, horizon: int, model_type: str) -> str:
         """construct model name for an inference type"""
