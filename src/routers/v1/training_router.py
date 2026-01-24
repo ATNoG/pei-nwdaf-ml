@@ -12,7 +12,7 @@ from src.schemas.training import (
     ModelTrainingStartResponse,
     ModelTrainingInfo
 )
-from src.routers.websocket import get_training_status_manager
+from src.routers.v1.websocket import get_training_status_manager
 
 logger = logging.getLogger(__name__)
 

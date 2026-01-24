@@ -21,7 +21,7 @@ from typing import Optional, List, Dict, Any
 from src.services.inference_service import InferenceService
 from src.services.performance_monitor_service import PerformanceMonitor
 from src.config.inference_type import InferenceConfig, get_all_inference_types
-from src.routers.websocket import performance_monitor_callback
+from src.routers.v1.websocket import performance_monitor_callback
 
 from src.mlflow.mlf import MLFlowBridge
 
