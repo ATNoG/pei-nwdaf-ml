@@ -22,15 +22,9 @@ router = APIRouter()
 def _train_model_background(
     ml_interface,
     model_name: str,
-    model_config=None,
 ):
     """Background task to train model with WebSocket status updates"""
     status_manager = get_training_status_manager()
-
-    # Get max_epochs from model config or use default
-    max_epochs = 100
-    if model_config:
-        max_epochs = model_config.training.max_epochs
 
     def status_callback(current_epoch: int, total_epochs: int, loss: float = None):
         """Callback to update WebSocket clients with training progress"""
@@ -52,22 +46,15 @@ def _train_model_background(
             logger.warning(f"Failed to update WebSocket status: {e}")
 
     try:
-        # Initial status
-        status_callback(0, max_epochs, None)
-
         service = TrainingService(ml_interface)
         result = service.train_model_by_name(
             model_name=model_name,
-            max_epochs=max_epochs,
             data_limit_per_cell=100,
             status_callback=status_callback,
-            model_config=model_config,
         )
 
         # Final status with result
         final_status = {
-            "current_epoch": max_epochs,
-            "total_epochs": max_epochs,
             "status": "completed",
             "message": "Training completed successfully",
             "training_loss": result.get("training_loss"),
@@ -83,8 +70,6 @@ def _train_model_background(
 
         # Error status
         error_status = {
-            "current_epoch": 0,
-            "total_epochs": max_epochs,
             "status": "error",
             "message": str(e)
         }
@@ -107,9 +92,10 @@ async def start_training(
     Start training a model by name.
 
     Training runs in the background. Use GET endpoint to check status.
+    Uses the model's stored configuration for training parameters.
 
     Args:
-        training_request: Model name and optional config
+        training_request: Model name
 
     Returns:
         Confirmation that training has started
@@ -121,11 +107,7 @@ async def start_training(
     Example:
         POST /api/v1/training
         {
-            "model_name": "latency_lstm_60",
-            "config": {
-                "training": {"learning_rate": 0.001, "max_epochs": 100},
-                "architecture": {"hidden_size": 64}
-            }
+            "model_name": "latency_lstm_60"
         }
     """
     ml_interface = request.app.state.ml_interface
@@ -138,11 +120,6 @@ async def start_training(
         # Validate model exists and has metadata
         service.get_model_metadata(training_request.model_name)
 
-        # Convert Pydantic config to dataclass if provided
-        model_config = None
-        if training_request.config:
-            model_config = training_request.config.to_model_config()
-
         logger.info(f"Starting background training for {training_request.model_name}")
 
         # Start training in background
@@ -150,7 +127,6 @@ async def start_training(
             _train_model_background,
             ml_interface,
             training_request.model_name,
-            model_config,
         )
 
         return ModelTrainingStartResponse(

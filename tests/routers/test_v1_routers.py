@@ -91,7 +91,7 @@ class TestModelRouter:
             data = response.json()
             assert data["status"] == "created"
 
-            # Verify config was passed
+            # Verify config was passed to model creation
             call_kwargs = mock_service.create_model_instance.call_args.kwargs
             assert call_kwargs["model_config"] is not None
             assert call_kwargs["model_config"].training.learning_rate == 0.01
@@ -218,34 +218,6 @@ class TestTrainingRouter:
             assert data["model_name"] == "latency_ann_60"
             mock_service.get_model_metadata.assert_called_once_with("latency_ann_60")
 
-    def test_start_training_with_config(self, app_with_training_router):
-        """Test training start with custom config"""
-        client = TestClient(app_with_training_router)
-
-        with patch("src.routers.v1.training_router.TrainingService") as mock_service_class:
-            mock_service = Mock()
-            mock_service.get_model_metadata.return_value = {
-                "analytics_type": "latency",
-                "model_type": "lstm",
-                "horizon": 60
-            }
-            mock_service_class.return_value = mock_service
-
-            response = client.post(
-                "/api/v1/training",
-                json={
-                    "model_name": "latency_lstm_60",
-                    "config": {
-                        "training": {"learning_rate": 0.01, "max_epochs": 150},
-                        "architecture": {"hidden_size": 64},
-                    },
-                },
-            )
-
-            assert response.status_code == 200
-            data = response.json()
-            assert data["status"] == "training_started"
-            assert data["model_name"] == "latency_lstm_60"
 
     def test_start_training_invalid_model_name(self, app_with_training_router):
         """Test training start with invalid model name"""

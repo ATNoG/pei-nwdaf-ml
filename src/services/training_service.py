@@ -67,23 +67,48 @@ class TrainingService:
             "horizon": horizon
         }
 
+    def _load_model_config(self, model_name: str) -> ModelConfig:
+        """
+        Load stored model config from MLflow artifacts.
+        Config is static and set during model creation (version 1).
+
+        Args:
+            model_name: Name of the registered model
+
+        Returns:
+            ModelConfig: The stored model configuration
+
+        Raises:
+            ValueError: If config cannot be loaded
+        """
+        try:
+            # Get version 1 (creation version) to load the static config
+            version_1 = self.client.get_model_version(model_name, "1")
+
+            artifact_path = self.client.download_artifacts(
+                version_1.run_id, "config/model_config.json"
+            )
+            with open(artifact_path, 'r') as f:
+                config_dict = json.load(f)
+
+            return ModelConfig.from_dict(config_dict)
+
+        except Exception as e:
+            raise ValueError(f"Error loading config for '{model_name}': {e}") from e
+
     def train_model_by_name(
         self,
         model_name: str,
-        max_epochs: int = 100,
         data_limit_per_cell: int = 100,
         status_callback: Optional[Callable[[int, int, Optional[float]], None]] = None,
-        model_config: Optional[ModelConfig] = None,
     ) -> Dict[str, Any]:
         """
-        Train a model by its name (retrieves metadata from MLflow).
+        Train a model by its name (retrieves metadata and config from MLflow).
 
         Args:
             model_name: Name of the model to train
-            max_epochs: Maximum training epochs
             data_limit_per_cell: Max samples per cell
             status_callback: Training progress callback
-            model_config: Optional model configuration
 
         Returns:
             dict: Training result
@@ -94,8 +119,15 @@ class TrainingService:
         # Get model metadata from MLflow tags
         metadata = self.get_model_metadata(model_name)
 
-        # Call the original training method
+        # Load stored model config
+        model_config = self._load_model_config(model_name)
+
+        # Use max_epochs from the loaded config
+        max_epochs = model_config.training.max_epochs
+
+        # Call the original training method with the actual model name
         return self.start_training(
+            model_name=model_name,
             analytics_type=metadata["analytics_type"],
             horizon=metadata["horizon"],
             model_type=metadata["model_type"],
@@ -105,45 +137,9 @@ class TrainingService:
             model_config=model_config,
         )
 
-    def validate_training_request(
-        self,
-        analytics_type: str,
-        horizon: int,
-        model_type: str
-    ) -> str:
-        """
-        Validate training request parameters.
-
-        Args:
-            analytics_type: Analytics type (e.g., 'latency')
-            horizon: Prediction horizon in seconds
-            model_type: Model type (e.g., 'ann', 'lstm')
-
-        Returns:
-            str: Model name
-
-        Raises:
-            ValueError: If config not found or model type invalid
-        """
-        # Validate model type exists
-        try:
-            get_trainer_class(model_type)
-        except ValueError as e:
-            raise ValueError(f"Model [{model_type}] is not registered") from e
-
-        key = (analytics_type, horizon)
-        config = get_inference_config(key)
-
-        if not config:
-            raise ValueError(
-                f"No model configuration found for analytics_type={analytics_type} "
-                f"with horizon={horizon}s"
-            )
-
-        return config.get_model_name(model_type)
-
     def start_training(
         self,
+        model_name: str,
         analytics_type: str,
         horizon: int,
         model_type: str,
@@ -168,7 +164,6 @@ class TrainingService:
         # Use provided config or defaults
         config = model_config or ModelConfig.default()
 
-        model_name = inf_config.get_model_name(model_type)
         logger.info(f"Starting training for {model_name}")
 
         # ------------------------------------------------------
@@ -433,63 +428,3 @@ class TrainingService:
             logger.error(f"Error getting model info for {model_name}: {e}")
             raise RuntimeError(f"Error retrieving model info: {str(e)}")
 
-    def get_model_info(self, analytics_type: str, horizon: int, model_type: str) -> Dict[str, Any]:
-        """
-        Get training information for a model.
-
-        Args:
-            analytics_type: Analytics type
-            horizon: Prediction horizon in seconds
-            model_type: Model type
-
-        Returns:
-            dict: Model information including training history
-        """
-
-        key = (analytics_type, horizon)
-        config = get_inference_config(key)
-
-        if not config:
-            return {"status": "error", "message": f"No config found for analytics_type={analytics_type} with horizon={horizon}s"}
-
-        model_name = config.get_model_name(model_type)
-
-        try:
-            # Check if model exists
-            try:
-                _ = self.client.get_registered_model(model_name)
-            except Exception:
-                return {
-                    "status": "not_found",
-                    "model_name": model_name,
-                    "message": "Model not registered"
-                }
-
-            # Get latest version
-            model_versions = self.client.search_model_versions(f"name='{model_name}'")
-            if not model_versions:
-                return {
-                    "status": "not_found",
-                    "model_name": model_name,
-                    "message": "No versions found"
-                }
-
-            latest_version = max(model_versions, key=lambda v: int(v.version))
-
-            # Get run info
-            run = mlflow.get_run(latest_version.run_id)
-
-            return {
-                "status": "found",
-                "model_name": model_name,
-                "model_version": latest_version.version,
-                "last_training_time": latest_version.creation_timestamp / 1000,
-                "training_loss": run.data.metrics.get("training_loss"),
-                "samples_used": run.data.params.get("n_samples"),
-                "features_used": run.data.params.get("n_features"),
-                "run_id": latest_version.run_id
-            }
-
-        except Exception as e:
-            logger.error(f"Error getting model info for {model_name}: {e}")
-            return {"status": "error", "message": str(e)}
