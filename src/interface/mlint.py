@@ -256,7 +256,7 @@ class MLInterface():
         Expected message format: (FOR NOW)
         {
             "cell_index": "12898855",
-            "model_type": "xgboost",  # optional, defaults to xgboost
+            "model_type": "ann",  # optional, defaults to ann
             "data": {
                 "rsrp_mean": -86.0, "rsrp_max": -81.0, ...
             },
@@ -291,7 +291,7 @@ class MLInterface():
             # Extract request parameters
             cell_index = data.get('cell_index')
             cell_indices = data.get('cell_indices')
-            model_type = data.get('model_type', 'xgboost')
+            model_type = data.get('model_type', 'ann')
             inference_data = data.get('data')
             request_id = data.get('request_id', 'unknown')
 

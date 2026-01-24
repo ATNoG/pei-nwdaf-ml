@@ -6,7 +6,6 @@ from mlflow.tracking import MlflowClient
 from datetime import datetime
 from typing import Dict, Any, List, Callable, Optional
 from collections import defaultdict
-import asyncio
 import tempfile
 
 from src.models import create_trainer, get_trainer_class
@@ -26,6 +25,85 @@ class TrainingService:
     def __init__(self, ml_interface):
         self.ml_interface = ml_interface
         self.client = MlflowClient()
+
+    def get_model_metadata(self, model_name: str) -> Dict[str, Any]:
+        """
+        Get model metadata from MLflow tags.
+
+        Args:
+            model_name: Name of the registered model
+
+        Returns:
+            dict: Model metadata including analytics_type, horizon, model_type
+
+        Raises:
+            ValueError: If model not found or missing metadata
+        """
+        try:
+            model = self.client.get_registered_model(model_name)
+        except Exception as e:
+            raise ValueError(f"Model '{model_name}' not found in registry") from e
+
+        tags = model.tags
+
+        analytics_type = tags.get("analytics_type")
+        model_type = tags.get("model_type")
+        horizon_str = tags.get("horizon")
+
+        if not analytics_type or not model_type or not horizon_str:
+            raise ValueError(
+                f"Model '{model_name}' is missing required metadata. "
+                f"Expected tags: analytics_type, model_type, horizon"
+            )
+
+        try:
+            horizon = int(horizon_str)
+        except ValueError:
+            raise ValueError(f"Invalid horizon value in model tags: {horizon_str}")
+
+        return {
+            "analytics_type": analytics_type,
+            "model_type": model_type,
+            "horizon": horizon
+        }
+
+    def train_model_by_name(
+        self,
+        model_name: str,
+        max_epochs: int = 100,
+        data_limit_per_cell: int = 100,
+        status_callback: Optional[Callable[[int, int, Optional[float]], None]] = None,
+        model_config: Optional[ModelConfig] = None,
+    ) -> Dict[str, Any]:
+        """
+        Train a model by its name (retrieves metadata from MLflow).
+
+        Args:
+            model_name: Name of the model to train
+            max_epochs: Maximum training epochs
+            data_limit_per_cell: Max samples per cell
+            status_callback: Training progress callback
+            model_config: Optional model configuration
+
+        Returns:
+            dict: Training result
+
+        Raises:
+            ValueError: If model not found or invalid metadata
+        """
+        # Get model metadata from MLflow tags
+        metadata = self.get_model_metadata(model_name)
+
+        # Call the original training method
+        return self.start_training(
+            analytics_type=metadata["analytics_type"],
+            horizon=metadata["horizon"],
+            model_type=metadata["model_type"],
+            max_epochs=max_epochs,
+            data_limit_per_cell=data_limit_per_cell,
+            status_callback=status_callback,
+            model_config=model_config,
+        )
 
     def validate_training_request(
         self,
@@ -218,6 +296,7 @@ class TrainingService:
 
         self.client.set_registered_model_tag(model_name, "analytics_type", analytics_type)
         self.client.set_registered_model_tag(model_name, "model_type", model_type)
+        self.client.set_registered_model_tag(model_name, "horizon", str(horizon))
         self.client.set_registered_model_tag(
             model_name, "last_trained", str(datetime.utcnow().timestamp())
         )
@@ -310,6 +389,49 @@ class TrainingService:
         y = np.array(y_all, dtype=np.float32)
 
         return np.nan_to_num(X), np.nan_to_num(y)
+
+    def get_model_info_by_name(self, model_name: str) -> Dict[str, Any]:
+        """
+        Get training information for a model by name.
+
+        Args:
+            model_name: Name of the model
+
+        Returns:
+            dict: Model information including training history
+        """
+        try:
+            # Check if model exists
+            try:
+                _ = self.client.get_registered_model(model_name)
+            except Exception:
+                raise ValueError(f"Model '{model_name}' not registered")
+
+            # Get latest version
+            model_versions = self.client.search_model_versions(f"name='{model_name}'")
+            if not model_versions:
+                raise ValueError(f"No versions found for model '{model_name}'")
+
+            latest_version = max(model_versions, key=lambda v: int(v.version))
+
+            # Get run info
+            run = mlflow.get_run(latest_version.run_id)
+
+            return {
+                "model_name": model_name,
+                "model_version": latest_version.version,
+                "last_training_time": latest_version.creation_timestamp / 1000,
+                "training_loss": run.data.metrics.get("training_loss"),
+                "samples_used": run.data.params.get("n_samples"),
+                "features_used": run.data.params.get("n_features"),
+                "run_id": latest_version.run_id
+            }
+
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error(f"Error getting model info for {model_name}: {e}")
+            raise RuntimeError(f"Error retrieving model info: {str(e)}")
 
     def get_model_info(self, analytics_type: str, horizon: int, model_type: str) -> Dict[str, Any]:
         """
