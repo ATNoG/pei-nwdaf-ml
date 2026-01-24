@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Request
 import logging
 
 from src.services.model_service import ModelService
+from src.services.model_options_service import ModelOptionsService
 from src.schemas.model import (
     ModelCreationRequest,
     ModelCreationResponse,
@@ -16,6 +17,21 @@ from src.schemas.model import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+@router.get("/config-options")
+async def get_model_config_options():
+    """
+    Get all available configuration options for model creation.
+
+    Returns:
+        All available analytics types, horizons, model types, optimizers,
+        loss functions, activations, and default values.
+
+    Example:
+        GET /api/v1/model/config-options
+    """
+    return ModelOptionsService.get_config_options()
 
 
 @router.post("/instance", response_model=ModelCreationResponse)
