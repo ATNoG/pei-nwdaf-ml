@@ -1,3 +1,4 @@
+#>TOCHECK< refactor in order to remove unused code and improve code readability
 # Communication Interface for the ML Service component
 #
 # An abstraction layer which mediates messaging from
@@ -20,7 +21,7 @@ from typing import Optional, List, Dict, Any
 from src.services.inference_service import InferenceService
 from src.services.performance_monitor_service import PerformanceMonitor
 from src.config.inference_type import InferenceConfig, get_all_inference_types
-from src.routers.websocket import performance_monitor_callback
+from src.routers.v1.websocket import performance_monitor_callback
 
 from src.mlflow.mlf import MLFlowBridge
 
@@ -255,7 +256,7 @@ class MLInterface():
         Expected message format: (FOR NOW)
         {
             "cell_index": "12898855",
-            "model_type": "xgboost",  # optional, defaults to xgboost
+            "model_type": "ann",  # optional, defaults to ann
             "data": {
                 "rsrp_mean": -86.0, "rsrp_max": -81.0, ...
             },
@@ -290,7 +291,7 @@ class MLInterface():
             # Extract request parameters
             cell_index = data.get('cell_index')
             cell_indices = data.get('cell_indices')
-            model_type = data.get('model_type', 'xgboost')
+            model_type = data.get('model_type', 'ann')
             inference_data = data.get('data')
             request_id = data.get('request_id', 'unknown')
 

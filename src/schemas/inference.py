@@ -18,7 +18,7 @@ class InferenceRequest(BaseModel):
     data: Union[Dict[str, Any], List[Dict[str, Any]]]
     cell_index: Optional[Union[str, float]] = None
     cell_indices: Optional[List[Union[str, float]]] = None
-    model_type: Optional[str] = None  # e.g., 'xgboost', 'randomforest'
+    model_type: Optional[str] = None  # e.g., 'ann', 'lstm'
     model_name: Optional[str] = None
     model_version: Optional[str] = None
     model_stage: Optional[str] = "Production"
