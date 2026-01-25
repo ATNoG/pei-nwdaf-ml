@@ -2,10 +2,13 @@ from typing_extensions import Type
 import numpy as np
 import logging
 from typing import List, Dict, Any
-from src.models import ModelInterface, models_dict
+
+from src.models import get_trainer_class
 from src.config.inference_type import get_inference_config
+from src.config.model_config import ModelConfig
 from src.schemas.inference import PredictionHorizon
 from src.utils.features import extract_features
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,10 +37,15 @@ class InferenceService:
                 raise ValueError("No default model configured")
 
         # 2. Load model (from MLflow or cache)
-        ModelClass: Type[ModelInterface]|None = models_dict.get(model_type.lower())
-        if not ModelClass:
+        try:
+            trainer_class = get_trainer_class(model_type)
+        except ValueError:
             raise ValueError(f"Model type not found: {model_type}")
-        sequence_length = ModelClass.SEQUENCE_LENGTH
+
+        # Get sequence length from default config
+        default_config = ModelConfig.default()
+        sequence_length = default_config.sequence.sequence_length
+
         model = self._load_model(
             analytics_type=analytics_type,
             horizon=horizon,

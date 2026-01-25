@@ -47,7 +47,7 @@ async def update_default_model(request: UpdateDefaultModelRequest):
         {
             "analytics_type": "latency",
             "horizon": 60,
-            "model_type": "xgboost"
+            "model_type": "ann"
         }
     """
     try:

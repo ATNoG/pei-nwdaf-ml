@@ -1,4 +1,4 @@
-
+#>TOCHECK< use a lightweight db ( like sqlite ) to store inference types?
 from dataclasses import dataclass
 from typing import Dict
 

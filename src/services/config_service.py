@@ -9,7 +9,7 @@ import logging
 from typing import Any
 
 from src.config.inference_type import get_all_inference_types, get_inference_config
-from src.models import models_dict
+from src.models import get_available_model_types
 from src.schemas.config import InferenceTypeConfig, ConfigResponse
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ class ConfigService:
             )
 
         # Get supported model types
-        supported_model_types = list(models_dict.keys())
+        supported_model_types = get_available_model_types()
 
         return ConfigResponse(
             inference_types=inference_types_list,
@@ -79,10 +79,11 @@ class ConfigService:
             )
 
         # Validate model type exists
-        if model_type.lower() not in models_dict:
+        available_types = get_available_model_types()
+        if model_type.lower() not in available_types:
             raise ValueError(
                 f"Invalid model type: {model_type}. "
-                f"Supported types: {list(models_dict.keys())}"
+                f"Supported types: {available_types}"
             )
 
         # Update default model
