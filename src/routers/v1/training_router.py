@@ -69,6 +69,21 @@ def _train_model_background(
             status_callback=status_callback
         )
 
+        # Check if training was blocked due to concurrent job
+        if result.get("status") == "error" and "already training" in result.get("message", ""):
+            # Update status to show blocked/conflict
+            conflict_status = {
+                "current_epoch": 0,
+                "total_epochs": 100,
+                "status": "conflict",
+                "message": result.get("message")
+            }
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(status_manager.update_training_status(model_name, conflict_status))
+            loop.close()
+            return
+
         # Final status with result
         final_status = {
             "current_epoch": 100,
@@ -151,6 +166,19 @@ async def start_training(
             f"horizon={training_request.horizon}s, "
             f"model_type={training_request.model_type})"
         )
+
+        # Check if model is already training by attempting to reserve it
+        from src.models import models_dict
+        ModelClass = models_dict.get(training_request.model_type.lower())
+        if ModelClass and not ModelClass.reserve_training():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Model {model_name} is already training. Please wait for the current training job to complete."
+            )
+        
+        # Release immediately since background task will reserve again
+        if ModelClass:
+            ModelClass.release_training()
 
         # Start training in background
         background_tasks.add_task(

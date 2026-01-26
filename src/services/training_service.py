@@ -127,18 +127,27 @@ class TrainingService:
         n_samples = len(X)
         n_features = X.shape[-1]
 
-        with mlflow.start_run(run_name=f"{model_name}_training") as run:
-            model = ModelClass()
+        # Try to reserve the model class for training
+        if not ModelClass.reserve_training():
+            logger.warning(f"Model {model_name} is already training")
+            return {
+                "status": "error",
+                "message": f"Model {model_name} is already training. Please wait for the current training job to complete."
+            }
 
-            # Create callback wrapper for status updates
-            def training_callback(current_epoch: int, total_epochs: int, loss: Optional[float]):
-                if status_callback:
-                    try:
-                        status_callback(current_epoch, total_epochs, loss)
-                    except Exception as e:
-                        logger.warning(f"Status callback error: {e}")
+        try:
+            with mlflow.start_run(run_name=f"{model_name}_training") as run:
+                model = ModelClass()
 
-            loss = model.train(X=X, y=y, max_epochs=max_epochs, status_callback=training_callback)
+                # Create callback wrapper for status updates
+                def training_callback(current_epoch: int, total_epochs: int, loss: Optional[float]):
+                    if status_callback:
+                        try:
+                            status_callback(current_epoch, total_epochs, loss)
+                        except Exception as e:
+                            logger.warning(f"Status callback error: {e}")
+
+                loss = model.train(X=X, y=y, max_epochs=max_epochs, status_callback=training_callback)
 
             with tempfile.TemporaryDirectory() as tmpdir:
                 mean_f_name = f"{model_name}_mean.npy"
@@ -177,35 +186,38 @@ class TrainingService:
                     registered_model_name=model_name,
                 )
 
-            run_id = run.info.run_id
+                run_id = run.info.run_id
 
-        latest_version = max(
-            int(v.version)
-            for v in self.client.search_model_versions(f"name='{model_name}'")
-        )
+            latest_version = max(
+                int(v.version)
+                for v in self.client.search_model_versions(f"name='{model_name}'")
+            )
 
-        self.client.transition_model_version_stage(
-            name=model_name,
-            version=latest_version,
-            stage="Production",
-            archive_existing_versions=True,
-        )
+            self.client.transition_model_version_stage(
+                name=model_name,
+                version=latest_version,
+                stage="Production",
+                archive_existing_versions=True,
+            )
 
-        self.client.set_registered_model_tag(model_name, "analytics_type", analytics_type)
-        self.client.set_registered_model_tag(model_name, "model_type", model_type)
-        self.client.set_registered_model_tag(
-            model_name, "last_trained", str(datetime.utcnow().timestamp())
-        )
+            self.client.set_registered_model_tag(model_name, "analytics_type", analytics_type)
+            self.client.set_registered_model_tag(model_name, "model_type", model_type)
+            self.client.set_registered_model_tag(
+                model_name, "last_trained", str(datetime.utcnow().timestamp())
+            )
 
-        return {
-            "status": "success",
-            "model_name": model_name,
-            "model_version": str(latest_version),
-            "training_loss": float(loss),
-            "samples_used": n_samples,
-            "features_used": n_features,
-            "run_id": run_id,
-        }
+            return {
+                "status": "success",
+                "model_name": model_name,
+                "model_version": str(latest_version),
+                "training_loss": float(loss),
+                "samples_used": n_samples,
+                "features_used": n_features,
+                "run_id": run_id,
+            }
+        finally:
+            # Always release the training lock
+            ModelClass.release_training()
 
     def _group_by_cell(self, raw_windows: List[Dict[str, Any]]):
         cells = defaultdict(list)
