@@ -924,7 +924,64 @@ class MLInterface():
         except Exception as e:
             logger.error(f"Failed to list registered models: {e}")
             return []
+        
+    def set_model_tag(self, model_name: str, key: str, value: str) -> bool:                                         
+        """
+        Set a tag on a registered model in MLflow.
+        """                                                            
+        if not self._mlflow_connected:
+            logger.warning("MLFlow not connected - cannot set model tag")
+            return False
+                                                                                                                    
+        try:
+            from mlflow.tracking import MlflowClient
+            client = MlflowClient()
+            client.set_registered_model_tag(model_name, key, value)
+            logger.info(f"Set tag {key}={value} on model {model_name}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set tag on model {model_name}: {e}")
+            return False
 
+    def get_models_with_tag(self, key: str, value: str) -> List[str]:
+        """
+        Get model names that have a specific tag.
+        """                                                             
+        if not self._mlflow_connected:
+            logger.warning("MLFlow not connected - cannot query model tags")
+            return []
+                                                                                                                    
+        try:
+            from mlflow.tracking import MlflowClient
+            client = MlflowClient()
+            models = client.search_registered_models()
+            matching_models = []
+            for model in models or []:
+                if model.tags.get(key) == value:
+                    matching_models.append(model.name)
+            return matching_models
+        except Exception as e:
+            logger.error(f"Failed to get models with tag {key}={value}: {e}")
+            return []
+
+    def clear_model_tag(self, model_name: str, key: str) -> bool:
+        """
+        Remove a tag from a registered model.
+        """                                                                 
+        if not self._mlflow_connected:
+            logger.warning("MLFlow not connected - cannot clear model tag")
+            return False
+                                                                                                                    
+        try:
+            from mlflow.tracking import MlflowClient
+            client = MlflowClient()
+            client.delete_registered_model_tag(model_name, key)
+            logger.info(f"Cleared tag {key} from model {model_name}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to clear tag from model {model_name}: {e}")
+            return False
+      
     def get_model_metrics(self, run_id: str) -> Dict[str, Any]:
         """
         Get metrics for a specific model run
