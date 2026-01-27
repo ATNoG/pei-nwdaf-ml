@@ -22,6 +22,7 @@ router = APIRouter()
 def _train_model_background(
     ml_interface,
     model_name: str,
+    model_type: str,
 ):
     """Background task to train model with WebSocket status updates"""
     status_manager = get_training_status_manager()
@@ -99,10 +100,7 @@ def _train_model_background(
         # Always release the model lock when training completes or fails
         from src.models import get_trainer_class
         try:
-            # Get metadata to find model type
-            service = TrainingService(ml_interface)
-            metadata = service.get_model_metadata(model_name)
-            TrainerClass = get_trainer_class(metadata["model_type"])
+            TrainerClass = get_trainer_class(model_type)
             if TrainerClass:
                 TrainerClass.release_training()
         except Exception as e:
@@ -166,6 +164,7 @@ async def start_training(
             _train_model_background,
             ml_interface,
             training_request.model_name,
+            metadata["model_type"],
         )
 
         return ModelTrainingStartResponse(
