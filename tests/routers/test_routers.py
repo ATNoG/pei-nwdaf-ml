@@ -2,12 +2,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from unittest.mock import Mock, AsyncMock, patch
-import json
 
 from src.routers import data, inference, kafka
-from src.schemas.data import DataQueryRequest, DataStorageRequest
-from src.schemas.inference import InferenceRequest, ModelSelectionRequest, AutoModeRequest
-from src.schemas.kafka import KafkaMessage
 
 
 @pytest.fixture
@@ -63,12 +59,12 @@ class TestDataRouter:
     def test_query_training_data_success(self, app_with_data_router, mock_ml_interface):
         """Test successful training data query"""
         client = TestClient(app_with_data_router)
-        
+
         mock_ml_interface.get_training_data_async.return_value = {
             "records": [{"id": 1, "value": 100}],
             "count": 1
         }
-        
+
         response = client.post(
             "/data/query",
             json={
@@ -78,7 +74,7 @@ class TestDataRouter:
                 "filters": {"cell_id": "123"}
             }
         )
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
@@ -88,9 +84,9 @@ class TestDataRouter:
     def test_query_training_data_no_data(self, app_with_data_router, mock_ml_interface):
         """Test training data query with no data returned"""
         client = TestClient(app_with_data_router)
-        
+
         mock_ml_interface.get_training_data_async.return_value = None
-        
+
         response = client.post(
             "/data/query",
             json={
@@ -99,16 +95,16 @@ class TestDataRouter:
                 "data_type": "timeseries"
             }
         )
-        
+
         assert response.status_code == 503
         assert "Failed to retrieve data" in response.json()["detail"]
 
     def test_query_training_data_exception(self, app_with_data_router, mock_ml_interface):
         """Test training data query with exception"""
         client = TestClient(app_with_data_router)
-        
+
         mock_ml_interface.get_training_data_async.side_effect = Exception("Connection error")
-        
+
         response = client.post(
             "/data/query",
             json={
@@ -117,18 +113,18 @@ class TestDataRouter:
                 "data_type": "timeseries"
             }
         )
-        
+
         assert response.status_code == 500
         assert "Query error" in response.json()["detail"]
 
     def test_request_from_storage_success(self, app_with_data_router, mock_ml_interface):
         """Test successful generic storage request"""
         client = TestClient(app_with_data_router)
-        
+
         mock_ml_interface.request_data_from_storage_async.return_value = {
             "result": "success"
         }
-        
+
         response = client.post(
             "/data/request",
             json={
@@ -138,7 +134,7 @@ class TestDataRouter:
                 "timeout": 30
             }
         )
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
@@ -147,9 +143,9 @@ class TestDataRouter:
     def test_get_storage_status_success(self, app_with_data_router, mock_ml_interface):
         """Test getting storage status"""
         client = TestClient(app_with_data_router)
-        
+
         response = client.get("/data/storage/status")
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
@@ -159,13 +155,13 @@ class TestDataRouter:
     def test_test_storage_connection_success(self, app_with_data_router, mock_ml_interface):
         """Test storage connection test endpoint"""
         client = TestClient(app_with_data_router)
-        
+
         mock_ml_interface.request_data_from_storage_async.return_value = {
             "status": "healthy"
         }
-        
+
         response = client.get("/data/storage/test")
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
@@ -178,7 +174,7 @@ class TestInferenceRouter:
     def test_ml_inference_success(self, app_with_inference_router, mock_ml_interface):
         """Test successful ML inference"""
         client = TestClient(app_with_inference_router)
-        
+
         with patch('src.routers.inference.get_inference_maker') as mock_get_inference:
             mock_inference_maker = Mock()
             mock_inference_maker.infer.return_value = [1.2, 3.4, 5.6]
@@ -186,7 +182,7 @@ class TestInferenceRouter:
                 'model_id': 'models:/TestModel/1'
             }
             mock_get_inference.return_value = mock_inference_maker
-            
+
             response = client.post(
                 "/ml/inference",
                 json={
@@ -194,7 +190,7 @@ class TestInferenceRouter:
                     "publish_result": False
                 }
             )
-            
+
             assert response.status_code == 200
             data = response.json()
             assert data["status"] == "success"
@@ -203,7 +199,7 @@ class TestInferenceRouter:
     def test_ml_inference_with_specific_model(self, app_with_inference_router, mock_ml_interface):
         """Test ML inference with specific model request"""
         client = TestClient(app_with_inference_router)
-        
+
         with patch('src.routers.inference.get_inference_maker') as mock_get_inference:
             mock_inference_maker = Mock()
             mock_inference_maker.set_model_by_name.return_value = True
@@ -212,7 +208,7 @@ class TestInferenceRouter:
                 'model_id': 'models:/SpecificModel/2'
             }
             mock_get_inference.return_value = mock_inference_maker
-            
+
             response = client.post(
                 "/ml/inference",
                 json={
@@ -221,19 +217,19 @@ class TestInferenceRouter:
                     "model_version": "2"
                 }
             )
-            
+
             assert response.status_code == 200
             mock_inference_maker.set_model_by_name.assert_called_once()
 
     def test_ml_inference_model_not_found(self, app_with_inference_router, mock_ml_interface):
         """Test ML inference with non-existent model"""
         client = TestClient(app_with_inference_router)
-        
+
         with patch('src.routers.inference.get_inference_maker') as mock_get_inference:
             mock_inference_maker = Mock()
             mock_inference_maker.set_model_by_name.return_value = False
             mock_get_inference.return_value = mock_inference_maker
-            
+
             response = client.post(
                 "/ml/inference",
                 json={
@@ -241,31 +237,31 @@ class TestInferenceRouter:
                     "model_name": "InvalidModel"
                 }
             )
-            
+
             assert response.status_code == 404
             assert "Model not found" in response.json()["detail"]
 
     def test_ml_inference_failure(self, app_with_inference_router, mock_ml_interface):
         """Test ML inference failure"""
         client = TestClient(app_with_inference_router)
-        
+
         with patch('src.routers.inference.get_inference_maker') as mock_get_inference:
             mock_inference_maker = Mock()
             mock_inference_maker.infer.return_value = None
             mock_get_inference.return_value = mock_inference_maker
-            
+
             response = client.post(
                 "/ml/inference",
                 json={"data": {"features": [1, 2, 3]}}
             )
-            
+
             assert response.status_code == 500
             assert "Inference failed" in response.json()["detail"]
 
     def test_set_model_success(self, app_with_inference_router, mock_ml_interface):
         """Test successfully setting a model"""
         client = TestClient(app_with_inference_router)
-        
+
         with patch('src.routers.inference.get_inference_maker') as mock_get_inference:
             mock_inference_maker = Mock()
             mock_inference_maker.set_model_by_name.return_value = True
@@ -274,7 +270,7 @@ class TestInferenceRouter:
                 'auto_mode': False
             }
             mock_get_inference.return_value = mock_inference_maker
-            
+
             response = client.post(
                 "/ml/set-model",
                 json={
@@ -282,7 +278,7 @@ class TestInferenceRouter:
                     "stage": "Production"
                 }
             )
-            
+
             assert response.status_code == 200
             data = response.json()
             assert data["status"] == "success"
@@ -291,33 +287,33 @@ class TestInferenceRouter:
     def test_set_model_not_found(self, app_with_inference_router, mock_ml_interface):
         """Test setting a model that doesn't exist"""
         client = TestClient(app_with_inference_router)
-        
+
         with patch('src.routers.inference.get_inference_maker') as mock_get_inference:
             mock_inference_maker = Mock()
             mock_inference_maker.set_model_by_name.return_value = False
             mock_get_inference.return_value = mock_inference_maker
-            
+
             response = client.post(
                 "/ml/set-model",
                 json={"model_name": "InvalidModel"}
             )
-            
+
             assert response.status_code == 404
 
     def test_toggle_auto_mode_enable(self, app_with_inference_router, mock_ml_interface):
         """Test enabling auto mode"""
         client = TestClient(app_with_inference_router)
-        
+
         with patch('src.routers.inference.get_inference_maker') as mock_get_inference:
             mock_inference_maker = Mock()
             mock_inference_maker.toggle_auto_select = Mock()
             mock_get_inference.return_value = mock_inference_maker
-            
+
             response = client.post(
                 "/ml/auto-mode",
                 json={"auto_mode": True}
             )
-            
+
             assert response.status_code == 200
             data = response.json()
             assert data["auto_mode"] is True
@@ -326,7 +322,7 @@ class TestInferenceRouter:
     def test_get_current_model(self, app_with_inference_router, mock_ml_interface):
         """Test getting current model info"""
         client = TestClient(app_with_inference_router)
-        
+
         with patch('src.routers.inference.get_inference_maker') as mock_get_inference:
             mock_inference_maker = Mock()
             mock_inference_maker.get_current_model_info.return_value = {
@@ -336,9 +332,9 @@ class TestInferenceRouter:
                 'failed_retrieves': 0
             }
             mock_get_inference.return_value = mock_inference_maker
-            
+
             response = client.get("/ml/current-model")
-            
+
             assert response.status_code == 200
             data = response.json()
             assert data["status"] == "success"
@@ -347,14 +343,14 @@ class TestInferenceRouter:
     def test_clear_cache(self, app_with_inference_router, mock_ml_interface):
         """Test clearing model cache"""
         client = TestClient(app_with_inference_router)
-        
+
         with patch('src.routers.inference.get_inference_maker') as mock_get_inference:
             mock_inference_maker = Mock()
             mock_inference_maker.clear_cache = Mock()
             mock_get_inference.return_value = mock_inference_maker
-            
+
             response = client.post("/ml/clear-cache")
-            
+
             assert response.status_code == 200
             data = response.json()
             assert data["status"] == "success"
@@ -363,14 +359,14 @@ class TestInferenceRouter:
     def test_list_models(self, app_with_inference_router, mock_ml_interface):
         """Test listing all models"""
         client = TestClient(app_with_inference_router)
-        
+
         mock_ml_interface.list_registered_models.return_value = [
             {"name": "Model1", "creation_timestamp": 123456},
             {"name": "Model2", "creation_timestamp": 123457}
         ]
-        
+
         response = client.get("/ml/models")
-        
+
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 2
@@ -379,16 +375,16 @@ class TestInferenceRouter:
     def test_get_best_model(self, app_with_inference_router, mock_ml_interface):
         """Test getting best model"""
         client = TestClient(app_with_inference_router)
-        
+
         mock_ml_interface.get_best_model.return_value = {
             "name": "BestModel",
             "version": "1",
             "model_uri": "models:/BestModel/Production",
             "metric_value": 0.95
         }
-        
+
         response = client.get("/ml/best-model?metric=accuracy")
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
@@ -401,9 +397,9 @@ class TestKafkaRouter:
     def test_produce_message_success(self, app_with_kafka_router, mock_ml_interface):
         """Test successfully producing a message to Kafka"""
         client = TestClient(app_with_kafka_router)
-        
+
         mock_ml_interface.produce_to_kafka.return_value = True
-        
+
         response = client.post(
             "/kafka/produce",
             json={
@@ -411,7 +407,7 @@ class TestKafkaRouter:
                 "message": '{"data": "test"}'
             }
         )
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
@@ -423,9 +419,9 @@ class TestKafkaRouter:
     def test_produce_message_failure(self, app_with_kafka_router, mock_ml_interface):
         """Test failed message production to Kafka"""
         client = TestClient(app_with_kafka_router)
-        
+
         mock_ml_interface.produce_to_kafka.return_value = False
-        
+
         response = client.post(
             "/kafka/produce",
             json={
@@ -433,21 +429,21 @@ class TestKafkaRouter:
                 "message": "test message"
             }
         )
-        
+
         assert response.status_code == 500
         assert "Failed to produce message" in response.json()["detail"]
 
     def test_get_messages_success(self, app_with_kafka_router, mock_ml_interface):
         """Test retrieving messages from a topic"""
         client = TestClient(app_with_kafka_router)
-        
+
         mock_ml_interface.get_messages.return_value = [
             {"offset": 0, "message": "msg1"},
             {"offset": 1, "message": "msg2"}
         ]
-        
+
         response = client.get("/kafka/messages/test.topic?limit=10")
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["topic"] == "test.topic"
@@ -458,11 +454,11 @@ class TestKafkaRouter:
     def test_get_messages_empty(self, app_with_kafka_router, mock_ml_interface):
         """Test retrieving messages when none exist"""
         client = TestClient(app_with_kafka_router)
-        
+
         mock_ml_interface.get_messages.return_value = []
-        
+
         response = client.get("/kafka/messages/empty.topic")
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["count"] == 0
@@ -471,14 +467,14 @@ class TestKafkaRouter:
     def test_list_topics_success(self, app_with_kafka_router, mock_ml_interface):
         """Test listing subscribed topics"""
         client = TestClient(app_with_kafka_router)
-        
+
         mock_ml_interface.get_subscribed_topics.return_value = [
             "topic1", "topic2", "topic3"
         ]
         mock_ml_interface.is_consumer_running.return_value = True
-        
+
         response = client.get("/kafka/topics")
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"

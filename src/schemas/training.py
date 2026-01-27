@@ -3,17 +3,13 @@ from typing import Optional
 
 
 class ModelTrainingRequest(BaseModel):
-    """Request to train a model for an analytics type"""
-    analytics_type: str
-    horizon: int
-    model_type: str = "xgboost"
+    """Request to train a model by name using stored config"""
+    model_name: str
 
     class Config:
         json_schema_extra = {
             "example": {
-                "analytics_type": "latency",
-                "horizon": 60,
-                "model_type": "xgboost"
+                "model_name": "latency_lstm_60"
             }
         }
 
