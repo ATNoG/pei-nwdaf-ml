@@ -216,13 +216,13 @@ class TrainingService:
             # Create trainer with config
             trainer = create_trainer(model_type, config)
 
-                # Create callback wrapper for status updates
-                def training_callback(current_epoch: int, total_epochs: int, loss: Optional[float]):
-                    if status_callback:
-                        try:
-                            status_callback(current_epoch, total_epochs, loss)
-                        except Exception as e:
-                            logger.warning(f"Status callback error: {e}")
+            # Create callback wrapper for status updates
+            def training_callback(current_epoch: int, total_epochs: int, loss: Optional[float]):
+                if status_callback:
+                    try:
+                        status_callback(current_epoch, total_epochs, loss)
+                    except Exception as e:
+                        logger.warning(f"Status callback error: {e}")
 
             loss = trainer.train(X=X, y=y, max_epochs=max_epochs, status_callback=training_callback)
 
@@ -275,7 +275,7 @@ class TrainingService:
                 registered_model_name=model_name,
             )
 
-                run_id = run.info.run_id
+            run_id = run.info.run_id
 
             latest_version = max(
                 int(v.version)
@@ -296,18 +296,15 @@ class TrainingService:
             model_name, "last_trained", str(datetime.utcnow().timestamp())
         )
 
-            return {
-                "status": "success",
-                "model_name": model_name,
-                "model_version": str(latest_version),
-                "training_loss": float(loss),
-                "samples_used": n_samples,
-                "features_used": n_features,
-                "run_id": run_id,
-            }
-        finally:
-            # Always release the training lock
-            ModelClass.release_training()
+        return {
+            "status": "success",
+            "model_name": model_name,
+            "model_version": str(latest_version),
+            "training_loss": float(loss),
+            "samples_used": n_samples,
+            "features_used": n_features,
+            "run_id": run_id,
+        }
 
     def _group_by_cell(self, raw_windows: List[Dict[str, Any]]):
         cells = defaultdict(list)
