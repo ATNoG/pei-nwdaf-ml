@@ -19,6 +19,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class ModelAlreadyTrainingError(HTTPException):
+    """Raised when attempting to train a model that is already being trained"""
+    def __init__(self, model_name: str):
+        super().__init__(
+            status_code=409,  # 409 Conflict
+            detail=f"Model '{model_name}' is already being trained. Please wait for the current training to complete."
+        )
+
+
 def _train_model_background(
     ml_interface,
     model_name: str,
@@ -80,6 +89,15 @@ def _train_model_background(
             loop.close()
         except Exception:
             pass
+    finally:
+        # Release the training lock
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(status_manager.release_training_lock(model_name))
+            loop.close()
+        except Exception as e:
+            logger.error(f"Error releasing training lock: {e}")
 
 
 @router.post("", response_model=ModelTrainingStartResponse)
@@ -102,6 +120,7 @@ async def start_training(
 
     Raises:
         404: Model not found or missing metadata
+        409: Model is already being trained
         500: ML Interface not initialized
 
     Example:
@@ -115,10 +134,15 @@ async def start_training(
         raise HTTPException(status_code=500, detail="ML Interface not initialized")
 
     service = TrainingService(ml_interface)
+    status_manager = get_training_status_manager()
 
     try:
         # Validate model exists and has metadata
         service.get_model_metadata(training_request.model_name)
+
+        # Check if model is already being trained
+        if not await status_manager.acquire_training_lock(training_request.model_name):
+            raise ModelAlreadyTrainingError(training_request.model_name)
 
         logger.info(f"Starting background training for {training_request.model_name}")
 
@@ -135,9 +159,15 @@ async def start_training(
             message=f"Training started for {training_request.model_name}"
         )
 
+    except ModelAlreadyTrainingError:
+        raise
     except ValueError as e:
+        # Release lock if we acquired it but validation failed
+        await status_manager.release_training_lock(training_request.model_name)
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
+        # Release lock if we acquired it but something else failed
+        await status_manager.release_training_lock(training_request.model_name)
         logger.error(f"Error starting training: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 

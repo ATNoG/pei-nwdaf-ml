@@ -17,6 +17,10 @@ class TrainingStatusManager:
         self.active_connections: Set[WebSocket] = set()
         self.training_status: Dict[str, dict] = {}
         self._lock = asyncio.Lock()
+        # Model-specific locks to prevent concurrent training of the same model
+        self._model_locks: Dict[str, asyncio.Lock] = {}
+        # Track which models are currently training
+        self._active_trainings: Set[str] = set()
 
     async def connect(self, websocket: WebSocket):
         """Accept new WebSocket connection"""
@@ -75,6 +79,61 @@ class TrainingStatusManager:
         if model_name:
             return self.training_status.get(model_name, {})
         return self.training_status
+
+    def is_training(self, model_name: str) -> bool:
+        """Check if a model is currently being trained"""
+        return model_name in self._active_trainings
+
+    async def acquire_training_lock(self, model_name: str) -> bool:
+        """
+        Attempt to acquire a training lock for a specific model.
+
+        Args:
+            model_name: Name of the model to train
+
+        Returns:
+            True if lock was acquired (training can proceed),
+            False if model is already being trained
+        """
+        async with self._lock:
+            if model_name in self._active_trainings:
+                return False
+
+            # Get or create model-specific lock
+            if model_name not in self._model_locks:
+                self._model_locks[model_name] = asyncio.Lock()
+
+            # Mark as training
+            self._active_trainings.add(model_name)
+            return True
+
+    async def release_training_lock(self, model_name: str):
+        """
+        Release the training lock for a model.
+
+        Args:
+            model_name: Name of the model that finished training
+        """
+        async with self._lock:
+            self._active_trainings.discard(model_name)
+            # Clean up lock after a reasonable time to prevent memory leaks
+            # We keep the lock dict entry in case another training starts soon
+
+    async def get_model_lock(self, model_name: str) -> asyncio.Lock:
+        """
+        Get the lock object for a specific model.
+        The caller must have already called acquire_training_lock successfully.
+
+        Args:
+            model_name: Name of the model
+
+        Returns:
+            The asyncio.Lock for this model
+        """
+        async with self._lock:
+            if model_name not in self._model_locks:
+                self._model_locks[model_name] = asyncio.Lock()
+            return self._model_locks[model_name]
 
 
 # Global instance
