@@ -7,14 +7,15 @@ class ModelInterface(ABC):
 
     FRAMEWORK: str = "generic"
     SEQUENCE_LENGTH: int = 1
-    _training_lock: threading.RLock = None
+    _is_training: bool = False
+    _lock: threading.Lock = None
 
     @classmethod
-    def _get_training_lock(cls) -> threading.RLock:
-        """Get or create the class-level training lock."""
-        if cls._training_lock is None:
-            cls._training_lock = threading.RLock()
-        return cls._training_lock
+    def _get_lock(cls) -> threading.Lock:
+        """Get or create the class-level lock for thread-safe flag access."""
+        if cls._lock is None:
+            cls._lock = threading.Lock()
+        return cls._lock
 
     @classmethod
     def reserve_training(cls) -> bool:
@@ -23,18 +24,19 @@ class ModelInterface(ABC):
         Returns:
             True if reservation succeeded, False if already training.
         """
-        lock = cls._get_training_lock()
-        return lock.acquire(blocking=False)
+        lock = cls._get_lock()
+        with lock:
+            if cls._is_training:
+                return False
+            cls._is_training = True
+            return True
 
     @classmethod
     def release_training(cls) -> None:
         """Release the training reservation for this model class."""
-        lock = cls._get_training_lock()
-        try:
-            lock.release()
-        except RuntimeError:
-            # Lock was not acquired, ignore
-            pass
+        lock = cls._get_lock()
+        with lock:
+            cls._is_training = False
 
     @abstractmethod
     def train(self, X: Any, y: Any, max_epochs: int = 100, status_callback=None) -> float:

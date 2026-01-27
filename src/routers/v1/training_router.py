@@ -115,6 +115,12 @@ def _train_model_background(
             loop.close()
         except Exception:
             pass
+    finally:
+        # Always release the model lock when training completes or fails
+        from src.models import models_dict
+        ModelClass = models_dict.get(model_type.lower())
+        if ModelClass:
+            ModelClass.release_training()
 
 
 @router.post("", response_model=ModelTrainingStartResponse)
@@ -160,6 +166,18 @@ async def start_training(
             model_type=training_request.model_type
         )
 
+        # Check if model is already training BEFORE scheduling background task
+        from src.models import models_dict
+        ModelClass = models_dict.get(training_request.model_type.lower())
+        if ModelClass:
+            # Try to acquire the lock
+            if not ModelClass.reserve_training():
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Model {model_name} is already training. Please wait for the current training job to complete."
+                )
+            # Lock acquired - background task will release it when done
+        
         logger.info(
             f"Starting background training for {model_name} "
             f"(analytics_type={training_request.analytics_type}, "
@@ -167,20 +185,7 @@ async def start_training(
             f"model_type={training_request.model_type})"
         )
 
-        # Check if model is already training by attempting to reserve it
-        from src.models import models_dict
-        ModelClass = models_dict.get(training_request.model_type.lower())
-        if ModelClass and not ModelClass.reserve_training():
-            raise HTTPException(
-                status_code=409,
-                detail=f"Model {model_name} is already training. Please wait for the current training job to complete."
-            )
-        
-        # Release immediately since background task will reserve again
-        if ModelClass:
-            ModelClass.release_training()
-
-        # Start training in background
+        # Start training in background (lock already held, will be released in finally)
         background_tasks.add_task(
             _train_model_background,
             ml_interface,
@@ -197,6 +202,9 @@ async def start_training(
 
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        # Re-raise HTTP exceptions (like our 409)
+        raise
     except Exception as e:
         logger.error(f"Error starting training: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")

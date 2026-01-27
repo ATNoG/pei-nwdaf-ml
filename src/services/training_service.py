@@ -127,14 +127,7 @@ class TrainingService:
         n_samples = len(X)
         n_features = X.shape[-1]
 
-        # Try to reserve the model class for training
-        if not ModelClass.reserve_training():
-            logger.warning(f"Model {model_name} is already training")
-            return {
-                "status": "error",
-                "message": f"Model {model_name} is already training. Please wait for the current training job to complete."
-            }
-
+        # Note: Model class lock is already held by the router at this point
         try:
             with mlflow.start_run(run_name=f"{model_name}_training") as run:
                 model = ModelClass()

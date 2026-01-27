@@ -30,6 +30,8 @@ class ANN(ModelInterface):
     HEADER = b"ANN_MODEL"
     SEQUENCE_LENGTH = 5
     FRAMEWORK = "pytorch"
+    _is_training = False
+    _lock = None
 
     def __init__(self, input_size: int = None):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
