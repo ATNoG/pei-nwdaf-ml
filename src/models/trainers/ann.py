@@ -13,6 +13,9 @@ class ANNTrainer(BaseTrainer):
     """
     Trainer for ANN models.
     """
+    
+    _is_training = False
+    _lock = None
 
     def __init__(self, config: ModelConfig|None = None):
         super().__init__(config)

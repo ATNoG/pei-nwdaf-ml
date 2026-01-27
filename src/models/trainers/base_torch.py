@@ -4,6 +4,7 @@ Base trainer with shared training logic for PyTorch models.
 """
 
 import logging
+import threading
 from typing import Callable, Any
 
 import torch
@@ -21,6 +22,42 @@ class BaseTrainer:
 
     FRAMEWORK = "pytorch"
     SEQUENCE_LENGTH = 5  # Default
+    _is_training: bool = False
+    _lock: threading.Lock = None
+
+    @classmethod
+    def _get_lock(cls) -> threading.Lock:
+        """Get or create the class-level lock for thread-safe flag access."""
+        if cls._lock is None:
+            cls._lock = threading.Lock()
+        return cls._lock
+
+    @classmethod
+    def reserve_training(cls) -> bool:
+        """Try to reserve this trainer class for training.
+        
+        Returns:
+            True if reservation succeeded, False if already training.
+        """
+        logger.info(f"[LOCK] Attempting to reserve training for {cls.__name__}")
+        lock = cls._get_lock()
+        with lock:
+            logger.info(f"[LOCK] Current _is_training for {cls.__name__}: {cls._is_training}")
+            if cls._is_training:
+                logger.warning(f"[LOCK] Training already in progress for {cls.__name__}")
+                return False
+            cls._is_training = True
+            logger.info(f"[LOCK] Successfully reserved training for {cls.__name__}")
+            return True
+
+    @classmethod
+    def release_training(cls) -> None:
+        """Release the training reservation for this trainer class."""
+        logger.info(f"[LOCK] Releasing training lock for {cls.__name__}")
+        lock = cls._get_lock()
+        with lock:
+            cls._is_training = False
+            logger.info(f"[LOCK] Training lock released for {cls.__name__}")
 
     def __init__(self, config: ModelConfig|None = None):
         self.config = config or ModelConfig.default()

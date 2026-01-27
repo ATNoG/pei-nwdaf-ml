@@ -165,7 +165,7 @@ class TrainingService:
         config = model_config or ModelConfig.default()
 
         logger.info(f"Starting training for {model_name}")
-
+        
         # ------------------------------------------------------
         # Fetch + group data by cell
         # ------------------------------------------------------

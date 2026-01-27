@@ -97,10 +97,16 @@ def _train_model_background(
             pass
     finally:
         # Always release the model lock when training completes or fails
-        from src.models import models_dict
-        ModelClass = models_dict.get(model_type.lower())
-        if ModelClass:
-            ModelClass.release_training()
+        from src.models import get_trainer_class
+        try:
+            # Get metadata to find model type
+            service = TrainingService(ml_interface)
+            metadata = service.get_model_metadata(model_name)
+            TrainerClass = get_trainer_class(metadata["model_type"])
+            if TrainerClass:
+                TrainerClass.release_training()
+        except Exception as e:
+            logger.warning(f"Error releasing training lock: {e}")
 
 
 @router.post("", response_model=ModelTrainingStartResponse)
@@ -139,26 +145,21 @@ async def start_training(
 
     try:
         # Validate model exists and has metadata
-        service.get_model_metadata(training_request.model_name)
+        metadata = service.get_model_metadata(training_request.model_name)
 
         # Check if model is already training BEFORE scheduling background task
-        from src.models import models_dict
-        ModelClass = models_dict.get(training_request.model_type.lower())
-        if ModelClass:
+        from src.models import get_trainer_class
+        TrainerClass = get_trainer_class(metadata["model_type"])
+        if TrainerClass:
             # Try to acquire the lock
-            if not ModelClass.reserve_training():
+            if not TrainerClass.reserve_training():
                 raise HTTPException(
                     status_code=409,
-                    detail=f"Model {model_name} is already training. Please wait for the current training job to complete."
+                    detail=f"Model {training_request.model_name} is already training. Please wait for the current training job to complete."
                 )
             # Lock acquired - background task will release it when done
         
-        logger.info(
-            f"Starting background training for {model_name} "
-            f"(analytics_type={training_request.analytics_type}, "
-            f"horizon={training_request.horizon}s, "
-            f"model_type={training_request.model_type})"
-        )
+        logger.info(f"Starting background training for {training_request.model_name}")
 
         # Start training in background (lock already held, will be released in finally)
         background_tasks.add_task(

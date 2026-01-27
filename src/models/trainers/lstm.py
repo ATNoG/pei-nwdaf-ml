@@ -14,6 +14,9 @@ class LSTMTrainer(BaseTrainer):
     """
     Trainer for LSTM models.
     """
+    
+    _is_training = False
+    _lock = None
 
     def __init__(self, config: Optional[ModelConfig] = None):
         super().__init__(config)
