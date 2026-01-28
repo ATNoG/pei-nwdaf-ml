@@ -581,7 +581,7 @@ class MLInterface():
             params.update(filters)
 
         # Use the actual Data Storage API endpoint
-        endpoint = '/api/v1/processed/latency/'
+        endpoint = '/api/v1/processed/latency'
 
         logger.info(f"Requesting training data: {data_type} from {start_time} to {end_time}")
         return self.request_data_from_storage(endpoint, params=params)
@@ -613,7 +613,7 @@ class MLInterface():
             params.update(filters)
 
         # Use the actual Data Storage API endpoint
-        endpoint = '/api/v1/processed/latency/'
+        endpoint = '/api/v1/processed/latency'
 
         logger.info(f"Requesting training data (async): {data_type} from {start_time} to {end_time}")
         return await self.request_data_from_storage_async(endpoint, params=params)
@@ -645,7 +645,7 @@ class MLInterface():
             'limit': limit
         }
 
-        endpoint = '/api/v1/processed/latency/'
+        endpoint = '/api/v1/processed/latency'
 
         logger.info(f"Requesting latency data for cell {cell_index} from {start_time} to {end_time}")
         return self.request_data_from_storage(endpoint, params=params)
@@ -677,7 +677,7 @@ class MLInterface():
             'limit': limit
         }
 
-        endpoint = '/api/v1/processed/latency/'
+        endpoint = '/api/v1/processed/latency'
 
         logger.info(f"Requesting latency data (async) for cell {cell_index} from {start_time} to {end_time}")
         return await self.request_data_from_storage_async(endpoint, params=params)
@@ -692,7 +692,7 @@ class MLInterface():
         try:
             #TODO: maybe don't hardcode this
             cells = self.request_data_from_storage(
-                endpoint="/api/v1/cell/",
+                endpoint="/api/v1/cell",
                 method="GET"
             )
 
