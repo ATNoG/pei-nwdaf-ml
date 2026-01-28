@@ -373,9 +373,9 @@ class TrainingService:
 
                 keys = sorted(features_seq[0].keys())
                 X_all.append(
-                    [[f.get(k, 0.0) for k in keys] for f in features_seq]
+                    [[f.get(k, 0.0) or 0.0 for k in keys] for f in features_seq]
                 )
-                y_all.append(float(seq[-1].get(target_key, 0.0)))
+                y_all.append(float(seq[-1].get(target_key) or 0.0))
 
         if not X_all:
             return None, None
