@@ -1,5 +1,5 @@
 """Configuration endpoint for API metadata"""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from src.services.config_service import ConfigService
@@ -28,14 +28,14 @@ async def get_config():
 
 
 @router.patch("")
-async def update_default_model(request: UpdateDefaultModelRequest):
+async def update_default_model(request: UpdateDefaultModelRequest, req: Request):
     """
     Update the default model for a specific inference type configuration.
 
     Args:
         request: Analytics type, horizon, and new model type
 
-    Returns:
+    Returns:    
         Success message with updated configuration
 
     Raises:
@@ -51,10 +51,12 @@ async def update_default_model(request: UpdateDefaultModelRequest):
         }
     """
     try:
-        result = ConfigService.update_default_model(
-            analytics_type=request.analytics_type,
-            horizon=request.horizon,
-            model_type=request.model_type
+        ml_interface = req.app.state.ml_interface                                                               
+        result = ConfigService.update_default_model(                                                            
+            analytics_type=request.analytics_type,                                                              
+            horizon=request.horizon,                                                                            
+            model_type=request.model_type,                                                                      
+            ml_interface=ml_interface
         )
         return result
     except ValueError as e:

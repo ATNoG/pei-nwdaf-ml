@@ -5,6 +5,7 @@ import logging
 
 from src.interface.mlint import MLInterface
 from src.routers.v1 import v1_router
+from src.services.config_service import load_defaults_from_mlflow
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -41,6 +42,9 @@ async def lifespan(app: FastAPI):
 
         # Initialize models (create missing models on startup)
         logger.info("Initializing models...")
+
+        # Load default model settings from MLflow                                                               
+        load_defaults_from_mlflow(ml_interface)
 
         # Start Kafka consumer in background thread
         ml_interface.start_consumer_background()
