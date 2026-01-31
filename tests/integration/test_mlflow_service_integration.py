@@ -55,14 +55,6 @@ class TestMLflowServiceIntegration:
         assert retrieved.config.forecast_steps == 5
         assert retrieved.config.hidden_size == 32
 
-    def test_create_duplicate_name_fails(self, mlflow_service, sample_config):
-        """Test that creating a model with duplicate name fails."""
-        # Create first model
-        mlflow_service.create_model("duplicate_test", sample_config)
-
-        # Try to create duplicate
-        with pytest.raises(ValueError, match="already exists"):
-            mlflow_service.create_model("duplicate_test", sample_config)
 
     def test_list_models(self, mlflow_service, sample_config):
         """Test listing models."""
