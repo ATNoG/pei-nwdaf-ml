@@ -2,23 +2,38 @@
 
 import pytest
 import time
+import httpx
 from testcontainers.postgres import PostgresContainer
 from testcontainers.core.container import DockerContainer
+from testcontainers.core.network import Network
 from testcontainers.core.waiting_utils import wait_for_logs
 from mlflow import MlflowClient
 
 
 @pytest.fixture(scope="session")
-def postgres_container():
+def docker_network():
+    """Shared Docker network for inter-container communication."""
+    with Network() as network:
+        yield network
+
+
+@pytest.fixture(scope="session")
+def postgres_container(docker_network):
     """PostgreSQL container for MLflow backend store."""
-    with PostgresContainer("postgres:15") as postgres:
+    postgres = PostgresContainer("postgres:15")
+    postgres.with_network(docker_network)
+    postgres.with_network_aliases("postgres")
+
+    with postgres:
         yield postgres
 
 
 @pytest.fixture(scope="session")
-def minio_container():
+def minio_container(docker_network):
     """MinIO container for MLflow artifact store."""
     minio = DockerContainer("minio/minio:latest")
+    minio.with_network(docker_network)
+    minio.with_network_aliases("minio")
     minio.with_exposed_ports(9000)
     minio.with_env("MINIO_ROOT_USER", "minio")
     minio.with_env("MINIO_ROOT_PASSWORD", "minio123")
@@ -32,20 +47,17 @@ def minio_container():
 
 
 @pytest.fixture(scope="session")
-def mlflow_container(postgres_container, minio_container):
+def mlflow_container(docker_network, postgres_container, minio_container):
     """MLflow tracking server container."""
-    # Get connection details
-    postgres_url = postgres_container.get_connection_url().replace(
-        "postgresql+psycopg2://", "postgresql://"
-    )
-    minio_host = minio_container.get_container_host_ip()
-    minio_port = minio_container.get_exposed_port(9000)
+    # Use container network aliases for inter-container communication
+    postgres_url = f"postgresql://test:test@postgres:5432/test"
 
     mlflow = DockerContainer("ghcr.io/mlflow/mlflow:latest")
+    mlflow.with_network(docker_network)
     mlflow.with_exposed_ports(5000)
     mlflow.with_env("MLFLOW_BACKEND_STORE_URI", postgres_url)
     mlflow.with_env("MLFLOW_DEFAULT_ARTIFACT_ROOT", "s3://mlflow")
-    mlflow.with_env("MLFLOW_S3_ENDPOINT_URL", f"http://{minio_host}:{minio_port}")
+    mlflow.with_env("MLFLOW_S3_ENDPOINT_URL", "http://minio:9000")
     mlflow.with_env("AWS_ACCESS_KEY_ID", "minio")
     mlflow.with_env("AWS_SECRET_ACCESS_KEY", "minio123")
     mlflow.with_command(
@@ -64,9 +76,27 @@ def mlflow_container(postgres_container, minio_container):
     )
 
     with mlflow:
-        # Wait for MLflow to be ready
-        wait_for_logs(mlflow, "Listening at:", timeout=60)
-        time.sleep(3)  # Extra wait for API to be fully ready
+        # Wait for MLflow to be ready by checking logs first
+        wait_for_logs(mlflow, "Application startup complete", timeout=120)
+
+        # Then verify HTTP endpoint works
+        host = mlflow.get_container_host_ip()
+        port = mlflow.get_exposed_port(5000)
+        mlflow_url = f"http://{host}:{port}"
+
+        # Poll MLflow health endpoint with all possible connection errors
+        for i in range(30):  # 30 attempts = ~30 seconds
+            try:
+                response = httpx.get(f"{mlflow_url}/health", timeout=2.0)
+                if response.status_code == 200:
+                    time.sleep(1)  # Extra wait for stability
+                    break
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.ReadError):
+                pass
+            time.sleep(1)
+        else:
+            raise TimeoutError("MLflow health check did not pass in 30 seconds")
+
         yield mlflow
 
 
