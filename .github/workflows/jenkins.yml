@@ -27,6 +27,11 @@ jobs:
         run: |
           uv sync --all-extras
 
+      - name: Create .env
+        run: |
+          cp .env.example .env
+
+
       - name: Run tests
         run: |
           uv run pytest tests/ -v --tb=short
