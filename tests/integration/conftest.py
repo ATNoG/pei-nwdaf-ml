@@ -8,6 +8,10 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
 from testcontainers.core.waiting_utils import wait_for_logs
 from mlflow import MlflowClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from src.db.database import Base
 
 
 @pytest.fixture(scope="session")
@@ -19,12 +23,23 @@ def docker_network():
 
 @pytest.fixture(scope="session")
 def postgres_container(docker_network):
-    """PostgreSQL container for MLflow backend store."""
+    """PostgreSQL container for MLflow backend store and app database."""
+    import psycopg2
+
     postgres = PostgresContainer("postgres:15")
     postgres.with_network(docker_network)
     postgres.with_network_aliases("postgres")
 
     with postgres:
+        # Create additional database for ml_service using psycopg2
+        conn_url = postgres.get_connection_url().replace("postgresql+psycopg2://", "postgresql://")
+        conn = psycopg2.connect(conn_url)
+        conn.autocommit = True
+        cursor = conn.cursor()
+        cursor.execute("CREATE DATABASE ml_service;")
+        cursor.close()
+        conn.close()
+
         yield postgres
 
 
@@ -106,6 +121,38 @@ def mlflow_tracking_uri(mlflow_container):
     host = mlflow_container.get_container_host_ip()
     port = mlflow_container.get_exposed_port(5000)
     return f"http://{host}:{port}"
+
+
+@pytest.fixture
+def database_url(postgres_container):
+    """Database URL for ml_service database."""
+    # Get the base connection URL and properly replace just the database name
+    base_url = postgres_container.get_connection_url()
+    # The URL format is: postgresql+psycopg2://user:pass@host:port/dbname
+    # We need to replace '/test' at the end with '/ml_service'
+    return base_url.rsplit("/", 1)[0] + "/ml_service"
+
+
+@pytest.fixture
+def db_engine(database_url):
+    """SQLAlchemy engine for testing."""
+    engine = create_engine(database_url)
+    Base.metadata.create_all(bind=engine)
+    yield engine
+    Base.metadata.drop_all(bind=engine)
+    engine.dispose()
+
+
+@pytest.fixture
+def db_session(db_engine):
+    """Database session for testing."""
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=db_engine)
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.rollback()
+        session.close()
 
 
 @pytest.fixture

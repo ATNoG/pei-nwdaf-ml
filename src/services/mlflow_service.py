@@ -1,73 +1,87 @@
 """MLflow service for managing models."""
 
-import json
 from datetime import datetime
 from uuid import uuid4
 
 from mlflow import MlflowClient
 from mlflow.exceptions import MlflowException
-
+from src.services.config_service import MLConfigService
+from src.db.model_config import ModelConfigDB
 from src.schemas.model import ArchitectureType, ModelConfig, ModelDetail, ModelSummary
 
 
 class MLflowService:
     """MLflow service for managing model registry and metadata."""
 
-    def __init__(self, mlflow_client: MlflowClient):
+    def __init__(self, mlflow_client: MlflowClient, ml_config_service: MLConfigService):
         self.client = mlflow_client
+        self.ml_config_service = ml_config_service
 
     def create_model(self, name: str, config: ModelConfig) -> ModelDetail:
         """
-        Create a new model in MLflow registry.
+        Create a new model in MLflow registry and store config in PostgreSQL.
 
-        Generates a unique ID and stores the model config as tags.
+        Generates a unique ID, creates MLflow registered model, and stores config in DB.
         """
-        # Check if name already exists
-        existing = self.client.search_registered_models(filter_string=f"name='{name}'")
-        if existing:
-            raise ValueError(f"Model with name '{name}' already exists")
-
         # Generate unique ID
         model_id = str(uuid4())
+        created_at = datetime.now()
 
-        # Create registered model with ID as MLflow name
-        registered_model = self.client.create_registered_model(model_id)
+        try:
+            # Create registered model in MLflow
+            self.client.create_registered_model(model_id)
 
-        # Store name and config as tags
-        tags = {
-            "name": name,
-            "config:architecture": config.architecture.value,
-            "config:input_fields": json.dumps(config.input_fields),
-            "config:output_fields": json.dumps(config.output_fields),
-            "config:window_duration_seconds": str(config.window_duration_seconds),
-            "config:lookback_steps": str(config.lookback_steps),
-            "config:forecast_steps": str(config.forecast_steps),
-            "config:hidden_size": str(config.hidden_size),
-        }
+            # Store only name tag in MLflow for discoverability
+            self.client.set_registered_model_tag(model_id, "name", name)
 
-        for key, value in tags.items():
-            self.client.set_registered_model_tag(model_id, key, value)
+            # Store full config in PostgreSQL
+            db_config = ModelConfigDB(
+                model_id=model_id,
+                name=name,
+                architecture=config.architecture.value,
+                input_fields=config.input_fields,
+                output_fields=config.output_fields,
+                window_duration_seconds=config.window_duration_seconds,
+                lookback_steps=config.lookback_steps,
+                forecast_steps=config.forecast_steps,
+                hidden_size=config.hidden_size,
+                created_at=created_at,
+            )
+            self.ml_config_service.create(db_config)
 
-        return ModelDetail(
-            id=model_id,
-            name=name,
-            config=config,
-            created_at=datetime.fromtimestamp(registered_model.creation_timestamp / 1000),
-            latest_version=None,
-            last_trained_at=None,
-            mlflow_run_id=None,
-            training_loss=None,
-        )
+            return ModelDetail(
+                id=model_id,
+                name=name,
+                config=config,
+                created_at=created_at,
+                latest_version=None,
+                last_trained_at=None,
+                mlflow_run_id=None,
+                training_loss=None,
+            )
+        except Exception:
+            # Clean up MLflow model if DB insert failed
+            try:
+                self.client.delete_registered_model(model_id)
+            except Exception:
+                pass
+            raise
 
     def get_model(self, model_id: str) -> ModelDetail:
-        """Get model details by ID."""
+        """Get model details by ID from PostgreSQL and MLflow."""
+        # Get config from PostgreSQL
+        db_config = self.ml_config_service.get_config(model_id)
+        if not db_config:
+            raise ValueError(f"Model '{model_id}' not found")
+
+        # Get MLflow metadata
         try:
             registered_model = self.client.get_registered_model(model_id)
         except MlflowException:
-            raise ValueError(f"Model '{model_id}' not found")
+            raise ValueError(f"Model '{model_id}' not found in MLflow")
 
-        # Reconstruct config from tags
-        config = self._get_model_config(model_id)
+        # Reconstruct ModelConfig from database
+        config = self.ml_config_service.config_from_db(db_config)
 
         # Get latest version info if it exists
         latest_version = None
@@ -89,13 +103,11 @@ class MLflowService:
                 except Exception:
                     pass
 
-        name = registered_model.tags.get("name", model_id)
-
         return ModelDetail(
             id=model_id,
-            name=name,
+            name=db_config.name,
             config=config,
-            created_at=datetime.fromtimestamp(registered_model.creation_timestamp / 1000),
+            created_at=db_config.created_at,
             latest_version=latest_version,
             last_trained_at=last_trained_at,
             mlflow_run_id=mlflow_run_id,
@@ -103,27 +115,28 @@ class MLflowService:
         )
 
     def list_models(self) -> list[ModelSummary]:
-        """List all registered models."""
-        registered_models = self.client.search_registered_models()
+        """List all registered models from PostgreSQL and MLflow."""
+        # Get all configs from PostgreSQL
+        db_configs = self.ml_config_service.list_all()
 
         summaries = []
-        for rm in registered_models:
+        for db_config in db_configs:
+            # Get MLflow metadata for version info
             latest_version = None
-            if rm.latest_versions:
-                latest_version = int(rm.latest_versions[0].version)
-
-
-            # Get name and architecture from tags
-            name = rm.tags.get("name", rm.name)
-            architecture_str = rm.tags.get("config:architecture", "ann")
-            architecture = ArchitectureType(architecture_str)
+            try:
+                rm = self.client.get_registered_model(db_config.model_id)
+                if rm.latest_versions:
+                    latest_version = int(rm.latest_versions[0].version)
+            except MlflowException:
+                # Model exists in DB but not in MLflow (inconsistent state)
+                pass
 
             summaries.append(
                 ModelSummary(
-                    id=rm.name,  # rm.name is the UUID we generated
-                    name=name,
-                    architecture=architecture,
-                    created_at=datetime.fromtimestamp(rm.creation_timestamp / 1000),
+                    id=db_config.model_id,
+                    name=db_config.name,
+                    architecture=ArchitectureType(db_config.architecture),
+                    created_at=db_config.created_at,
                     latest_version=latest_version,
                 )
             )
@@ -131,23 +144,13 @@ class MLflowService:
         return summaries
 
     def delete_model(self, model_id: str) -> None:
-        """Delete a model from the registry."""
+        """Delete a model from both PostgreSQL and MLflow registry."""
+        # Delete from PostgreSQL
+        self.ml_config_service.delete_model(model_id)
+
+        # Delete from MLflow
         try:
             self.client.delete_registered_model(model_id)
         except MlflowException:
-            raise ValueError(f"Model '{model_id}' not found")
-
-    def _get_model_config(self, model_id: str) -> ModelConfig:
-        """Reconstruct ModelConfig from MLflow tags."""
-        rm = self.client.get_registered_model(model_id)
-        tags = rm.tags
-
-        return ModelConfig(
-            architecture=ArchitectureType(tags.get("config:architecture", "ann")),
-            input_fields=json.loads(tags.get("config:input_fields", "[]")),
-            output_fields=json.loads(tags.get("config:output_fields", "[]")),
-            window_duration_seconds=int(tags.get("config:window_duration_seconds", "60")),
-            lookback_steps=int(tags.get("config:lookback_steps", "30")),
-            forecast_steps=int(tags.get("config:forecast_steps", "5")),
-            hidden_size=int(tags.get("config:hidden_size", "32")),
-        )
+            # Model exists in DB but not in MLflow - already deleted from DB
+            pass

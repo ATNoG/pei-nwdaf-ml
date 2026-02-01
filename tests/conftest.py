@@ -1,14 +1,60 @@
 """Shared test fixtures."""
 
+import os
 import pytest
 from unittest.mock import Mock, MagicMock
 from mlflow import MlflowClient
+
+
+def pytest_configure(config):
+    """
+    Set test environment variables before any imports.
+    This runs before pytest collects tests, ensuring env vars are set
+    before any module imports Settings.
+    """
+    test_env = {
+        "API_HOST": "0.0.0.0",
+        "API_PORT": "8060",
+        "LOG_LEVEL": "INFO",
+        "MLFLOW_TRACKING_URI": "http://localhost:5000",
+        "MLFLOW_S3_ENDPOINT_URL": "http://localhost:9000",
+        "AWS_ACCESS_KEY_ID": "minio",
+        "AWS_SECRET_ACCESS_KEY": "minio123",
+        "AWS_DEFAULT_REGION": "us-east-1",
+        "DATA_STORAGE_API_URL": "http://localhost:8000",
+        "DATA_STORAGE_EXAMPLE_ENDPOINT": "/api/v1/processed/latency/example",
+        "DATA_STORAGE_EXCLUDED_FIELDS": "",
+        "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
+    }
+
+    # Only set if not already set (allows override via actual env vars or .env)
+    for key, value in test_env.items():
+        if key not in os.environ:
+            os.environ[key] = value
 
 
 @pytest.fixture
 def mock_mlflow_client():
     """Mock MLflow client for testing."""
     return Mock(spec=MlflowClient)
+
+
+@pytest.fixture
+def mock_db_session():
+    """Mock database session for testing."""
+    from unittest.mock import MagicMock
+    session = MagicMock()
+    # Setup query mock to return itself for chaining
+    session.query.return_value = session
+    session.filter.return_value = session
+    return session
+
+
+@pytest.fixture
+def mock_config_service():
+    """Mock MLConfigService for testing."""
+    from unittest.mock import MagicMock
+    return MagicMock()
 
 
 @pytest.fixture

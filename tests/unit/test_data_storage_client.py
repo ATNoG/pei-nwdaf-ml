@@ -176,3 +176,65 @@ class TestDataStorageClient:
             client = DataStorageClient()
 
             assert client.excluded_fields == set()
+
+    @pytest.mark.asyncio
+    async def test_validate_fields_all_valid(self, mock_settings, sample_example_response):
+        """Test validating fields when all are valid."""
+        client = DataStorageClient()
+
+        with patch("httpx.AsyncClient") as mock_async_client:
+            mock_response = MagicMock()
+            mock_response.json.return_value = sample_example_response
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get.return_value = mock_response
+            mock_async_client.return_value.__aenter__.return_value = mock_client_instance
+
+            # Validate valid fields
+            is_valid, invalid = await client.validate_fields(["rsrp_mean", "latency_mean"])
+
+            assert is_valid is True
+            assert invalid == []
+
+    @pytest.mark.asyncio
+    async def test_validate_fields_some_invalid(self, mock_settings, sample_example_response):
+        """Test validating fields when some are invalid."""
+        client = DataStorageClient()
+
+        with patch("httpx.AsyncClient") as mock_async_client:
+            mock_response = MagicMock()
+            mock_response.json.return_value = sample_example_response
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get.return_value = mock_response
+            mock_async_client.return_value.__aenter__.return_value = mock_client_instance
+
+            # Validate with invalid fields
+            is_valid, invalid = await client.validate_fields(
+                ["rsrp_mean", "invalid_field", "another_invalid"]
+            )
+
+            assert is_valid is False
+            assert set(invalid) == {"invalid_field", "another_invalid"}
+
+    @pytest.mark.asyncio
+    async def test_validate_fields_all_invalid(self, mock_settings, sample_example_response):
+        """Test validating fields when all are invalid."""
+        client = DataStorageClient()
+
+        with patch("httpx.AsyncClient") as mock_async_client:
+            mock_response = MagicMock()
+            mock_response.json.return_value = sample_example_response
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get.return_value = mock_response
+            mock_async_client.return_value.__aenter__.return_value = mock_client_instance
+
+            # Validate all invalid fields
+            is_valid, invalid = await client.validate_fields(["foo", "bar", "baz"])
+
+            assert is_valid is False
+            assert set(invalid) == {"foo", "bar", "baz"}

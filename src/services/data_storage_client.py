@@ -44,3 +44,20 @@ class DataStorageClient:
             ]
 
             return sorted(fields)
+
+    async def validate_fields(self, fields: list[str]) -> tuple[bool, list[str]]:
+        """
+        Validate that all provided fields exist in available fields.
+
+        Args:
+            fields: List of field names to validate
+
+        Returns:
+            Tuple of (all_valid: bool, invalid_fields: list[str])
+        """
+        available_fields = await self.get_available_fields()
+        available_set = set(available_fields)
+
+        invalid_fields = [field for field in fields if field not in available_set]
+
+        return (len(invalid_fields) == 0, invalid_fields)
