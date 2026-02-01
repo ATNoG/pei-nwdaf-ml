@@ -1,7 +1,6 @@
 """Integration tests for MLflow service with real MLflow."""
 
 import pytest
-from mlflow.exceptions import MlflowException
 
 from src.services.mlflow_service import MLflowService
 from src.schemas.model import ArchitectureType, ModelConfig
@@ -24,9 +23,12 @@ def sample_config():
 
 
 @pytest.fixture
-def mlflow_service(mlflow_client):
-    """MLflow service instance with real client."""
-    return MLflowService(mlflow_client)
+def mlflow_service(mlflow_client, db_session):
+    """MLflow service instance with real client and database session."""
+    from src.services.config_service import MLConfigService
+
+    config_service = MLConfigService(db_session)
+    return MLflowService(mlflow_client, config_service)
 
 
 class TestMLflowServiceIntegration:
@@ -186,3 +188,82 @@ class TestMLflowServiceIntegration:
             retrieved = mlflow_service.get_model(model_id)
             assert retrieved.name == f"multi_model_{i}"
             assert retrieved.config == expected_config
+
+    def test_get_model_by_id_full_details(self, mlflow_service, sample_config):
+        """Test getting model by ID returns full details."""
+        # Create a model
+        created = mlflow_service.create_model("detailed_model", sample_config)
+        model_id = created.id
+
+        # Get the model by ID
+        retrieved = mlflow_service.get_model(model_id)
+
+        # Verify all details match
+        assert retrieved.id == model_id
+        assert retrieved.name == "detailed_model"
+        assert retrieved.config.architecture == sample_config.architecture
+        assert retrieved.config.input_fields == sample_config.input_fields
+        assert retrieved.config.output_fields == sample_config.output_fields
+        assert retrieved.config.window_duration_seconds == sample_config.window_duration_seconds
+        assert retrieved.config.lookback_steps == sample_config.lookback_steps
+        assert retrieved.config.forecast_steps == sample_config.forecast_steps
+        assert retrieved.config.hidden_size == sample_config.hidden_size
+        assert retrieved.created_at is not None
+        assert retrieved.latest_version is None  # No training yet
+
+    def test_delete_and_verify_cascade(self, mlflow_service, sample_config):
+        """Test that deletion removes model from both DB and MLflow."""
+        # Create a model
+        created = mlflow_service.create_model("cascade_delete_model", sample_config)
+        model_id = created.id
+
+        # Verify it exists
+        retrieved = mlflow_service.get_model(model_id)
+        assert retrieved.id == model_id
+
+        # Delete it
+        mlflow_service.delete_model(model_id)
+
+        # Verify it's gone from both systems
+        with pytest.raises(ValueError, match="not found"):
+            mlflow_service.get_model(model_id)
+
+        # Verify it's not in the list
+        models = mlflow_service.list_models()
+        model_ids = [m.id for m in models]
+        assert model_id not in model_ids
+
+    def test_duplicate_names_allowed(self, mlflow_service, sample_config):
+        """Test that models with duplicate names are allowed."""
+        # Create first model
+        model1 = mlflow_service.create_model("duplicate_name", sample_config)
+
+        # Create second model with same name but different config
+        different_config = ModelConfig(
+            architecture=ArchitectureType.ANN,
+            input_fields=["rsrp_mean"],
+            output_fields=["rsrp_mean"],
+            window_duration_seconds=120,
+            lookback_steps=10,
+            forecast_steps=3,
+            hidden_size=32,
+        )
+        model2 = mlflow_service.create_model("duplicate_name", different_config)
+
+        # Verify both exist with different IDs
+        assert model1.id != model2.id
+        assert model1.name == model2.name == "duplicate_name"
+
+        # Verify both can be retrieved
+        retrieved1 = mlflow_service.get_model(model1.id)
+        retrieved2 = mlflow_service.get_model(model2.id)
+
+        assert retrieved1.id == model1.id
+        assert retrieved2.id == model2.id
+        assert retrieved1.config.architecture == ArchitectureType.LSTM
+        assert retrieved2.config.architecture == ArchitectureType.ANN
+
+        # Both should appear in list
+        models = mlflow_service.list_models()
+        duplicate_models = [m for m in models if m.name == "duplicate_name"]
+        assert len(duplicate_models) >= 2

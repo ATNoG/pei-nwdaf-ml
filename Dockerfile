@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy dependency files
 COPY pyproject.toml .
 COPY .python-version .
-
+COPY uv.lock .
 # Install dependencies
 RUN uv sync --frozen --no-dev
 
@@ -18,4 +18,4 @@ RUN uv sync --frozen --no-dev
 COPY src/ ./src/
 COPY main.py .
 
-CMD ["uv", "run", "python", "main.py"]
+CMD ["uv", "run", "main.py"]

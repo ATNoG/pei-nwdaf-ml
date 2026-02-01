@@ -29,5 +29,8 @@ class Settings(BaseSettings):
     DATA_STORAGE_EXAMPLE_ENDPOINT: str
     DATA_STORAGE_EXCLUDED_FIELDS: str
 
+    # Database Configuration
+    DATABASE_URL: str
+
 
 settings = Settings()

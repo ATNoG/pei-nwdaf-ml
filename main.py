@@ -7,6 +7,8 @@ import mlflow
 from fastapi import FastAPI
 
 from src.core.config import settings
+from src.db.database import init_db
+from src.routers import router
 
 # Configure logging
 logging.basicConfig(
@@ -22,9 +24,15 @@ async def lifespan(app: FastAPI):
     logger.info("Starting NWDAF ML Service...")
     logger.info(f"MLflow tracking URI: {settings.MLFLOW_TRACKING_URI}")
     logger.info(f"Data Storage API: {settings.DATA_STORAGE_API_URL}")
+    logger.info(f"Database URL: {settings.DATABASE_URL}")
 
     # Set MLflow tracking URI
     mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
+
+    # Initialize database tables
+    logger.info("Initializing database tables...")
+    init_db()
+    logger.info("Database initialized successfully")
 
     yield
 
@@ -41,9 +49,6 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-
-# Include API routers
-from src.routers import router
 
 app.include_router(router)
 
@@ -64,9 +69,7 @@ async def health():
     """Health check endpoint."""
     # TODO: Add actual health checks (MLflow, data-storage connectivity)
     return {
-        "status": "healthy",
-        "mlflow_uri": settings.MLFLOW_TRACKING_URI,
-        "data_storage_api": settings.DATA_STORAGE_API_URL,
+        "status": "healthy"
     }
 
 
