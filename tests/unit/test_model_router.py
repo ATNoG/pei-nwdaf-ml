@@ -1,7 +1,7 @@
 """Unit tests for model router endpoints."""
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 from fastapi.testclient import TestClient
 from datetime import datetime
 
@@ -24,6 +24,16 @@ def client():
 def mock_mlflow_service():
     """Mock MLflowService for dependency injection."""
     return MagicMock()
+
+
+@pytest.fixture
+def mock_data_storage_client():
+    """Mock DataStorageClient for dependency injection."""
+    mock = MagicMock()
+    # By default, validation passes (all fields valid) - use AsyncMock for async methods
+    mock.validate_fields = AsyncMock(return_value=(True, []))
+    mock.get_available_fields = AsyncMock(return_value=["latency_mean", "rsrp_mean"])
+    return mock
 
 
 class TestModelRouterEndpoints:
@@ -65,7 +75,7 @@ class TestModelRouterEndpoints:
         finally:
             app.dependency_overrides.clear()
 
-    def test_create_model(self, client, mock_mlflow_service):
+    def test_create_model(self, client, mock_mlflow_service, mock_data_storage_client):
         """Test POST /v1/models endpoint."""
         # Setup mock
         mock_mlflow_service.create_model.return_value = ModelDetail(
@@ -87,14 +97,19 @@ class TestModelRouterEndpoints:
             training_loss=None,
         )
 
-        # Override dependency
+        # Override dependencies
         from src.core.dependencies import get_mlflow_client
+        from src.services.data_storage_client import DataStorageClient
         from main import app
 
         def override_get_mlflow_client():
             yield mock_mlflow_service
 
+        def override_data_storage_client():
+            return mock_data_storage_client
+
         app.dependency_overrides[get_mlflow_client] = override_get_mlflow_client
+        app.dependency_overrides[DataStorageClient] = override_data_storage_client
 
         try:
             # Make request
@@ -121,19 +136,68 @@ class TestModelRouterEndpoints:
         finally:
             app.dependency_overrides.clear()
 
-    def test_create_model_error(self, client, mock_mlflow_service):
-        """Test POST /v1/models with error."""
-        # Setup mock to raise ValueError
-        mock_mlflow_service.create_model.side_effect = ValueError("Model already exists")
+    def test_create_model_invalid_fields(self, client, mock_mlflow_service, mock_data_storage_client):
+        """Test POST /v1/models with invalid fields."""
+        # Setup mock to return validation failure
+        mock_data_storage_client.validate_fields = AsyncMock(return_value=(False, ["invalid_field"]))
+        mock_data_storage_client.get_available_fields = AsyncMock(return_value=["latency_mean", "rsrp_mean"])
 
-        # Override dependency
+        # Override dependencies
         from src.core.dependencies import get_mlflow_client
+        from src.services.data_storage_client import DataStorageClient
         from main import app
 
         def override_get_mlflow_client():
             yield mock_mlflow_service
 
+        def override_data_storage_client():
+            return mock_data_storage_client
+
         app.dependency_overrides[get_mlflow_client] = override_get_mlflow_client
+        app.dependency_overrides[DataStorageClient] = override_data_storage_client
+
+        try:
+            # Make request with invalid field
+            payload = {
+                "name": "test_model",
+                "config": {
+                    "architecture": "lstm",
+                    "input_fields": ["invalid_field"],
+                    "output_fields": ["latency_mean"],
+                    "window_duration_seconds": 60,
+                    "lookback_steps": 30,
+                    "forecast_steps": 5,
+                    "hidden_size": 64,
+                }
+            }
+            response = client.post("/v1/models", json=payload)
+
+            # Verify
+            assert response.status_code == 400
+            data = response.json()
+            assert "invalid_fields" in data["detail"]
+            assert "available_fields" in data["detail"]
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_create_model_error(self, client, mock_mlflow_service, mock_data_storage_client):
+        """Test POST /v1/models with error."""
+        # Setup mock to raise ValueError
+        mock_mlflow_service.create_model.side_effect = ValueError("Model already exists")
+
+        # Override dependencies
+        from src.core.dependencies import get_mlflow_client
+        from src.services.data_storage_client import DataStorageClient
+        from main import app
+
+        def override_get_mlflow_client():
+            yield mock_mlflow_service
+
+        def override_data_storage_client():
+            return mock_data_storage_client
+
+        app.dependency_overrides[get_mlflow_client] = override_get_mlflow_client
+        app.dependency_overrides[DataStorageClient] = override_data_storage_client
 
         try:
             # Make request
