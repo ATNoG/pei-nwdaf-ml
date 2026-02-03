@@ -47,33 +47,45 @@ class TrainingService:
 
         Returns:
             Job information dict with job_id, model_id, status, created_at
+
+        Raises:
+            ValueError: If model not found or already training
         """
         # Validate model exists
         model_detail = self.mlflow_service.get_model(model_id)
         if not model_detail:
             raise ValueError(f"Model {model_id} not found")
 
+        # Atomically acquire training lock
+        if not self._acquire_training_lock(model_id):
+            raise ValueError(f"Model {model_id} is already training")
+
         # Generate job ID
         job_id = str(uuid4())
         now = datetime.now()
 
-        # Create job record
-        job = TrainingJobDB(
-            job_id=job_id,
-            model_id=model_id,
-            status=TrainingJobStatus.QUEUED,
-            lookback_seconds=lookback_seconds,
-            mlflow_run_id=None,
-            created_at=now,
-            started_at=None,
-            completed_at=None,
-            error_message=None,
-        )
+        try:
+            # Create job record
+            job = TrainingJobDB(
+                job_id=job_id,
+                model_id=model_id,
+                status=TrainingJobStatus.QUEUED,
+                lookback_seconds=lookback_seconds,
+                mlflow_run_id=None,
+                created_at=now,
+                started_at=None,
+                completed_at=None,
+                error_message=None,
+            )
 
-        # Save to database
-        self.db.add(job)
-        self.db.commit()
-        self.db.refresh(job)
+            # Save to database
+            self.db.add(job)
+            self.db.commit()
+            self.db.refresh(job)
+        except Exception as e:
+            # Release lock if job creation fails
+            self._release_training_lock(model_id)
+            raise
 
         logger.info(f"Created training job {job_id} for model {model_id}")
 
@@ -108,15 +120,7 @@ class TrainingService:
             job.started_at = datetime.now()
             self.db.commit()
 
-            # Acquire training lock
-            if not self._acquire_training_lock(job.model_id):
-                job.status = TrainingJobStatus.FAILED
-                job.error_message = "Failed to acquire training lock (model already training)"
-                job.completed_at = datetime.now()
-                self.db.commit()
-                logger.error(f"Job {job_id}: Failed to acquire lock for model {job.model_id}")
-                return
-
+            # Lock is already acquired in create_training_job
             try:
                 # Get model config
                 model_detail = self.mlflow_service.get_model(job.model_id)
