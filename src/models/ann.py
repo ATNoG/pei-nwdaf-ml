@@ -10,11 +10,11 @@ logger = logging.getLogger(__name__)
 class SimpleANNNetwork(nn.Module):
     """Simple feedforward ANN for time series"""
 
-    def __init__(self, input_size: int, hidden_size: int = 32):
+    def __init__(self, input_size: int, hidden_size: int, output_size: int):
         super().__init__()
         self.fc1 = nn.Linear(input_size, hidden_size)
         self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(hidden_size, 1)
+        self.fc2 = nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
         # flatten sequence dimension
@@ -25,24 +25,40 @@ class SimpleANNNetwork(nn.Module):
 
 class ANN(ModelInterface):
 
-    def __init__(self, input_size: int = None):
+    def __init__(
+        self,
+        input_fields: list[str],
+        output_fields: list[str],
+        window_duration_seconds: int,
+        lookback_steps: int,
+        forecast_steps: int,
+        hidden_size: int
+    ):
+        super().__init__(
+            input_fields=input_fields,
+            output_fields=output_fields,
+            window_duration_seconds=window_duration_seconds,
+            lookback_steps=lookback_steps,
+            forecast_steps=forecast_steps,
+            hidden_size=hidden_size
+        )
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = None
-        self.input_size = input_size
 
     def _ensure_model(self):
         if self.model is None:
-            if self.input_size is None:
-                raise RuntimeError("input_size must be provided to initialize the model")
-            self.model = SimpleANNNetwork(self.input_size * self.SEQUENCE_LENGTH).to(self.device)
+            # ANN flattens the sequence: lookback_steps * num_input_features
+            flattened_input_size = self.lookback_steps * len(self.input_fields)
+            # Output is flattened: forecast_steps * num_output_features
+            output_size = self.forecast_steps * len(self.output_fields)
+
+            self.model = SimpleANNNetwork(
+                input_size=flattened_input_size,
+                hidden_size=self.hidden_size,
+                output_size=output_size
+            ).to(self.device)
 
     def train(self, X, y, max_epochs: int = 50, status_callback=None) -> float:
-        X = np.nan_to_num(np.array(X, dtype=np.float32))
-        y = np.nan_to_num(np.array(y, dtype=np.float32)).reshape(-1, 1)
-        if X.ndim == 2:
-            X = X[:, np.newaxis, :]
-
-        self.input_size = X.shape[2]
         self._ensure_model()
 
         X_tensor = torch.from_numpy(X).to(self.device)
@@ -88,12 +104,9 @@ class ANN(ModelInterface):
         return float(total_loss/num_batches)
 
     def predict(self, X):
-        X = np.nan_to_num(np.array(X, dtype=np.float32))
-        if X.ndim == 2:
-            X = X[np.newaxis, :, :]
         self._ensure_model()
 
         self.model.eval()
         with torch.no_grad():
             pred = self.model(torch.from_numpy(X).to(self.device)).cpu().numpy()
-        return float(np.nan_to_num(pred.flatten()[0]))
+        return pred
