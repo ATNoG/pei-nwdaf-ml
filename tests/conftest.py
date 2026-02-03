@@ -23,6 +23,8 @@ def pytest_configure(config):
         "AWS_DEFAULT_REGION": "us-east-1",
         "DATA_STORAGE_API_URL": "http://localhost:8000",
         "DATA_STORAGE_EXAMPLE_ENDPOINT": "/api/v1/processed/latency/example",
+        "DATA_STORAGE_DATA_ENDPOINT": "/api/v1/processed/latency",
+        "DATA_STORAGE_CELL_ENDPOINT": "/api/v1/cell",
         "DATA_STORAGE_EXCLUDED_FIELDS": "",
         "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
     }
