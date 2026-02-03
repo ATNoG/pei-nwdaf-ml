@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Integer, String
+from sqlalchemy import JSON, Boolean, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.database import Base
@@ -23,6 +23,7 @@ class ModelConfigDB(Base):
     forecast_steps: Mapped[int] = mapped_column(Integer, nullable=False)
     hidden_size: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(nullable=False)
+    is_training: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     def __repr__(self) -> str:
         return f"<ModelConfigDB(model_id={self.model_id}, name={self.name}, architecture={self.architecture})>"
