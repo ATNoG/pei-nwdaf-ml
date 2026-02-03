@@ -11,6 +11,8 @@ class DataStorageClient:
     def __init__(self):
         self.base_url = settings.DATA_STORAGE_API_URL
         self.example_endpoint = settings.DATA_STORAGE_EXAMPLE_ENDPOINT
+        self.data_endpoint = settings.DATA_STORAGE_DATA_ENDPOINT
+        self.cell_endpoint = settings.DATA_STORAGE_CELL_ENDPOINT
         self.excluded_fields = set(
             f.strip() for f in settings.DATA_STORAGE_EXCLUDED_FIELDS.split(",") if f.strip()
         )
@@ -61,3 +63,73 @@ class DataStorageClient:
         invalid_fields = [field for field in fields if field not in available_set]
 
         return (len(invalid_fields) == 0, invalid_fields)
+
+    async def get_known_cells(self) -> list[int]:
+        """
+        Get list of all known cell indexes from data-storage API.
+
+        Returns:
+            List of cell indexes (integers)
+        """
+        url = f"{self.base_url}{self.cell_endpoint}"
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=30.0)
+            response.raise_for_status()
+            return response.json()
+
+    async def fetch_cell_data(
+        self,
+        cell_index: int,
+        start_timestamp: int,
+        end_timestamp: int,
+        window_duration_seconds: int,
+    ) -> list[dict]:
+        """
+        Fetch processed latency data for a specific cell with pagination.
+
+        Automatically handles pagination when dataset is larger than 1000 records.
+
+        Args:
+            cell_index: Cell identifier
+            start_timestamp: Start time (Unix epoch seconds)
+            end_timestamp: End time (Unix epoch seconds)
+            window_duration_seconds: Window duration for aggregation
+
+        Returns:
+            List of data windows with metrics (all pages combined)
+        """
+        url = f"{self.base_url}{self.data_endpoint}"
+        all_data = []
+        offset = 0
+        limit = 1000
+
+        async with httpx.AsyncClient() as client:
+            while True:
+                params = {
+                    "cell_index": cell_index,
+                    "start_time": start_timestamp,
+                    "end_time": end_timestamp,
+                    "window_duration_seconds": window_duration_seconds,
+                    "offset": offset,
+                    "limit": limit,
+                }
+
+                response = await client.get(url, params=params, timeout=60.0)
+                response.raise_for_status()
+                batch = response.json()
+
+                if not batch:
+                    # No more data
+                    break
+
+                all_data.extend(batch)
+
+                # If we got fewer than limit records, we've reached the end
+                if len(batch) < limit:
+                    break
+
+                # Move to next page
+                offset += limit
+
+        return all_data

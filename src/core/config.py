@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     DATA_STORAGE_API_URL: str
     DATA_STORAGE_EXAMPLE_ENDPOINT: str
     DATA_STORAGE_EXCLUDED_FIELDS: str
+    DATA_STORAGE_DATA_ENDPOINT: str
+    DATA_STORAGE_CELL_ENDPOINT: str
 
     # Database Configuration
     DATABASE_URL: str

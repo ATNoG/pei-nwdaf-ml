@@ -14,6 +14,8 @@ def mock_settings():
         mock.DATA_STORAGE_API_URL = "http://data-storage:8000"
         mock.DATA_STORAGE_EXAMPLE_ENDPOINT = "/api/v1/processed/latency/example"
         mock.DATA_STORAGE_EXCLUDED_FIELDS = "window_start_time,window_end_time,window_duration_seconds,cell_index,network,sample_count"
+        mock.DATA_STORAGE_DATA_ENDPOINT = "/api/v1/processed/latency"
+        mock.DATA_STORAGE_CELL_ENDPOINT = "/api/v1/cell"
         yield mock
 
 
@@ -238,3 +240,56 @@ class TestDataStorageClient:
 
             assert is_valid is False
             assert set(invalid) == {"foo", "bar", "baz"}
+
+    @pytest.mark.asyncio
+    async def test_get_known_cells_success(self, mock_settings):
+        """Test successfully fetching known cells."""
+        client = DataStorageClient()
+        mock_cells = [0, 1, 2, 5, 7]
+
+        with patch("httpx.AsyncClient") as mock_async_client:
+            mock_response = MagicMock()
+            mock_response.json.return_value = mock_cells
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get.return_value = mock_response
+            mock_async_client.return_value.__aenter__.return_value = mock_client_instance
+
+            cells = await client.get_known_cells()
+
+            assert cells == [0, 1, 2, 5, 7]
+            mock_client_instance.get.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_fetch_cell_data_success(self, mock_settings):
+        """Test successfully fetching cell data."""
+        client = DataStorageClient()
+        mock_data = [
+            {
+                "window_start_time": 1000,
+                "window_end_time": 1060,
+                "cell_index": 0,
+                "rsrp_mean": -85.0,
+                "latency_mean": 20.0,
+            }
+        ]
+
+        with patch("httpx.AsyncClient") as mock_async_client:
+            mock_response = MagicMock()
+            mock_response.json.return_value = mock_data
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get.return_value = mock_response
+            mock_async_client.return_value.__aenter__.return_value = mock_client_instance
+
+            data = await client.fetch_cell_data(
+                cell_index=0,
+                start_timestamp=1000,
+                end_timestamp=2000,
+                window_duration_seconds=60,
+            )
+
+            assert len(data) == 1
+            assert data[0]["rsrp_mean"] == -85.0
