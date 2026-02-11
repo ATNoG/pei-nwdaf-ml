@@ -10,6 +10,11 @@ from src.schemas.model import (
     ModelSummary,
     ModelDetail,
 )
+from src.schemas.inference import (
+    InferenceRequest,
+    ForecastStepPrediction,
+    InferenceResult,
+)
 
 
 class TestModelConfig:
@@ -256,3 +261,119 @@ class TestModelDetail:
         assert detail.last_trained_at is None
         assert detail.mlflow_run_id is None
         assert detail.training_loss is None
+
+
+class TestInferenceRequest:
+    """Tests for InferenceRequest schema."""
+
+    def test_valid_request(self):
+        """Test creating a valid inference request."""
+        req = InferenceRequest(model_id="uuid-123", cell_id=5)
+
+        assert req.model_id == "uuid-123"
+        assert req.cell_id == 5
+
+    def test_cell_id_zero_valid(self):
+        """Test that cell_id=0 is valid (boundary)."""
+        req = InferenceRequest(model_id="uuid-123", cell_id=0)
+
+        assert req.cell_id == 0
+
+    def test_negative_cell_id_invalid(self):
+        """Test that negative cell_id is rejected."""
+        with pytest.raises(ValidationError):
+            InferenceRequest(model_id="uuid-123", cell_id=-1)
+
+    def test_missing_model_id_invalid(self):
+        """Test that model_id is required."""
+        with pytest.raises(ValidationError):
+            InferenceRequest(cell_id=5)
+
+    def test_missing_cell_id_invalid(self):
+        """Test that cell_id is required."""
+        with pytest.raises(ValidationError):
+            InferenceRequest(model_id="uuid-123")
+
+
+class TestForecastStepPrediction:
+    """Tests for ForecastStepPrediction schema."""
+
+    def test_valid_prediction(self):
+        """Test creating a valid prediction."""
+        pred = ForecastStepPrediction(
+            step=1, values={"latency_mean": 12.345}
+        )
+
+        assert pred.step == 1
+        assert pred.values == {"latency_mean": 12.345}
+
+    def test_step_zero_invalid(self):
+        """Test that step=0 is rejected (ge=1)."""
+        with pytest.raises(ValidationError):
+            ForecastStepPrediction(step=0, values={"a": 1.0})
+
+    def test_negative_step_invalid(self):
+        """Test that negative step is rejected."""
+        with pytest.raises(ValidationError):
+            ForecastStepPrediction(step=-1, values={"a": 1.0})
+
+    def test_empty_values_valid(self):
+        """Test that empty dict values is valid."""
+        pred = ForecastStepPrediction(step=1, values={})
+
+        assert pred.values == {}
+
+    def test_multiple_values(self):
+        """Test multiple output fields in values."""
+        pred = ForecastStepPrediction(
+            step=1,
+            values={"latency_mean": 1.0, "throughput_mean": 2.0, "sinr_mean": 3.0},
+        )
+
+        assert len(pred.values) == 3
+
+
+class TestInferenceResult:
+    """Tests for InferenceResult schema."""
+
+    def test_valid_full_result(self):
+        """Test creating a full valid inference result."""
+        result = InferenceResult(
+            model_id="uuid-123",
+            model_name="test_model",
+            model_version=2,
+            architecture=ArchitectureType.LSTM,
+            cell_id=5,
+            lookback_steps=30,
+            forecast_steps=5,
+            window_duration_seconds=60,
+            input_fields=["rsrp_mean", "sinr_mean"],
+            output_fields=["latency_mean"],
+            predictions=[
+                ForecastStepPrediction(step=1, values={"latency_mean": 10.0}),
+                ForecastStepPrediction(step=2, values={"latency_mean": 11.0}),
+            ],
+        )
+
+        assert result.model_id == "uuid-123"
+        assert result.model_version == 2
+        assert result.architecture == ArchitectureType.LSTM
+        assert len(result.predictions) == 2
+
+    def test_architecture_ann(self):
+        """Test that ANN architecture is accepted."""
+        result = InferenceResult(
+            model_id="uuid-123",
+            model_name="test_ann",
+            model_version=1,
+            architecture=ArchitectureType.ANN,
+            cell_id=0,
+            lookback_steps=10,
+            forecast_steps=3,
+            window_duration_seconds=60,
+            input_fields=["rsrp_mean"],
+            output_fields=["latency_mean"],
+            predictions=[],
+        )
+
+        assert result.architecture == ArchitectureType.ANN
