@@ -1,0 +1,471 @@
+"""Unit tests for InferenceService."""
+
+import pytest
+import numpy as np
+from unittest.mock import MagicMock, AsyncMock, patch
+
+from src.services.inference_service import InferenceService
+from src.schemas.model import ArchitectureType, ModelConfig, ModelDetail
+from src.schemas.inference import ForecastStepPrediction
+
+
+@pytest.fixture
+def sample_model_config():
+    """Model config with small dimensions for fast tests."""
+    return ModelConfig(
+        architecture=ArchitectureType.LSTM,
+        input_fields=["rsrp_mean", "sinr_mean", "latency_mean"],
+        output_fields=["latency_mean"],
+        window_duration_seconds=60,
+        lookback_steps=5,
+        forecast_steps=3,
+        hidden_size=32,
+    )
+
+
+@pytest.fixture
+def sample_model_detail(sample_model_config):
+    return ModelDetail(
+        id="test-uuid",
+        name="test_model",
+        config=sample_model_config,
+        created_at=None,
+        latest_version=2,
+        last_trained_at=None,
+        mlflow_run_id=None,
+        training_loss=None,
+    )
+
+
+@pytest.fixture
+def sample_cell_data():
+    """10 windows of cell data with known values."""
+    return [
+        {
+            "window_start_time": 1000 + i * 60,
+            "rsrp_mean": -85.0 + i,
+            "sinr_mean": 10.0 + i * 0.5,
+            "latency_mean": 20.0 + i * 2,
+        }
+        for i in range(10)
+    ]
+
+
+@pytest.fixture
+def mock_mlflow_service():
+    return MagicMock()
+
+
+@pytest.fixture
+def mock_data_storage_client():
+    mock = MagicMock()
+    mock.fetch_cell_data = AsyncMock(return_value=[])
+    return mock
+
+
+@pytest.fixture
+def inference_service(mock_mlflow_service, mock_data_storage_client):
+    return InferenceService(
+        mlflow_service=mock_mlflow_service,
+        data_storage_client=mock_data_storage_client,
+    )
+
+
+class TestInferenceServicePredict:
+    """Tests for InferenceService.predict method."""
+
+    async def test_predict_success(
+        self,
+        inference_service,
+        mock_mlflow_service,
+        mock_data_storage_client,
+        sample_model_detail,
+        sample_cell_data,
+    ):
+        """Test full happy path returns correct structure."""
+        config = sample_model_detail.config
+        num_outputs = len(config.output_fields)
+        forecast_steps = config.forecast_steps
+
+        mock_mlflow_service.get_model.return_value = sample_model_detail
+        mock_data_storage_client.fetch_cell_data = AsyncMock(
+            return_value=sample_cell_data
+        )
+
+        # Mock model loading and prediction
+        mock_model = MagicMock()
+        mock_model.predict.return_value = np.zeros(
+            (1, forecast_steps * num_outputs), dtype=np.float32
+        )
+
+        with patch(
+            "mlflow.pytorch.load_model"
+        ) as mock_load, patch(
+            "src.services.inference_service.MODEL_REGISTRY"
+        ) as mock_registry:
+            mock_model_class = MagicMock(return_value=mock_model)
+            mock_registry.get.return_value = mock_model_class
+            mock_load.return_value = MagicMock()
+
+            result = await inference_service.predict(
+                model_id="test-uuid", cell_id=5
+            )
+
+        assert result["model_id"] == "test-uuid"
+        assert result["model_name"] == "test_model"
+        assert result["model_version"] == 2
+        assert result["architecture"] == ArchitectureType.LSTM
+        assert result["cell_id"] == 5
+        assert result["lookback_steps"] == config.lookback_steps
+        assert result["forecast_steps"] == forecast_steps
+        assert len(result["predictions"]) == forecast_steps
+
+    async def test_predict_model_not_found(
+        self, inference_service, mock_mlflow_service
+    ):
+        """Test that ValueError from get_model propagates."""
+        mock_mlflow_service.get_model.side_effect = ValueError("not found")
+
+        with pytest.raises(ValueError, match="not found"):
+            await inference_service.predict(model_id="bad-uuid", cell_id=0)
+
+    async def test_predict_model_not_trained(
+        self, inference_service, mock_mlflow_service, sample_model_detail
+    ):
+        """Test that untrained model (latest_version=None) raises ValueError."""
+        sample_model_detail.latest_version = None
+        mock_mlflow_service.get_model.return_value = sample_model_detail
+
+        with pytest.raises(ValueError, match="no trained versions"):
+            await inference_service.predict(model_id="test-uuid", cell_id=0)
+
+    async def test_predict_no_data(
+        self,
+        inference_service,
+        mock_mlflow_service,
+        mock_data_storage_client,
+        sample_model_detail,
+    ):
+        """Test that empty cell data raises ValueError."""
+        mock_mlflow_service.get_model.return_value = sample_model_detail
+        mock_data_storage_client.fetch_cell_data = AsyncMock(return_value=[])
+
+        mock_model = MagicMock()
+        with patch(
+            "mlflow.pytorch.load_model"
+        ), patch("src.services.inference_service.MODEL_REGISTRY") as mock_registry:
+            mock_registry.get.return_value = MagicMock(return_value=mock_model)
+
+            with pytest.raises(ValueError, match="No data available"):
+                await inference_service.predict(model_id="test-uuid", cell_id=99)
+
+    async def test_predict_insufficient_data(
+        self,
+        inference_service,
+        mock_mlflow_service,
+        mock_data_storage_client,
+        sample_model_detail,
+    ):
+        """Test that fewer windows than lookback raises ValueError."""
+        mock_mlflow_service.get_model.return_value = sample_model_detail
+        # Only 3 windows, but lookback_steps=5
+        sparse_data = [
+            {"window_start_time": 1000 + i * 60, "rsrp_mean": 1.0}
+            for i in range(3)
+        ]
+        mock_data_storage_client.fetch_cell_data = AsyncMock(
+            return_value=sparse_data
+        )
+
+        mock_model = MagicMock()
+        with patch(
+            "mlflow.pytorch.load_model"
+        ), patch("src.services.inference_service.MODEL_REGISTRY") as mock_registry:
+            mock_registry.get.return_value = MagicMock(return_value=mock_model)
+
+            with pytest.raises(ValueError, match="Insufficient data"):
+                await inference_service.predict(model_id="test-uuid", cell_id=5)
+
+    async def test_predict_model_failure(
+        self,
+        inference_service,
+        mock_mlflow_service,
+        mock_data_storage_client,
+        sample_model_detail,
+        sample_cell_data,
+    ):
+        """Test that model.predict() failure raises RuntimeError."""
+        mock_mlflow_service.get_model.return_value = sample_model_detail
+        mock_data_storage_client.fetch_cell_data = AsyncMock(
+            return_value=sample_cell_data
+        )
+
+        mock_model = MagicMock()
+        mock_model.predict.side_effect = RuntimeError("CUDA error")
+
+        with patch(
+            "mlflow.pytorch.load_model"
+        ), patch("src.services.inference_service.MODEL_REGISTRY") as mock_registry:
+            mock_registry.get.return_value = MagicMock(return_value=mock_model)
+
+            with pytest.raises(RuntimeError, match="Prediction failed"):
+                await inference_service.predict(model_id="test-uuid", cell_id=5)
+
+    async def test_predict_correct_timestamp_calculation(
+        self,
+        inference_service,
+        mock_mlflow_service,
+        mock_data_storage_client,
+        sample_model_detail,
+        sample_cell_data,
+    ):
+        """Test that timestamps include the buffer window."""
+        config = sample_model_detail.config
+        mock_mlflow_service.get_model.return_value = sample_model_detail
+        mock_data_storage_client.fetch_cell_data = AsyncMock(
+            return_value=sample_cell_data
+        )
+
+        mock_model = MagicMock()
+        mock_model.predict.return_value = np.zeros(
+            (1, config.forecast_steps * len(config.output_fields)),
+            dtype=np.float32,
+        )
+
+        with patch(
+            "mlflow.pytorch.load_model"
+        ), patch(
+            "src.services.inference_service.MODEL_REGISTRY"
+        ) as mock_registry, patch(
+            "src.services.inference_service.calculate_timestamps",
+            return_value=(1000, 2000),
+        ) as mock_ts:
+            mock_registry.get.return_value = MagicMock(return_value=mock_model)
+
+            await inference_service.predict(model_id="test-uuid", cell_id=5)
+
+            expected_seconds = (
+                config.lookback_steps * config.window_duration_seconds
+                + config.window_duration_seconds
+            )
+            mock_ts.assert_called_once_with(expected_seconds)
+
+
+class TestLoadTrainedModel:
+    """Tests for InferenceService._load_trained_model."""
+
+    def test_loads_lstm_with_num_layers(self, inference_service, sample_model_config):
+        """Test LSTM model is loaded with num_layers=2."""
+        with patch(
+            "mlflow.pytorch.load_model"
+        ) as mock_load, patch(
+            "src.services.inference_service.MODEL_REGISTRY"
+        ) as mock_registry:
+            mock_model_class = MagicMock()
+            mock_registry.get.return_value = mock_model_class
+            mock_load.return_value = MagicMock()
+
+            inference_service._load_trained_model(
+                model_id="test-uuid",
+                version=2,
+                config=sample_model_config,
+            )
+
+            mock_model_class.assert_called_once_with(
+                input_fields=sample_model_config.input_fields,
+                output_fields=sample_model_config.output_fields,
+                window_duration_seconds=sample_model_config.window_duration_seconds,
+                lookback_steps=sample_model_config.lookback_steps,
+                forecast_steps=sample_model_config.forecast_steps,
+                hidden_size=sample_model_config.hidden_size,
+                num_layers=2,
+            )
+
+    def test_loads_ann_without_num_layers(self, inference_service):
+        """Test ANN model is loaded without num_layers kwarg."""
+        ann_config = ModelConfig(
+            architecture=ArchitectureType.ANN,
+            input_fields=["rsrp_mean"],
+            output_fields=["latency_mean"],
+            window_duration_seconds=60,
+            lookback_steps=5,
+            forecast_steps=3,
+            hidden_size=32,
+        )
+
+        with patch(
+            "mlflow.pytorch.load_model"
+        ) as mock_load, patch(
+            "src.services.inference_service.MODEL_REGISTRY"
+        ) as mock_registry:
+            mock_model_class = MagicMock()
+            mock_registry.get.return_value = mock_model_class
+            mock_load.return_value = MagicMock()
+
+            inference_service._load_trained_model(
+                model_id="test-uuid", version=1, config=ann_config
+            )
+
+            mock_model_class.assert_called_once_with(
+                input_fields=ann_config.input_fields,
+                output_fields=ann_config.output_fields,
+                window_duration_seconds=ann_config.window_duration_seconds,
+                lookback_steps=ann_config.lookback_steps,
+                forecast_steps=ann_config.forecast_steps,
+                hidden_size=ann_config.hidden_size,
+            )
+
+    def test_unsupported_architecture(self, inference_service, sample_model_config):
+        """Test that unsupported architecture raises ValueError."""
+        with patch(
+            "src.services.inference_service.MODEL_REGISTRY"
+        ) as mock_registry:
+            mock_registry.get.return_value = None
+
+            with pytest.raises(ValueError, match="Unsupported architecture"):
+                inference_service._load_trained_model(
+                    model_id="test-uuid", version=1, config=sample_model_config
+                )
+
+    def test_correct_mlflow_uri(self, inference_service, sample_model_config):
+        """Test that the correct MLflow URI is constructed."""
+        with patch(
+            "mlflow.pytorch.load_model"
+        ) as mock_load, patch(
+            "src.services.inference_service.MODEL_REGISTRY"
+        ) as mock_registry:
+            mock_registry.get.return_value = MagicMock()
+            mock_load.return_value = MagicMock()
+
+            inference_service._load_trained_model(
+                model_id="test-uuid", version=2, config=sample_model_config
+            )
+
+            mock_load.assert_called_once_with("models:/test-uuid/2")
+
+    def test_assigns_loaded_model(self, inference_service, sample_model_config):
+        """Test that the loaded PyTorch model is assigned to the wrapper."""
+        loaded_pytorch_model = MagicMock()
+
+        with patch(
+            "mlflow.pytorch.load_model",
+            return_value=loaded_pytorch_model,
+        ), patch(
+            "src.services.inference_service.MODEL_REGISTRY"
+        ) as mock_registry:
+            mock_wrapper = MagicMock()
+            mock_registry.get.return_value = MagicMock(return_value=mock_wrapper)
+
+            result = inference_service._load_trained_model(
+                model_id="test-uuid", version=2, config=sample_model_config
+            )
+
+            assert result.model == loaded_pytorch_model
+
+    def test_mlflow_load_failure_raises_valueerror(
+        self, inference_service, sample_model_config
+    ):
+        """Test that MLflow load failure is wrapped in ValueError."""
+        with patch(
+            "mlflow.pytorch.load_model",
+            side_effect=Exception("Connection refused"),
+        ), patch(
+            "src.services.inference_service.MODEL_REGISTRY"
+        ) as mock_registry:
+            mock_registry.get.return_value = MagicMock()
+
+            with pytest.raises(ValueError, match="Failed to load model artifact"):
+                inference_service._load_trained_model(
+                    model_id="test-uuid", version=2, config=sample_model_config
+                )
+
+
+class TestStructurePredictions:
+    """Tests for InferenceService._structure_predictions."""
+
+    @pytest.fixture
+    def service(self):
+        return InferenceService(
+            mlflow_service=MagicMock(),
+            data_storage_client=MagicMock(),
+        )
+
+    def test_basic_reshaping(self, service):
+        """Test reshaping flat output into per-step predictions."""
+        raw = np.array([[1.0, 2.0, 3.0]])
+
+        result = service._structure_predictions(
+            raw_predictions=raw,
+            output_fields=["latency_mean"],
+            forecast_steps=3,
+        )
+
+        assert len(result) == 3
+        assert result[0].values["latency_mean"] == 1.0
+        assert result[1].values["latency_mean"] == 2.0
+        assert result[2].values["latency_mean"] == 3.0
+
+    def test_multiple_output_fields(self, service):
+        """Test reshaping with multiple output fields per step."""
+        raw = np.array([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]])
+
+        result = service._structure_predictions(
+            raw_predictions=raw,
+            output_fields=["latency_mean", "throughput_mean"],
+            forecast_steps=3,
+        )
+
+        assert len(result) == 3
+        assert result[0].values == {"latency_mean": 1.0, "throughput_mean": 2.0}
+        assert result[1].values == {"latency_mean": 3.0, "throughput_mean": 4.0}
+        assert result[2].values == {"latency_mean": 5.0, "throughput_mean": 6.0}
+
+    def test_values_rounded(self, service):
+        """Test that values are rounded to 6 decimal places."""
+        raw = np.array([[1.1234567890]])
+
+        result = service._structure_predictions(
+            raw_predictions=raw,
+            output_fields=["latency_mean"],
+            forecast_steps=1,
+        )
+
+        assert result[0].values["latency_mean"] == 1.123457
+
+    def test_step_numbering_starts_at_one(self, service):
+        """Test that steps are 1-indexed."""
+        raw = np.array([[1.0, 2.0, 3.0]])
+
+        result = service._structure_predictions(
+            raw_predictions=raw,
+            output_fields=["latency_mean"],
+            forecast_steps=3,
+        )
+
+        assert result[0].step == 1
+        assert result[1].step == 2
+        assert result[2].step == 3
+
+    def test_returns_forecast_step_prediction_type(self, service):
+        """Test that each element is a ForecastStepPrediction."""
+        raw = np.array([[1.0]])
+
+        result = service._structure_predictions(
+            raw_predictions=raw,
+            output_fields=["latency_mean"],
+            forecast_steps=1,
+        )
+
+        assert isinstance(result[0], ForecastStepPrediction)
+
+    def test_shape_mismatch_raises(self, service):
+        """Test that mismatched output shape raises RuntimeError."""
+        # 4 values but expect 3 (3 steps * 1 field)
+        raw = np.array([[1.0, 2.0, 3.0, 4.0]])
+
+        with pytest.raises(RuntimeError, match="Model output shape mismatch"):
+            service._structure_predictions(
+                raw_predictions=raw,
+                output_fields=["latency_mean"],
+                forecast_steps=3,
+            )
