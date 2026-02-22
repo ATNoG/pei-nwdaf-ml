@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from src.routers.v1 import inference_router, training_router, config_router, model_router, websocket
+from src.routers.v1 import inference_router, training_router, config_router, model_router, websocket, expiry_router
 
 v1_router = APIRouter()
 
@@ -29,4 +29,10 @@ v1_router.include_router(
     websocket.router,
     prefix="/websocket",
     tags=["v1", "websocket"]
+)
+
+v1_router.include_router(
+    expiry_router.router,
+    prefix="/expiry",
+    tags=["v1", "expiry"]
 )

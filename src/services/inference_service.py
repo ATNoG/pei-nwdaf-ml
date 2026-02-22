@@ -1,6 +1,7 @@
 from typing_extensions import Type
 import numpy as np
 import logging
+from datetime import datetime, timezone
 from typing import List, Dict, Any
 
 from src.models import get_trainer_class
@@ -71,6 +72,7 @@ class InferenceService:
             )
 
         model_name = config.get_model_name(model_type)
+        self._stamp_model_usage(model_name)
         feature_mean,feature_std = self._load_normalization(model_name)
         if feature_mean is None or feature_std is None:
             raise RuntimeError(f"Normalization artifacts missing for model {model_name}")
@@ -192,6 +194,17 @@ class InferenceService:
         else:
             weeks = horizon // 604800
             return f"P{weeks}W"
+
+    def _stamp_model_usage(self, model_name: str) -> None:
+        """Update last_used_at and use_count tags on the model. Non-fatal if it fails."""
+        try:
+            tags = self.ml_interface.get_model_tags(model_name)
+            use_count = int(tags.get("use_count", "0"))
+            now = str(datetime.now(timezone.utc).timestamp())
+            self.ml_interface.set_model_tag(model_name, "last_used_at", now)
+            self.ml_interface.set_model_tag(model_name, "use_count", str(use_count + 1))
+        except Exception as e:
+            logger.warning(f"Failed to stamp usage for model {model_name}: {e}")
 
     def _load_normalization(self, model_name: str):
         """

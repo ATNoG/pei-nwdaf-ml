@@ -6,6 +6,7 @@ import logging
 from src.interface.mlint import MLInterface
 from src.routers.v1 import v1_router
 from src.services.config_service import load_defaults_from_mlflow
+from src.services.expiry_service import ExpiryService, ExpiryScheduler
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -49,6 +50,13 @@ async def lifespan(app: FastAPI):
         # Start Kafka consumer in background thread
         ml_interface.start_consumer_background()
 
+        # Start model expiry scheduler
+        expiry_service = ExpiryService(ml_interface)
+        app.state.expiry_service = expiry_service
+        expiry_scheduler = ExpiryScheduler(expiry_service)
+        expiry_scheduler.start()
+        app.state.expiry_scheduler = expiry_scheduler
+
         logger.info("ML Service ready to accept requests")
         logger.info(f"Kafka: {KAFKA_HOST}:{KAFKA_PORT}")
         logger.info(f"Topics: {KAFKA_TOPICS}")
@@ -62,6 +70,10 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Shutting down ML Service...")
+
+    expiry_scheduler = getattr(app.state, "expiry_scheduler", None)
+    if expiry_scheduler:
+        expiry_scheduler.stop()
 
     if ml_interface:
         try:

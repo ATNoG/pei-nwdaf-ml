@@ -967,11 +967,11 @@ class MLInterface():
     def clear_model_tag(self, model_name: str, key: str) -> bool:
         """
         Remove a tag from a registered model.
-        """                                                                 
+        """
         if not self._mlflow_connected:
             logger.warning("MLFlow not connected - cannot clear model tag")
             return False
-                                                                                                                    
+
         try:
             from mlflow.tracking import MlflowClient
             client = MlflowClient()
@@ -981,6 +981,23 @@ class MLInterface():
         except Exception as e:
             logger.error(f"Failed to clear tag from model {model_name}: {e}")
             return False
+
+    def get_model_tags(self, model_name: str) -> dict:
+        """
+        Get all tags for a registered model.
+        """
+        if not self._mlflow_connected:
+            logger.warning("MLFlow not connected - cannot get model tags")
+            return {}
+
+        try:
+            from mlflow.tracking import MlflowClient
+            client = MlflowClient()
+            model = client.get_registered_model(model_name)
+            return model.tags or {}
+        except Exception as e:
+            logger.error(f"Failed to get tags for model {model_name}: {e}")
+            return {}
       
     def get_model_metrics(self, run_id: str) -> Dict[str, Any]:
         """
