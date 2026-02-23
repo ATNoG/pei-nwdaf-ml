@@ -1,67 +1,53 @@
-"""
-Analytics predictions endpoint for NWDAF
-"""
-from fastapi import APIRouter, HTTPException, Request
+"""Router for inference endpoints."""
+
 import logging
 
+from fastapi import APIRouter, Depends, HTTPException
+
 from src.services.inference_service import InferenceService
-from src.schemas.inference import (
-    AnalyticsRequest,
-    PredictionHorizon
-)
+from src.services.mlflow_service import MLflowService
+from src.services.data_storage_client import DataStorageClient
+from src.core.dependencies import get_mlflow_client
+from src.schemas.inference import InferenceRequest, InferenceResult
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
 
 
-@router.post("", response_model=PredictionHorizon)
-async def get_cell_analytics(
-    analytics_request: AnalyticsRequest,
-    request: Request
-):
+def get_inference_service(
+    mlflow_service: MLflowService = Depends(get_mlflow_client),
+) -> InferenceService:
+    """Dependency for InferenceService."""
+    data_storage_client = DataStorageClient()
+    return InferenceService(
+        mlflow_service=mlflow_service,
+        data_storage_client=data_storage_client,
+    )
+
+
+@router.post("", response_model=InferenceResult)
+async def run_inference(
+    request: InferenceRequest,
+    inference_service: InferenceService = Depends(get_inference_service),
+) -> InferenceResult:
     """
-    Get analytics prediction for a cell.
+    Run inference on a trained model for a specific cell.
 
-    Returns prediction for the specified analytics type and time horizon.
-
-    Args:
-        analytics_request: Analytics request with cell_id, horizon, and optional model_type
-
-    Returns:
-        PredictionHorizon: Prediction result with interval, value, and confidence
-
-    Raises:
-        400: Invalid parameters or insufficient data
-        404: Analytics type not registered or model not found
-        500: ML Interface not initialized
+    Fetches the most recent data for the given cell, runs the trained
+    model, and returns structured predictions per forecast step.
     """
-    ml_interface = request.app.state.ml_interface
-    if not ml_interface:
-        raise HTTPException(status_code=500, detail="ML Interface not initialized")
-
-    service = InferenceService(ml_interface)
-
     try:
-        return await service.predict_cell_analytics(
-            analytics_type=analytics_request.analytics_type,
-            cell_index=analytics_request.cell_index,
-            horizon=analytics_request.horizon,
-            model_type=analytics_request.model_type
+        result = await inference_service.predict(
+            model_id=request.model_id,
+            cell_id=request.cell_id,
         )
-
+        return InferenceResult(**result)
     except ValueError as e:
-        # Configuration errors, invalid parameters, data issues
-        error_msg = str(e)
-        if "No config found" in error_msg or "not found" in error_msg:
-            raise HTTPException(status_code=404, detail=error_msg)
-        else:
-            raise HTTPException(status_code=400, detail=error_msg)
-
+        logger.warning(f"Inference validation error: {str(e)}")
+        raise HTTPException(status_code=422, detail=str(e))
     except RuntimeError as e:
-        # Model loading errors
-        raise HTTPException(status_code=500, detail=f"Model error: {str(e)}")
-
+        logger.error(f"Inference prediction error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        logger.error(f"Unexpected error in prediction: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        logger.error(f"Inference failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Inference failed: {str(e)}")

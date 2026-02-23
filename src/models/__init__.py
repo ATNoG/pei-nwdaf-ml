@@ -1,10 +1,12 @@
 from src.models.lstm import LSTM
 from src.models.ann import ANN
 from src.models.model_interface import ModelInterface
+from src.schemas.model import ArchitectureType
 
-models = [ANN,LSTM]
+models = [ANN, LSTM]
 
-# Dictionary for O(1) model lookup by name
-models_dict = {
-    cls.__name__.lower(): cls for cls in models
+# Model registry for training service
+MODEL_REGISTRY = {
+    ArchitectureType.LSTM: LSTM,
+    ArchitectureType.ANN: ANN,
 }
