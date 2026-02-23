@@ -22,6 +22,7 @@ RUN mkdir utils && cd utils \
 && rmdir -p kafka/src
 
 COPY pyproject.toml .
+ENV UV_HTTP_TIMEOUT=300
 RUN uv sync --no-dev
 
 COPY src/ ./src/
