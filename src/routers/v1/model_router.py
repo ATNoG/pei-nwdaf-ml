@@ -1,139 +1,71 @@
-"""
-Model Instance Creation API Endpoint
-"""
-from fastapi import APIRouter, HTTPException, Request
-import logging
-
-from src.services.model_service import ModelService
-from src.schemas.model import (
-    ModelCreationRequest,
-    ModelCreationResponse,
-    ModelDeletionResponse
-)
-
-logger = logging.getLogger(__name__)
-
+from fastapi import APIRouter, Depends, HTTPException
+from src.services.mlflow_service import MLflowService
+from src.services.data_storage_client import DataStorageClient
+from src.core.dependencies import get_mlflow_client
+from src.schemas.model import (ModelConfig,ModelCreate,ModelDetail,ModelSummary)
 router = APIRouter()
 
-
-@router.post("/instance", response_model=ModelCreationResponse)
-async def create_model_instance(
-    model_request: ModelCreationRequest,
-    request: Request
-):
-    """
-    Create a new model instance for an analytics type.
-
-    Args:
-        model_request: Analytics type, horizon, and model type to create
-
-    Returns:
-        Confirmation that model instance was created
-
-    Raises:
-        400: Invalid parameters or model already exists
-        404: Analytics type/horizon not configured or model type not found
-        500: ML Interface not initialized or error creating model
-
-    Example:
-        POST /api/v1/model
-        {
-            "analytics_type": "latency",
-            "horizon": 60,
-            "model_type": "ann"
+@router.get("", response_model=list[ModelSummary])
+async def get_models(
+    output_field: str | None = None,
+    mlflow_service: MLflowService = Depends(get_mlflow_client),
+) -> list[ModelSummary]:
+    """Get all registered models, optionally filtered by output field name."""
+    models = mlflow_service.list_models()
+    if output_field:
+        valid_ids = {
+            c.model_id
+            for c in mlflow_service.ml_config_service.list_all()
+            if output_field in c.output_fields
         }
-    """
-    ml_interface = request.app.state.ml_interface
-    if not ml_interface:
-        raise HTTPException(status_code=500, detail="ML Interface not initialized")
+        models = [m for m in models if m.id in valid_ids]
+    return models
 
-    service = ModelService(ml_interface)
 
+@router.post("", response_model=ModelDetail, status_code=201)
+async def create_model(
+    model_create: ModelCreate,
+    mlflow_service: MLflowService = Depends(get_mlflow_client),
+    data_storage_client: DataStorageClient = Depends(DataStorageClient)
+) -> ModelDetail:
+    """Create a new model with field validation"""
     try:
-        logger.info(
-            f"Creating model instance for analytics_type={model_request.analytics_type}, "
-            f"horizon={model_request.horizon}s, model_type={model_request.model_type}"
-        )
+        # Validate input fields
+        all_fields = model_create.config.input_fields + model_create.config.output_fields
+        is_valid, invalid_fields = await data_storage_client.validate_fields(all_fields)
 
-        service.create_model_instance(
-            horizon=model_request.horizon,
-            analytics_type=model_request.analytics_type,
-            model_type=model_request.model_type
-        )
+        if not is_valid:
+            available_fields = await data_storage_client.get_available_fields()
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "Invalid field names provided",
+                    "invalid_fields": sorted(invalid_fields),
+                    "available_fields": sorted(available_fields)
+                }
+            )
 
-        # Get the model name from config for response
-        from src.config.inference_type import get_inference_config
-        config = get_inference_config((model_request.analytics_type, model_request.horizon))
-        model_name = config.get_model_name(model_request.model_type)
-
-        logger.info(f"Successfully created model instance: {model_name}")
-
-        return ModelCreationResponse(
-            status="created",
-            model_name=model_name,
-            message=f"Model instance {model_name} created successfully"
-        )
-
+        # Create model
+        model = mlflow_service.create_model(model_create.name, model_create.config)
+        return model
     except ValueError as e:
-        error_msg = str(e)
-        if "not found" in error_msg.lower() or "not accepted" in error_msg.lower():
-            raise HTTPException(status_code=404, detail=error_msg)
-        elif "already exists" in error_msg.lower():
-            raise HTTPException(status_code=400, detail=error_msg)
-        else:
-            raise HTTPException(status_code=400, detail=error_msg)
-
-    except Exception as e:
-        logger.error(f"Error creating model instance: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.delete("/instance/{model_name}", response_model=ModelDeletionResponse)
-async def delete_model_instance(
-    model_name: str,
-    request: Request
-):
-    """
-    Delete a model instance from MLflow registry.
-
-    Args:
-        model_name: Name of the model to delete
-
-    Returns:
-        Confirmation that model instance was deleted
-
-    Raises:
-        404: Model instance not found
-        500: ML Interface not initialized or error deleting model
-
-    Example:
-        DELETE /api/v1/model/instance/latency_ann_60
-    """
-    ml_interface = request.app.state.ml_interface
-    if not ml_interface:
-        raise HTTPException(status_code=500, detail="ML Interface not initialized")
-
-    service = ModelService(ml_interface)
-
+@router.get("/{model_id}", response_model=ModelDetail)
+async def get_model(model_id: str, mlflow_service: MLflowService = Depends(get_mlflow_client)) -> ModelDetail:
+    """Get model by ID"""
     try:
-        logger.info(f"Deleting model instance: {model_name}")
-
-        service.delete_model_instance(model_name=model_name)
-
-        logger.info(f"Successfully deleted model instance: {model_name}")
-
-        return ModelDeletionResponse(
-            status="deleted",
-            model_name=model_name,
-            message=f"Model instance {model_name} deleted successfully"
-        )
-
+        model = mlflow_service.get_model(model_id)
+        return model
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
-    except Exception as e:
-        logger.error(f"Error deleting model instance: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+@router.delete("/{model_id}", status_code=204)
+async def delete_model(model_id: str, mlflow_service: MLflowService = Depends(get_mlflow_client)) -> None:
+    """Delete model by ID"""
+    try:
+        mlflow_service.delete_model(model_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
