@@ -486,15 +486,11 @@ class TrainingService:
 
         Args:
             model_id: Model ID (MLflow model name)
-            model_uri: MLflow model URI (runs:/ URI resolved to actual artifact path)
+            model_uri: MLflow model URI
 
         Returns:
             Model version number as string
         """
-        # mlflow.register_model handles both cases (new and existing registered
-        # models) and correctly resolves runs:/ URIs to the actual S3 artifact
-        # path before storing the source — unlike create_model_version(source=
-        # runs_uri) which would store the unresolved URI and break artifact loading.
         result = mlflow.register_model(model_uri, model_id)
         version = result.version
         logger.info(f"Registered model {model_id} version {version}")
