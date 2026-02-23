@@ -1,6 +1,7 @@
 """NWDAF ML Service - FastAPI application entrypoint."""
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 import mlflow
@@ -25,6 +26,11 @@ async def lifespan(app: FastAPI):
     logger.info(f"MLflow tracking URI: {settings.MLFLOW_TRACKING_URI}")
     logger.info(f"Data Storage API: {settings.DATA_STORAGE_API_URL}")
     logger.info(f"Database URL: {settings.DATABASE_URL}")
+
+    os.environ["MLFLOW_S3_ENDPOINT_URL"] = settings.MLFLOW_S3_ENDPOINT_URL
+    os.environ["AWS_ACCESS_KEY_ID"] = settings.AWS_ACCESS_KEY_ID
+    os.environ["AWS_SECRET_ACCESS_KEY"] = settings.AWS_SECRET_ACCESS_KEY
+    os.environ["AWS_DEFAULT_REGION"] = settings.AWS_DEFAULT_REGION
 
     # Set MLflow tracking URI
     mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)

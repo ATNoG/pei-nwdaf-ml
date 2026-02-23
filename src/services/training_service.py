@@ -12,12 +12,16 @@ from src.db.training_job import TrainingJobDB
 from src.services.data_storage_client import DataStorageClient
 from src.services.mlflow_service import MLflowService
 from src.services.config_service import MLConfigService
+from src.services.data_preparation import (
+    calculate_timestamps,
+    extract_fields,
+    prepare_sequences,
+)
 from src.schemas.model import ArchitectureType
 from src.schemas.training import TrainingJobStatus
 from src.models import MODEL_REGISTRY
 import mlflow
 from mlflow.tracking import MlflowClient
-from mlflow.exceptions import RestException
 
 logger = logging.getLogger(__name__)
 
@@ -320,18 +324,8 @@ class TrainingService:
         logger.info(f"Released training lock for model {model_id}")
 
     def _calculate_timestamps(self, lookback_seconds: int) -> tuple[int, int]:
-        """
-        Calculate start and end timestamps from lookback duration.
-
-        Args:
-            lookback_seconds: Duration to look back
-
-        Returns:
-            Tuple of (start_timestamp, end_timestamp)
-        """
-        end_time = datetime.now()
-        start_time = end_time.timestamp() - lookback_seconds
-        return (int(start_time), int(end_time.timestamp()))
+        """Calculate start and end timestamps from lookback duration."""
+        return calculate_timestamps(lookback_seconds)
 
     async def _fetch_all_cell_data(
         self,
@@ -381,30 +375,8 @@ class TrainingService:
         input_fields: list[str],
         output_fields: list[str],
     ) -> tuple[list[list[float]], list[list[float]]]:
-        """
-        Extract input and output field values from data windows.
-
-        Args:
-            data: List of data windows
-            input_fields: Fields to use as inputs
-            output_fields: Fields to use as outputs
-
-        Returns:
-            Tuple of (input_data, output_data) as lists of lists
-        """
-        input_data = []
-        output_data = []
-
-        for window in data:
-            # Extract input fields (default to 0.0 if missing)
-            input_row = [float(window.get(field, 0.0)) for field in input_fields]
-            input_data.append(input_row)
-
-            # Extract output fields (default to 0.0 if missing)
-            output_row = [float(window.get(field, 0.0)) for field in output_fields]
-            output_data.append(output_row)
-
-        return input_data, output_data
+        """Extract input and output field values from data windows."""
+        return extract_fields(data, input_fields, output_fields)
 
     def _prepare_sequences_per_cell(
         self,
@@ -414,54 +386,10 @@ class TrainingService:
         lookback_steps: int,
         forecast_steps: int,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Create training sequences from cell data using sliding windows.
-
-        Args:
-            cell_data: Sorted list of data windows for one cell
-            input_fields: Input feature field names
-            output_fields: Output target field names
-            lookback_steps: Number of past windows for input
-            forecast_steps: Number of future windows for output
-
-        Returns:
-            Tuple of (X, y) numpy arrays
-            X shape: (num_sequences, lookback_steps, num_input_fields)
-            y shape: (num_sequences, forecast_steps, num_output_fields)
-        """
-        # Extract fields from all windows
-        input_data, output_data = self._extract_fields(cell_data, input_fields, output_fields)
-
-        # Convert to numpy arrays
-        input_arr = np.array(input_data, dtype=np.float32)
-        output_arr = np.array(output_data, dtype=np.float32)
-
-        # Check if we have enough data
-        min_length = lookback_steps + forecast_steps
-        if len(input_arr) < min_length:
-            # Return empty arrays if insufficient data
-            return (
-                np.empty((0, lookback_steps, len(input_fields)), dtype=np.float32),
-                np.empty((0, forecast_steps, len(output_fields)), dtype=np.float32),
-            )
-
-        # Create sequences using sliding window
-        X_sequences = []
-        y_sequences = []
-
-        for i in range(len(input_arr) - lookback_steps - forecast_steps + 1):
-            # Input: lookback_steps windows
-            X_seq = input_arr[i : i + lookback_steps]
-            # Output: forecast_steps windows (starting after input)
-            y_seq = output_arr[i + lookback_steps : i + lookback_steps + forecast_steps]
-
-            X_sequences.append(X_seq)
-            y_sequences.append(y_seq)
-
-        X = np.array(X_sequences, dtype=np.float32)
-        y = np.array(y_sequences, dtype=np.float32)
-
-        return X, y
+        """Create training sequences from cell data using sliding windows."""
+        return prepare_sequences(
+            cell_data, input_fields, output_fields, lookback_steps, forecast_steps
+        )
 
     async def _train_and_log(
         self,
@@ -563,27 +491,9 @@ class TrainingService:
         Returns:
             Model version number as string
         """
-        client = MlflowClient()
-
-        try:
-            # Check if model already exists in registry
-            client.get_registered_model(model_id)
-
-            # Model exists - create new version
-            model_version = client.create_model_version(
-                name=model_id,
-                source=model_uri,
-                run_id=mlflow.active_run().info.run_id
-            )
-            version = model_version.version
-            logger.info(f"Created version {version} for existing model {model_id}")
-
-        except RestException:
-            # Model doesn't exist - register it
-            result = mlflow.register_model(model_uri, model_id)
-            version = result.version
-            logger.info(f"Registered new model {model_id} with version {version}")
-
+        result = mlflow.register_model(model_uri, model_id)
+        version = result.version
+        logger.info(f"Registered model {model_id} version {version}")
         return str(version)
 
     def _build_model(

@@ -182,7 +182,7 @@ class TestMLflowServiceGet:
         # Mock run info
         mock_run = MagicMock()
         mock_run.info.end_time = 1706832000000  # 2024-02-02 00:00:00 UTC
-        mock_run.data.metrics = {"loss": 0.042}
+        mock_run.data.metrics = {"final_loss": 0.042}
         mock_mlflow_client.get_run.return_value = mock_run
 
         service = MLflowService(mock_mlflow_client, mock_config_service)
