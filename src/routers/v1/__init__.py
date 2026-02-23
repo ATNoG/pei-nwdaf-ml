@@ -1,32 +1,13 @@
+from .model_router import router as model_router
+from .fields_router import router as fields_router
+from .training_router import router as training_router
+from .inference_router import router as inference_router
+from .performance_router import router as performance_router
 from fastapi import APIRouter
-from src.routers.v1 import inference_router, training_router, config_router, model_router, websocket
 
-v1_router = APIRouter()
-
-v1_router.include_router(
-    inference_router.router,
-    prefix="/analytics",
-    tags=["v1", "analytics"]
-)
-
-v1_router.include_router(
-    training_router.router,
-    prefix="/training",
-    tags=["v1", "training"]
-)
-v1_router.include_router(
-    config_router.router,
-    prefix="/config",
-    tags=["v1", "config"]
-)
-v1_router.include_router(
-    model_router.router,
-    prefix="/model",
-    tags=["v1", "model"]
-)
-
-v1_router.include_router(
-    websocket.router,
-    prefix="/websocket",
-    tags=["v1", "websocket"]
-)
+router = APIRouter()
+router.include_router(model_router, prefix="/models")
+router.include_router(fields_router, prefix="/fields")
+router.include_router(training_router, prefix="/training")
+router.include_router(inference_router, prefix="/inference", tags=["Inference"])
+router.include_router(performance_router, prefix="/performance", tags=["Performance"])
