@@ -22,7 +22,6 @@ from src.schemas.training import TrainingJobStatus
 from src.models import MODEL_REGISTRY
 import mlflow
 from mlflow.tracking import MlflowClient
-from mlflow.exceptions import RestException
 
 logger = logging.getLogger(__name__)
 
@@ -487,32 +486,18 @@ class TrainingService:
 
         Args:
             model_id: Model ID (MLflow model name)
-            model_uri: MLflow model URI
+            model_uri: MLflow model URI (runs:/ URI resolved to actual artifact path)
 
         Returns:
             Model version number as string
         """
-        client = MlflowClient()
-
-        try:
-            # Check if model already exists in registry
-            client.get_registered_model(model_id)
-
-            # Model exists - create new version
-            model_version = client.create_model_version(
-                name=model_id,
-                source=model_uri,
-                run_id=mlflow.active_run().info.run_id
-            )
-            version = model_version.version
-            logger.info(f"Created version {version} for existing model {model_id}")
-
-        except RestException:
-            # Model doesn't exist - register it
-            result = mlflow.register_model(model_uri, model_id)
-            version = result.version
-            logger.info(f"Registered new model {model_id} with version {version}")
-
+        # mlflow.register_model handles both cases (new and existing registered
+        # models) and correctly resolves runs:/ URIs to the actual S3 artifact
+        # path before storing the source — unlike create_model_version(source=
+        # runs_uri) which would store the unresolved URI and break artifact loading.
+        result = mlflow.register_model(model_uri, model_id)
+        version = result.version
+        logger.info(f"Registered model {model_id} version {version}")
         return str(version)
 
     def _build_model(

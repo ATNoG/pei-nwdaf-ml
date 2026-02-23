@@ -99,7 +99,7 @@ class MLflowService:
                     run = self.client.get_run(latest_mv.run_id)
                     last_trained_at = datetime.fromtimestamp(run.info.end_time / 1000)
                     mlflow_run_id = latest_mv.run_id
-                    training_loss = run.data.metrics.get("loss")
+                    training_loss = run.data.metrics.get("final_loss")
                 except Exception:
                     pass
 
