@@ -182,7 +182,7 @@ class TestTrainingService:
         """Test timestamp calculation from lookback_seconds."""
         lookback_seconds = 3600  # 1 hour
 
-        with patch("src.services.training_service.datetime") as mock_datetime:
+        with patch("src.services.data_preparation.datetime") as mock_datetime:
             mock_now = datetime(2026, 2, 2, 12, 0, 0)
             mock_datetime.now.return_value = mock_now
 

@@ -6,9 +6,19 @@ from src.schemas.model import (ModelConfig,ModelCreate,ModelDetail,ModelSummary)
 router = APIRouter()
 
 @router.get("", response_model=list[ModelSummary])
-async def get_models(mlflow_service: MLflowService = Depends(get_mlflow_client)) -> list[ModelSummary]:
-    """Get all registered models"""
+async def get_models(
+    output_field: str | None = None,
+    mlflow_service: MLflowService = Depends(get_mlflow_client),
+) -> list[ModelSummary]:
+    """Get all registered models, optionally filtered by output field name."""
     models = mlflow_service.list_models()
+    if output_field:
+        valid_ids = {
+            c.model_id
+            for c in mlflow_service.ml_config_service.list_all()
+            if output_field in c.output_fields
+        }
+        models = [m for m in models if m.id in valid_ids]
     return models
 
 
