@@ -1,191 +1,220 @@
-"""
-Model Training API Endpoint
+"""Router for model training endpoints."""
 
-"""
-from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
 import logging
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+
+from sqlalchemy.orm import Session
 
 from src.services.training_service import TrainingService
+from src.services.mlflow_service import MLflowService
+from src.services.data_storage_client import DataStorageClient
+from src.core.dependencies import get_mlflow_client, get_db
 from src.schemas.training import (
-    ModelTrainingRequest,
-    ModelTrainingStartResponse,
-    ModelTrainingInfo
+    TrainingRequest,
+    TrainingResponse,
+    TrainingJobDetail,
+    TrainingJobSummary,
 )
-from src.routers.v1.websocket import get_training_status_manager
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
 
+# Thread pool for background training tasks
+training_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="training")
 
-def _train_model_background(
-    ml_interface,
-    model_name: str,
-):
-    """Background task to train model with WebSocket status updates"""
-    status_manager = get_training_status_manager()
 
-    def status_callback(current_epoch: int, total_epochs: int, loss: float = None):
-        """Callback to update WebSocket clients with training progress"""
-        status = {
-            "current_epoch": current_epoch,
-            "total_epochs": total_epochs,
-            "status": "training" if current_epoch < total_epochs else "completed",
-        }
-        if loss is not None:
-            status["loss"] = float(loss)
+def get_training_service(
+    mlflow_service: MLflowService = Depends(get_mlflow_client),
+    db: Session = Depends(get_db),
+) -> TrainingService:
+    """Dependency for TrainingService."""
+    data_storage_client = DataStorageClient()
+    return TrainingService(
+        mlflow_service=mlflow_service,
+        data_storage_client=data_storage_client,
+        ml_config_service=mlflow_service.ml_config_service,
+        db=db,
+    )
 
-        # Run async broadcast in event loop
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(status_manager.update_training_status(model_name, status))
-            loop.close()
-        except Exception as e:
-            logger.warning(f"Failed to update WebSocket status: {e}")
 
+def _run_training_sync(job_id: str):
+    """
+    Synchronous training task that runs in a separate thread.
+
+    Args:
+        job_id: Training job ID to execute
+    """
+    import asyncio
+    import mlflow
+    from mlflow import MlflowClient
+    from src.db.database import SessionLocal
+    from src.services.config_service import MLConfigService
+    from src.core.config import settings
+
+    db = SessionLocal()
     try:
-        service = TrainingService(ml_interface)
-        result = service.train_model_by_name(
-            model_name=model_name,
-            data_limit_per_cell=100,
-            status_callback=status_callback,
+        # Create MLflow service with new db session
+        mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
+        client = MlflowClient()
+        config_service = MLConfigService(db)
+        mlflow_service_instance = MLflowService(client, config_service)
+
+        # Create training service
+        data_storage_client = DataStorageClient()
+        training_service = TrainingService(
+            mlflow_service=mlflow_service_instance,
+            data_storage_client=data_storage_client,
+            ml_config_service=config_service,
+            db=db,
         )
 
-        # Final status with result
-        final_status = {
-            "status": "completed",
-            "message": "Training completed successfully",
-            "training_loss": result.get("training_loss"),
-            "samples_used": result.get("samples_used"),
-        }
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(status_manager.update_training_status(model_name, final_status))
-        loop.close()
-
-    except Exception as e:
-        logger.error(f"Background training failed: {e}", exc_info=True)
-
-        # Error status
-        error_status = {
-            "status": "error",
-            "message": str(e)
-        }
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(status_manager.update_training_status(model_name, error_status))
-            loop.close()
-        except Exception:
-            pass
+        # Run async training in new event loop
+        asyncio.run(training_service.execute_training(job_id))
+    finally:
+        db.close()
 
 
-@router.post("", response_model=ModelTrainingStartResponse)
-async def start_training(
-    training_request: ModelTrainingRequest,
+@router.post("/train", response_model=TrainingResponse, status_code=202)
+async def train_model(
+    request: TrainingRequest,
     background_tasks: BackgroundTasks,
-    request: Request
-):
+    training_service: TrainingService = Depends(get_training_service),
+) -> TrainingResponse:
     """
-    Start training a model by name.
-
-    Training runs in the background. Use GET endpoint to check status.
-    Uses the model's stored configuration for training parameters.
+    Train a model with historical data.
 
     Args:
-        training_request: Model name
+        request: Training request with model_id and lookback_seconds
+        background_tasks: FastAPI background tasks
+        training_service: Training service dependency
 
     Returns:
-        Confirmation that training has started
-
-    Raises:
-        404: Model not found or missing metadata
-        500: ML Interface not initialized
-
-    Example:
-        POST /api/v1/training
-        {
-            "model_name": "latency_lstm_60"
-        }
+        Training job information with job_id and status
     """
-    ml_interface = request.app.state.ml_interface
-    if not ml_interface:
-        raise HTTPException(status_code=500, detail="ML Interface not initialized")
-
-    service = TrainingService(ml_interface)
-
     try:
-        # Validate model exists and has metadata
-        service.get_model_metadata(training_request.model_name)
-
-        logger.info(f"Starting background training for {training_request.model_name}")
-
-        # Start training in background
-        background_tasks.add_task(
-            _train_model_background,
-            ml_interface,
-            training_request.model_name,
+        job_info = training_service.create_training_job(
+            request.model_id,
+            request.lookback_seconds
         )
 
-        return ModelTrainingStartResponse(
-            status="training_started",
-            model_name=training_request.model_name,
-            message=f"Training started for {training_request.model_name}"
+        # Queue actual training in thread pool
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(
+            training_executor,
+            _run_training_sync,
+            job_info["job_id"]
         )
 
+        logger.info(f"Training job {job_info['job_id']} created and queued")
+
+        return TrainingResponse(
+            job_id=job_info["job_id"],
+            model_id=job_info["model_id"],
+            status=job_info["status"],
+            message="Training job queued successfully. Check status at GET /training/jobs/{job_id}",
+            created_at=job_info["created_at"]
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create training job: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create training job: {str(e)}")
+
+
+@router.get("/jobs", response_model=list[TrainingJobSummary])
+async def list_training_jobs(
+    model_id: str | None = None,
+    status: str | None = None,
+    training_service: TrainingService = Depends(get_training_service),
+) -> list[TrainingJobSummary]:
+    """
+    List training jobs with optional filters.
+
+    Args:
+        model_id: Filter by model ID
+        status: Filter by status (queued, running, completed, failed, cancelled)
+        training_service: Training service dependency
+
+    Returns:
+        List of training job summaries
+    """
+    try:
+        jobs = training_service.list_jobs(model_id=model_id, status=status)
+        return [
+            TrainingJobSummary(
+                job_id=job.job_id,
+                model_id=job.model_id,
+                status=job.status,
+                created_at=job.created_at,
+                started_at=job.started_at,
+            )
+            for job in jobs
+        ]
+    except Exception as e:
+        logger.error(f"Failed to list jobs: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list jobs: {str(e)}")
+
+
+@router.get("/jobs/{job_id}", response_model=TrainingJobDetail)
+async def get_training_job(
+    job_id: str,
+    training_service: TrainingService = Depends(get_training_service),
+) -> TrainingJobDetail:
+    """
+    Get detailed information about a specific training job.
+
+    Args:
+        job_id: Training job ID
+        training_service: Training service dependency
+
+    Returns:
+        Detailed job information
+    """
+    try:
+        job = training_service.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+        return TrainingJobDetail(
+            job_id=job.job_id,
+            model_id=job.model_id,
+            status=job.status,
+            mlflow_run_id=job.mlflow_run_id,
+            created_at=job.created_at,
+            started_at=job.started_at,
+            completed_at=job.completed_at,
+            error_message=job.error_message,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get job: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get job: {str(e)}")
+
+
+@router.delete("/jobs/{job_id}", status_code=204)
+async def cancel_training_job(
+    job_id: str,
+    training_service: TrainingService = Depends(get_training_service),
+):
+    """
+    Cancel a training job.
+
+    Args:
+        job_id: Training job ID to cancel
+        training_service: Training service dependency
+
+    Returns:
+        No content (204)
+    """
+    try:
+        training_service.cancel_job(job_id)
+        logger.info(f"Training job {job_id} cancelled")
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.error(f"Error starting training: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-
-@router.get("/{model_name}", response_model=ModelTrainingInfo)
-async def get_training_info(
-    model_name: str,
-    request: Request
-):
-    """
-    Get training information for a model by name.
-
-    Args:
-        model_name: Name of the model (e.g., 'latency_ann_60')
-
-    Returns:
-        Training information including last training time and metrics
-
-    Raises:
-        404: Model not found
-        500: ML Interface not initialized or error retrieving info
-
-    Example:
-        GET /api/v1/training/latency_ann_60
-    """
-    ml_interface = request.app.state.ml_interface
-    if not ml_interface:
-        raise HTTPException(status_code=500, detail="ML Interface not initialized")
-
-    service = TrainingService(ml_interface)
-
-    try:
-        info = service.get_model_info_by_name(model_name)
-
-        return ModelTrainingInfo(
-            model_name=info["model_name"],
-            model_version=info.get("model_version"),
-            last_training_time=info.get("last_training_time"),
-            training_loss=info.get("training_loss"),
-            samples_used=int(info.get("samples_used", 0)) if info.get("samples_used") else None,
-            features_used=int(info.get("features_used", 0)) if info.get("features_used") else None,
-            run_id=info.get("run_id")
-        )
-
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error getting training info: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        logger.error(f"Failed to cancel job: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to cancel job: {str(e)}")

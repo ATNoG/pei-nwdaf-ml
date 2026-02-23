@@ -1,224 +1,227 @@
-from typing_extensions import Type
-import numpy as np
-import logging
-from typing import List, Dict, Any
+"""Service for running inference on trained models."""
 
-from src.models import get_trainer_class
-from src.config.inference_type import get_inference_config
-from src.config.model_config import ModelConfig
-from src.schemas.inference import PredictionHorizon
-from src.utils.features import extract_features
+import asyncio
+import logging
+
+import numpy as np
+import mlflow
+
+from src.schemas.model import ArchitectureType, ModelConfig
+from src.schemas.inference import ForecastStepPrediction
+from src.services.mlflow_service import MLflowService
+from src.services.data_storage_client import DataStorageClient
+from src.services.data_preparation import calculate_timestamps, prepare_last_sequence
+from src.models import MODEL_REGISTRY
 
 logger = logging.getLogger(__name__)
 
 
 class InferenceService:
-    """Generate predictions for a cell using stored data"""
+    """Service for loading trained models and running predictions."""
 
-    def __init__(self, ml_interface):
-        self.ml_interface = ml_interface
-        self._model_cache: Dict[str, Any] = {}
-
-    async def predict_cell_analytics(
+    def __init__(
         self,
-        analytics_type: str,
-        cell_index: int,
-        horizon: int,
-        model_type: str | None = None,
+        mlflow_service: MLflowService,
+        data_storage_client: DataStorageClient,
     ):
-        # 1. Resolve config
-        config = get_inference_config((analytics_type, horizon))
-        if not config:
-            raise ValueError(f"No config found for {analytics_type} with horizon {horizon}")
+        self.mlflow_service = mlflow_service
+        self.data_storage_client = data_storage_client
 
-        if model_type is None:
-            model_type = config.default_model
-            if not model_type:
-                raise ValueError("No default model configured")
+    async def predict(self, model_id: str, cell_id: int) -> dict:
+        """
+        Run inference for a single cell using a trained model.
 
-        # 2. Load model (from MLflow or cache)
-        try:
-            trainer_class = get_trainer_class(model_type)
-        except ValueError:
-            raise ValueError(f"Model type not found: {model_type}")
+        Args:
+            model_id: UUID of the model.
+            cell_id: Cell index to predict for.
 
-        # Get sequence length from default config
-        default_config = ModelConfig.default()
-        sequence_length = default_config.sequence.sequence_length
+        Returns:
+            Dict containing model info and structured predictions.
 
-        model = self._load_model(
-            analytics_type=analytics_type,
-            horizon=horizon,
-            model_type=model_type,
+        Raises:
+            ValueError: If model not found, not trained, or insufficient data.
+            RuntimeError: If prediction fails.
+        """
+        # Load model detail (config + version info) — sync call, run in thread
+        model_detail = await asyncio.to_thread(
+            self.mlflow_service.get_model, model_id
         )
+        config = model_detail.config
 
-        if model is None:
-            raise RuntimeError(f"Failed to load model {model_type}")
-
-        # 3. Fetch latest windows
-
-
-        windows = await self.ml_interface.fetch_latest_cell_data(
-            endpoint=config.storage_endpoint,
-            cell_index=cell_index,
-            window_duration_seconds=config.window_duration_seconds,
-            num_windows=sequence_length,
-        )
-
-        if not windows or len(windows) < sequence_length:
+        # Validate model has been trained
+        if model_detail.latest_version is None:
             raise ValueError(
-                f"Not enough data: need {sequence_length}, got {len(windows) if windows else 0}"
+                f"Model '{model_id}' has no trained versions. "
+                f"Train the model first via POST /v1/training/train"
             )
 
-        model_name = config.get_model_name(model_type)
-        feature_mean,feature_std = self._load_normalization(model_name)
-        if feature_mean is None or feature_std is None:
-            raise RuntimeError(f"Normalization artifacts missing for model {model_name}")
-
-        # 4. Prepare data
-        X, features_list, last_window = self._prepare_data(
-            windows,
-            analytics_type,
-            feature_mean,
-            feature_std
-        )
-        interval_str = self._horizon_to_iso8601(horizon)
-        last_window_end = last_window.get("window_end_time", 0)
-
-        # 5. Predict
-        prediction = model.predict(X)
-
-        return PredictionHorizon(
-            used_model=model_type,
-            cell_index=cell_index,
-            interval=interval_str,
-            predicted_value=float(prediction),
-            confidence=1,
-            data=features_list,
-            target_start_time=last_window_end,
-            target_end_time=last_window_end + horizon,
+        # Load trained model from MLflow — sync call, run in thread
+        model = await asyncio.to_thread(
+            self._load_trained_model,
+            model_id=model_id,
+            version=model_detail.latest_version,
+            config=config,
         )
 
-    def _prepare_data(
+        # Fetch recent cell data
+        lookback_seconds = config.lookback_steps * config.window_duration_seconds
+        buffer_seconds = config.window_duration_seconds
+        start_ts, end_ts = calculate_timestamps(lookback_seconds + buffer_seconds)
+
+        cell_data = await self.data_storage_client.fetch_cell_data(
+            cell_index=cell_id,
+            start_timestamp=start_ts,
+            end_timestamp=end_ts,
+            window_duration_seconds=config.window_duration_seconds,
+        )
+
+        if not cell_data:
+            raise ValueError(
+                f"No data available for cell {cell_id} in the "
+                f"last {lookback_seconds} seconds"
+            )
+
+        # Sort by timestamp
+        cell_data.sort(key=lambda x: x.get("window_start_time", 0))
+
+        # Prepare input sequence
+        X = prepare_last_sequence(
+            cell_data=cell_data,
+            input_fields=config.input_fields,
+            lookback_steps=config.lookback_steps,
+        )
+
+        X = np.nan_to_num(X, nan=0.0)
+
+        # Run prediction
+        try:
+            raw_predictions = model.predict(X)
+        except Exception as e:
+            raise RuntimeError(f"Prediction failed: {str(e)}")
+
+        # Structure predictions
+        predictions = self._structure_predictions(
+            raw_predictions=raw_predictions,
+            output_fields=config.output_fields,
+            forecast_steps=config.forecast_steps,
+        )
+
+        return {
+            "model_id": model_id,
+            "model_name": model_detail.name,
+            "model_version": model_detail.latest_version,
+            "architecture": config.architecture,
+            "cell_id": cell_id,
+            "lookback_steps": config.lookback_steps,
+            "forecast_steps": config.forecast_steps,
+            "window_duration_seconds": config.window_duration_seconds,
+            "input_fields": config.input_fields,
+            "output_fields": config.output_fields,
+            "predictions": predictions,
+        }
+
+    def _load_trained_model(
         self,
-        windows_data: List[Dict[str, Any]],
-        analytics_type: str,
-        feature_mean,
-        feature_std
+        model_id: str,
+        version: int,
+        config: ModelConfig,
     ):
         """
+        Load a trained model from the MLflow model registry.
+
+        Args:
+            model_id: Model ID (MLflow registered model name).
+            version: Model version to load.
+            config: Model configuration.
+
         Returns:
-            X: np.ndarray [1, seq_len, num_features]
-            features_list: extracted features per window
-            last_window: last raw window
+            ModelInterface instance with loaded weights.
+
+        Raises:
+            ValueError: If architecture is unsupported or model cannot be loaded.
         """
+        model_class = MODEL_REGISTRY.get(config.architecture)
+        if not model_class:
+            raise ValueError(f"Unsupported architecture: {config.architecture}")
 
-        features_list = [extract_features(w,analytics_type) for w in windows_data]
-
-        if not features_list or not features_list[0]:
-            raise ValueError("No valid features extracted")
-
-        feature_keys = sorted(features_list[0].keys())
-
-        sequence = []
-        for f in features_list:
-            sequence.append([f.get(k, 0.0) for k in feature_keys])
-
-        X = np.array(sequence, dtype=np.float32)
-        X = np.nan_to_num(X)
-        X = X[np.newaxis, :, :]
-
-        # feature_mean and feature_std already have keepdims shape from training
-        # For 3D: (1, 1, features), for 2D: (features,) or (1, features)
-        # Use directly without adding extra dimensions
-        X = (X - feature_mean) / (feature_std + 1e-8)
-
-        return X, features_list, windows_data[-1]
-
-    def _get_model_name(self, inference_type: str, horizon: int, model_type: str) -> str:
-        """construct model name for an inference type"""
-        key = (inference_type, horizon)
-        config = get_inference_config(key)
-        if not config:
-            raise ValueError(f"config not found: {inference_type} with horizon {horizon}s")
-        return config.get_model_name(model_type)
-
-    def _load_model(self, analytics_type: str, horizon: int, model_type: str) -> Any:
-        """load model for an inference type"""
-        try:
-            model_name = self._get_model_name(analytics_type, horizon, model_type)
-        except ValueError as e:
-            logger.error(str(e))
-            return None
-
-        # check cache first
-        if model_name in self._model_cache:
-            logger.debug(f"Using cached model: {model_name}")
-            return self._model_cache[model_name]
+        model_uri = f"models:/{model_id}/{version}"
+        logger.info(f"Loading model from {model_uri}")
 
         try:
-            # try to load from production stage
-            model = self.ml_interface.get_model_by_name(model_name, stage='Production')
-
-            if not model:
-                # try latest version if production doesn't exist
-                model = self.ml_interface.get_model_by_name(model_name, stage=None)
-
-            if model:
-                self._model_cache[model_name] = model
-                logger.info(f"Loaded model for analytics type {analytics_type} (horizon={horizon}s): {model_name}")
-                return model
-            else:
-                logger.warning(f"model not found for {analytics_type} (horizon={horizon}s): {model_name}")
-                return None
-
+            loaded_pytorch_model = mlflow.pytorch.load_model(model_uri)
         except Exception as e:
-            logger.error(f"Error loading model for analytics type {analytics_type}: {e}")
-            return None
+            raise ValueError(
+                f"Failed to load model artifact from {model_uri}: {str(e)}"
+            )
 
-    def _horizon_to_iso8601(self, horizon: int) -> str:
-        """Convert horizon in seconds to ISO 8601 duration"""
-        if horizon < 60:
-            return f"PT{horizon}S"
-        elif horizon < 3600:
-            minutes = horizon // 60
-            return f"PT{minutes}M"
-        elif horizon < 86400:
-            hours = horizon // 3600
-            return f"PT{hours}H"
-        elif horizon < 604800:
-            days = horizon // 86400
-            return f"P{days}D"
+        # Create wrapper with config
+        if config.architecture == ArchitectureType.LSTM:
+            model = model_class(
+                input_fields=config.input_fields,
+                output_fields=config.output_fields,
+                window_duration_seconds=config.window_duration_seconds,
+                lookback_steps=config.lookback_steps,
+                forecast_steps=config.forecast_steps,
+                hidden_size=config.hidden_size,
+                num_layers=2,
+            )
         else:
-            weeks = horizon // 604800
-            return f"P{weeks}W"
+            model = model_class(
+                input_fields=config.input_fields,
+                output_fields=config.output_fields,
+                window_duration_seconds=config.window_duration_seconds,
+                lookback_steps=config.lookback_steps,
+                forecast_steps=config.forecast_steps,
+                hidden_size=config.hidden_size,
+            )
 
-    def _load_normalization(self, model_name: str):
+        model.model = loaded_pytorch_model
+        return model
+
+    def _structure_predictions(
+        self,
+        raw_predictions: np.ndarray,
+        output_fields: list[str],
+        forecast_steps: int,
+    ) -> list[ForecastStepPrediction]:
         """
-        Download mean/std normalization artifacts from MLflow for a given model.
+        Convert raw model output into structured predictions.
+
+        The model returns shape (1, forecast_steps * num_output_fields).
+        This reshapes it into a list of ForecastStepPrediction objects.
+
+        Args:
+            raw_predictions: Raw model output, shape (1, forecast_steps * num_outputs).
+            output_fields: List of output field names.
+            forecast_steps: Number of forecast steps.
+
         Returns:
-            mean: np.ndarray
-            std: np.ndarray
+            List of ForecastStepPrediction with field-value mappings per step.
         """
-        import tempfile
+        flat = raw_predictions[0]
+        num_outputs = len(output_fields)
+        expected_length = forecast_steps * num_outputs
 
-        try:
-            # Download artifacts to a temp directory
-            with tempfile.TemporaryDirectory() as tmpdir:
-                mean_path = self.ml_interface.download_model_artifact(
-                    model_name=model_name,
-                    artifact_path="normalization/{}_mean.npy".format(model_name),
-                    dst_path=tmpdir
-                )
-                std_path = self.ml_interface.download_model_artifact(
-                    model_name=model_name,
-                    artifact_path="normalization/{}_std.npy".format(model_name),
-                    dst_path=tmpdir
-                )
+        if len(flat) != expected_length:
+            raise RuntimeError(
+                f"Model output shape mismatch: got {len(flat)} values, "
+                f"expected {expected_length} (forecast_steps={forecast_steps} "
+                f"* output_fields={num_outputs})"
+            )
 
-                mean = np.load(mean_path)
-                std = np.load(std_path)
-                return mean, std
-        except Exception as e:
-            logger.warning(f"Failed to load normalization artifacts for {model_name}: {e}")
-            return None, None
+        predictions = []
+        for step_idx in range(forecast_steps):
+            start = step_idx * num_outputs
+            end = start + num_outputs
+            step_values = flat[start:end]
+
+            values_dict = {
+                field: round(float(step_values[i]), 6)
+                for i, field in enumerate(output_fields)
+            }
+
+            predictions.append(
+                ForecastStepPrediction(step=step_idx + 1, values=values_dict)
+            )
+
+        return predictions
