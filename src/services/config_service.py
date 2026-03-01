@@ -12,11 +12,11 @@ class MLConfigService:
     def __init__(self, db: Session):
         self.db = db
 
-    def create(self, db_config: ModelConfigDB) -> None:
+    def create(self, model_config: ModelConfigDB) -> None:
         """Create a new model configuration in the database."""
-        self.db.add(db_config)
+        self.db.add(model_config)
         self.db.commit()
-        self.db.refresh(db_config)
+        self.db.refresh(model_config)
 
     def get_config(self, model_id: str) -> ModelConfigDB | None:
         """Get model configuration by ID."""
@@ -28,21 +28,21 @@ class MLConfigService:
 
     def delete_model(self, model_id: str) -> None:
         """Delete a model configuration from the database."""
-        db_config = self.get_config(model_id)
-        if not db_config:
+        model_config = self.get_config(model_id)
+        if not model_config:
             raise ValueError(f"Model '{model_id}' not found")
 
-        self.db.delete(db_config)
+        self.db.delete(model_config)
         self.db.commit()
 
-    def config_from_db(self, db_config: ModelConfigDB) -> ModelConfig:
+    def config_from_db(self, model_config: ModelConfigDB) -> ModelConfig:
         """Convert database model to ModelConfig schema."""
         return ModelConfig(
-            architecture=ArchitectureType(db_config.architecture),
-            input_fields=db_config.input_fields,
-            output_fields=db_config.output_fields,
-            window_duration_seconds=db_config.window_duration_seconds,
-            lookback_steps=db_config.lookback_steps,
-            forecast_steps=db_config.forecast_steps,
-            hidden_size=db_config.hidden_size,
+            architecture=ArchitectureType(model_config.architecture),
+            input_fields=model_config.input_fields,
+            output_fields=model_config.output_fields,
+            window_duration_seconds=model_config.window_duration_seconds,
+            lookback_steps=model_config.lookback_steps,
+            forecast_steps=model_config.forecast_steps,
+            hidden_size=model_config.hidden_size,
         )

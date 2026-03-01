@@ -35,7 +35,7 @@ class MLflowService:
             self.client.set_registered_model_tag(model_id, "name", name)
 
             # Store full config in PostgreSQL
-            db_config = ModelConfigDB(
+            model_config = ModelConfigDB(
                 model_id=model_id,
                 name=name,
                 architecture=config.architecture.value,
@@ -47,7 +47,7 @@ class MLflowService:
                 hidden_size=config.hidden_size,
                 created_at=created_at,
             )
-            self.ml_config_service.create(db_config)
+            self.ml_config_service.create(model_config)
 
             return ModelDetail(
                 id=model_id,
@@ -70,8 +70,8 @@ class MLflowService:
     def get_model(self, model_id: str) -> ModelDetail:
         """Get model details by ID from PostgreSQL and MLflow."""
         # Get config from PostgreSQL
-        db_config = self.ml_config_service.get_config(model_id)
-        if not db_config:
+        model_config = self.ml_config_service.get_config(model_id)
+        if not model_config:
             raise ValueError(f"Model '{model_id}' not found")
 
         # Get MLflow metadata
@@ -81,7 +81,7 @@ class MLflowService:
             raise ValueError(f"Model '{model_id}' not found in MLflow")
 
         # Reconstruct ModelConfig from database
-        config = self.ml_config_service.config_from_db(db_config)
+        config = self.ml_config_service.config_from_db(model_config)
 
         # Get latest version info if it exists
         latest_version = None
@@ -105,9 +105,9 @@ class MLflowService:
 
         return ModelDetail(
             id=model_id,
-            name=db_config.name,
+            name=model_config.name,
             config=config,
-            created_at=db_config.created_at,
+            created_at=model_config.created_at,
             latest_version=latest_version,
             last_trained_at=last_trained_at,
             mlflow_run_id=mlflow_run_id,
@@ -117,14 +117,14 @@ class MLflowService:
     def list_models(self) -> list[ModelSummary]:
         """List all registered models from PostgreSQL and MLflow."""
         # Get all configs from PostgreSQL
-        db_configs = self.ml_config_service.list_all()
+        model_configs = self.ml_config_service.list_all()
 
         summaries = []
-        for db_config in db_configs:
+        for model_config in model_configs:
             # Get MLflow metadata for version info
             latest_version = None
             try:
-                rm = self.client.get_registered_model(db_config.model_id)
+                rm = self.client.get_registered_model(model_config.model_id)
                 if rm.latest_versions:
                     latest_version = int(rm.latest_versions[0].version)
             except MlflowException:
@@ -133,10 +133,10 @@ class MLflowService:
 
             summaries.append(
                 ModelSummary(
-                    id=db_config.model_id,
-                    name=db_config.name,
-                    architecture=ArchitectureType(db_config.architecture),
-                    created_at=db_config.created_at,
+                    id=model_config.model_id,
+                    name=model_config.name,
+                    architecture=ArchitectureType(model_config.architecture),
+                    created_at=model_config.created_at,
                     latest_version=latest_version,
                 )
             )
