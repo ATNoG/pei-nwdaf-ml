@@ -76,13 +76,13 @@ class PerformanceService:
         updates the best_for:{field_name} tag, writes a history row per scored model,
         and returns a ranked response.
         """
-        db_configs = [
+        model_configs = [
             c
             for c in self.ml_config_service.list_all()
             if field_name in c.output_fields
         ]
 
-        if not db_configs:
+        if not model_configs:
             return FieldEvaluationResponse(
                 field_name=field_name,
                 models=[],
@@ -92,10 +92,19 @@ class PerformanceService:
 
         cells = await self.data_storage_client.get_known_cells()
         logger.info(
-            f"Evaluating {len(db_configs)} models for field '{field_name}' "
+            f"Evaluating {len(model_configs)} models for field '{field_name}' "
             f"using metric '{metric}' and up to {self.MAX_EVAL_CELLS} reference cells "
             f"(from {len(cells)} known)"
         )
+
+        # Probe once for a fallback timestamp in case the current-time window is empty
+        fallback_start_ts = await self.data_storage_client.probe_data_timestamp(cells, model_configs[0].window_duration_seconds if model_configs else 60)
+        if fallback_start_ts is not None:
+            logger.info(
+                "Evaluation fallback anchor: window_start_time=%d (data found in storage)",
+                fallback_start_ts,)
+        else:
+            logger.warning("Evaluation: no data found in storage for any time range — scores will be None")
 
         evaluated_at = datetime.now(tz=timezone.utc)
         evaluated_at_str = evaluated_at.isoformat()
@@ -103,13 +112,13 @@ class PerformanceService:
         performances: list[ModelPerformance] = []
         scored: list[tuple[str, float]] = []  # (model_id, score)
 
-        for db_config in db_configs:
-            model_detail = self.mlflow_service.get_model(db_config.model_id)
+        for model_config in model_configs:
+            model_detail = self.mlflow_service.get_model(model_config.model_id)
 
             base = ModelPerformance(
-                model_id=db_config.model_id,
-                model_name=db_config.name,
-                architecture=ArchitectureType(db_config.architecture),
+                model_id=model_config.model_id,
+                model_name=model_config.name,
+                architecture=ArchitectureType(model_config.architecture),
                 latest_version=model_detail.latest_version,
                 training_loss=model_detail.training_loss,
                 last_trained_at=model_detail.last_trained_at,
@@ -124,17 +133,17 @@ class PerformanceService:
             config = model_detail.config
 
             try:
-                model = self._load_model(db_config.model_id, model_detail.latest_version, config)
-                score = await self._compute_score_for_model(model, config, field_name, cells, metric)
+                model = self._load_model(model_config.model_id, model_detail.latest_version, config)
+                score = await self._compute_score_for_model(model, config, field_name, cells, metric, fallback_start_ts)
             except Exception as e:
                 logger.warning(
-                    f"Failed to evaluate model {db_config.model_id} for field '{field_name}': {e}"
+                    f"Failed to evaluate model {model_config.model_id} for field '{field_name}': {e}"
                 )
                 score = None
 
             if score is not None:
-                scored.append((db_config.model_id, score))
-                self._write_history_row(db_config.model_id, field_name, score, metric, "evaluate")
+                scored.append((model_config.model_id, score))
+                self._write_history_row(model_config.model_id, field_name, score, metric, "evaluate")
 
             performances.append(
                 base.model_copy(update={"score": score, "evaluated_at": evaluated_at})
@@ -174,13 +183,13 @@ class PerformanceService:
         No computation is triggered. Models that have never been evaluated
         will have score=None and evaluated_at=None.
         """
-        db_configs = [
+        model_configs = [
             c
             for c in self.ml_config_service.list_all()
             if field_name in c.output_fields
         ]
 
-        if not db_configs:
+        if not model_configs:
             return FieldEvaluationResponse(
                 field_name=field_name,
                 models=[],
@@ -193,9 +202,9 @@ class PerformanceService:
         last_evaluated_at: datetime | None = None
         field_metric: str = "rmse"  # fallback for sort direction if no tag found
 
-        for db_config in db_configs:
-            model_detail = self.mlflow_service.get_model(db_config.model_id)
-            tags = self._get_registered_model_tags(db_config.model_id)
+        for model_config in model_configs:
+            model_detail = self.mlflow_service.get_model(model_config.model_id)
+            tags = self._get_registered_model_tags(model_config.model_id)
 
             score_str = tags.get(_score_key(field_name))
             eval_at_str = tags.get(_eval_at_key(field_name))
@@ -208,7 +217,7 @@ class PerformanceService:
             metric = metric_str or "rmse"
 
             if is_best:
-                best_model_id = db_config.model_id
+                best_model_id = model_config.model_id
                 field_metric = metric
 
             if evaluated_at and (
@@ -218,9 +227,9 @@ class PerformanceService:
 
             performances.append(
                 ModelPerformance(
-                    model_id=db_config.model_id,
-                    model_name=db_config.name,
-                    architecture=ArchitectureType(db_config.architecture),
+                    model_id=model_config.model_id,
+                    model_name=model_config.name,
+                    architecture=ArchitectureType(model_config.architecture),
                     latest_version=model_detail.latest_version,
                     training_loss=model_detail.training_loss,
                     score=score,
@@ -244,24 +253,24 @@ class PerformanceService:
 
         Returns None if no evaluation has been run yet.
         """
-        db_configs = [
+        model_configs = [
             c
             for c in self.ml_config_service.list_all()
             if field_name in c.output_fields
         ]
 
-        for db_config in db_configs:
-            tags = self._get_registered_model_tags(db_config.model_id)
+        for model_config in model_configs:
+            tags = self._get_registered_model_tags(model_config.model_id)
             if tags.get(_best_key(field_name)) == "true":
-                model_detail = self.mlflow_service.get_model(db_config.model_id)
+                model_detail = self.mlflow_service.get_model(model_config.model_id)
                 score_str = tags.get(_score_key(field_name))
                 eval_at_str = tags.get(_eval_at_key(field_name))
                 metric_str = tags.get(_metric_key(field_name))
 
                 return ModelPerformance(
-                    model_id=db_config.model_id,
-                    model_name=db_config.name,
-                    architecture=ArchitectureType(db_config.architecture),
+                    model_id=model_config.model_id,
+                    model_name=model_config.name,
+                    architecture=ArchitectureType(model_config.architecture),
                     latest_version=model_detail.latest_version,
                     training_loss=model_detail.training_loss,
                     score=float(score_str) if score_str else None,
@@ -301,7 +310,6 @@ class PerformanceService:
         tags = self._get_registered_model_tags(best.model_id)
         metric = tags.get(_metric_key(field_name), "rmse")
 
-        db_config = self.ml_config_service.get_config(best.model_id)  # noqa: F841
         model_detail = self.mlflow_service.get_model(best.model_id)
 
         if model_detail.latest_version is None:
@@ -313,8 +321,10 @@ class PerformanceService:
         config = model_detail.config
         cells = await self.data_storage_client.get_known_cells()
 
+        fallback_start_ts = await self.data_storage_client.probe_data_timestamp(cells, config.window_duration_seconds)
+
         model = self._load_model(best.model_id, model_detail.latest_version, config)
-        score = await self._compute_score_for_model(model, config, field_name, cells, metric)
+        score = await self._compute_score_for_model(model, config, field_name, cells, metric, fallback_start_ts)
 
         evaluated_at = datetime.now(tz=timezone.utc)
         evaluated_at_str = evaluated_at.isoformat()
@@ -477,6 +487,7 @@ class PerformanceService:
         field_name: str,
         cells: list[int],
         metric: str,
+        fallback_start_ts: int | None = None,
     ) -> float | None:
         """
         Collect raw predictions and ground-truth values across reference cells,
@@ -484,6 +495,10 @@ class PerformanceService:
 
         Raw values (not pre-squared) are accumulated so any metric can be
         applied at the end via _compute_score().
+
+        If the current-time window has no data, the method retries each cell using fallback_start_ts
+        as the window anchor.  fallback_start_ts is discovered once per evaluation
+        call by probing the data storage with a wide time range.
         """
         min_windows = config.lookback_steps + config.forecast_steps
         min_secs = min_windows * config.window_duration_seconds
@@ -499,6 +514,9 @@ class PerformanceService:
         for cell_index in cells:
             if valid_cells >= self.MAX_EVAL_CELLS:
                 break
+
+            # Primary fetch: window anchored to now
+            data: list[dict] | None = None
             try:
                 data = await self.data_storage_client.fetch_cell_data(
                     cell_index=cell_index,
@@ -507,8 +525,28 @@ class PerformanceService:
                     window_duration_seconds=config.window_duration_seconds,
                 )
             except Exception as e:
-                logger.warning(f"Failed to fetch data for cell {cell_index}: {e}")
-                continue
+                logger.warning("Failed to fetch data for cell %d: %s", cell_index, e)
+
+            # Fallback: retry anchored to probed data timestamp
+            if (not data or len(data) < min_windows) and fallback_start_ts is not None:
+                alt_start = fallback_start_ts
+                alt_end = fallback_start_ts + fetch_secs
+                logger.info(
+                    "Cell %d: no current data, retrying with probed window [%d, %d]",
+                    cell_index,
+                    alt_start,
+                    alt_end,
+                )
+                try:
+                    data = await self.data_storage_client.fetch_cell_data(
+                        cell_index=cell_index,
+                        start_timestamp=alt_start,
+                        end_timestamp=alt_end,
+                        window_duration_seconds=config.window_duration_seconds,
+                    )
+                except Exception as e:
+                    logger.warning("Fallback fetch failed for cell %d: %s", cell_index, e)
+                    data = None
 
             if not data or len(data) < min_windows:
                 logger.warning(

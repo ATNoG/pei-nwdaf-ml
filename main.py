@@ -20,6 +20,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Debugging purposes only: suppress overly verbose logs from dependencies
+for noisy in ("httpx", "httpcore", "botocore", "urllib3"):
+    logging.getLogger(noisy).setLevel(logging.WARNING)
 
 def _build_performance_service(db):
     """
@@ -40,6 +43,68 @@ def _build_performance_service(db):
     return PerformanceService(mlflow_svc, config_svc, DataStorageClient(), db)
 
 
+def _build_training_service(db):
+    """
+    Construct a TrainingService outside of FastAPI's DI system.
+
+    Used by the background monitoring loop to trigger retraining when
+    performance degradation is detected.
+    """
+    from mlflow import MlflowClient
+    from src.services.config_service import MLConfigService
+    from src.services.mlflow_service import MLflowService
+    from src.services.training_service import TrainingService
+    from src.services.data_storage_client import DataStorageClient
+
+    client = MlflowClient()
+    config_svc = MLConfigService(db)
+    mlflow_svc = MLflowService(client, config_svc)
+    return TrainingService(mlflow_svc, DataStorageClient(), config_svc, db)
+
+
+def _trigger_field_retraining(field, model_configs, training_svc, loop):
+    """
+    Queue retraining jobs for all model configs belonging to a degraded field.
+
+    Uses the lookback_seconds from each model's last successful training job,
+    falling back to 86400s if no completed job exists.
+
+    Returns a list of queued job_ids (configs that failed to queue are skipped).
+    """
+    from src.db.training_job import TrainingJobDB
+    from src.routers.v1.training_router import training_executor, _run_training_sync
+
+    job_ids = []
+    for cfg in model_configs:
+        last_job = (
+            training_svc.db.query(TrainingJobDB)
+            .filter(
+                TrainingJobDB.model_id == cfg.model_id,
+                TrainingJobDB.status == "completed",
+            )
+            .order_by(TrainingJobDB.created_at.desc())
+            .first()
+        )
+        lookback = last_job.lookback_seconds if last_job else 86400
+        try:
+            job_info = training_svc.create_training_job(cfg.model_id, lookback)
+            loop.run_in_executor(training_executor, _run_training_sync, job_info["job_id"])
+            job_ids.append(job_info["job_id"])
+            logger.info(
+                "Auto-monitor: queued retraining job %s for model %s (field '%s')",
+                job_info["job_id"],
+                cfg.model_id,
+                field,
+            )
+        except Exception as e:
+            logger.error(
+                "Auto-monitor: failed to queue retraining for model %s: %s",
+                cfg.model_id,
+                e,
+            )
+    return job_ids
+
+
 async def _has_new_data(data_storage_client, last_ts: int) -> bool:
     """
     Return True if any data windows have arrived since last_ts.
@@ -49,7 +114,7 @@ async def _has_new_data(data_storage_client, last_ts: int) -> bool:
     try:
         cells = await data_storage_client.get_known_cells()
     except Exception as e:
-        logger.warning(f"Auto-monitor: failed to fetch known cells: {e}")
+        logger.warning("Auto-monitor: failed to fetch known cells: %s", e)
         return False
 
     now = int(time.time())
@@ -66,7 +131,12 @@ async def _has_new_data(data_storage_client, last_ts: int) -> bool:
 async def _monitoring_loop() -> None:
     """
     Background task that periodically re-scores the best model for every
-    monitored output field and logs a warning when degradation is detected.
+    monitored output field.
+
+    Each field moves through a simple state machine:
+      MONITORING  — score the best model; on degradation trigger retraining
+      RETRAINING  — wait for all queued training jobs to finish
+      EVALUATING  — re-elect a best model via evaluate_field()
 
     Controlled by MONITORING_TRIGGER_MODE:
       "time"  — run on every interval regardless of new data
@@ -84,6 +154,9 @@ async def _monitoring_loop() -> None:
     )
 
     last_check_ts = int(time.time())
+    # Per-field state machine (persists across cycles, resets on restart)
+    field_states: dict[str, str] = {}   # field → "monitoring" | "retraining" | "evaluating"
+    field_jobs: dict[str, list[str]] = {}  # field → job_ids currently being tracked
 
     while True:
         await asyncio.sleep(settings.MONITORING_INTERVAL_SECONDS)
@@ -110,38 +183,118 @@ async def _monitoring_loop() -> None:
             logger.info("Auto-monitor: checking %d field(s): %s", len(fields), fields)
 
             for field in fields:
-                try:
-                    result = await svc.monitor_best_model(field, trigger="auto_monitor")
-                    if result.score is None:
-                        continue
-                    baseline = svc.get_baseline_score(field)
-                    if baseline and svc._score_is_worse(
-                        result.score,
-                        baseline,
-                        result.metric,
-                        settings.MONITORING_DEGRADATION_FACTOR,
-                    ):
-                        logger.warning(
-                            "Auto-monitor: model '%s' %s=%.4f for field '%s' "
-                            "has degraded beyond %.0f%% of baseline %.4f",
-                            result.model_id,
-                            result.metric,
-                            result.score,
-                            field,
-                            settings.MONITORING_DEGRADATION_FACTOR * 100,
-                            baseline,
-                        )
-                    else:
+                state = field_states.get(field, "monitoring")
+
+                # RETRAINING: wait for all queued jobs to reach a terminal state
+                if state == "retraining":
+                    from src.db.training_job import TrainingJobDB
+
+                    jobs = [db.get(TrainingJobDB, jid) for jid in field_jobs.get(field, [])]
+                    active = [j for j in jobs if j and j.status in ("queued", "running")]
+
+                    if active:
                         logger.info(
-                            "Auto-monitor: field '%s' — model '%s' %s=%.4f (baseline=%.4f)",
+                            "----- [RETRAINING] '%s' — %d/%d job(s) still running.",
                             field,
-                            result.model_id,
-                            result.metric,
+                            len(active),
+                            len(jobs),)
+                        continue  # check again next cycle
+
+                    failed = [j for j in jobs if j and j.status == "failed"]
+                    completed = [j for j in jobs if j and j.status == "completed"]
+
+                    for j in failed:
+                        logger.error(
+                            "----- [RETRAINING] '%s' — job %s FAILED: %s",
+                            field,
+                            j.job_id,
+                            j.error_message,)
+
+                    if completed:
+                        field_states[field] = "evaluating"
+                        logger.info(
+                            "----- [RETRAINING] '%s' — all done (%d completed, %d failed) → moving to EVALUATING",
+                            field,
+                            len(completed),
+                            len(failed),)
+                    else:
+                        logger.error("----- [RETRAINING] '%s' — all jobs failed → returning to MONITORING",field,)
+                        field_states[field] = "monitoring"
+                        field_jobs.pop(field, None)
+
+                # EVALUATING: re-elect a best model then return to monitoring
+                elif state == "evaluating":
+                    logger.info("----- [EVALUATING] '%s' — scoring all retrained models.", field)
+                    try:
+                        best = svc.get_best_model(field)
+                        metric = best.metric if best and best.metric else "rmse"
+                        result = await svc.evaluate_field(field, metric)
+                        best_score = next((m.score for m in result.models if m.is_best), float("nan"))
+
+                        logger.info(
+                            "----- [EVALUATING] '%s' — new best: %s  %s=%.4f",
+                            field,
+                            result.best_model_id,
+                            metric,
+                            best_score,)
+                    except Exception as e:
+                        logger.error(
+                            "----- [EVALUATING] '%s' — evaluation FAILED: %s",
+                            field,
+                            e,)
+                    finally:
+                        field_states[field] = "monitoring"
+                        field_jobs.pop(field, None)
+                        logger.info("----- [MONITORING] '%s' — resumed", field)
+
+                # MONITORING: score the best model; trigger retraining on degradation
+                else:
+                    logger.info("----- [MONITORING] '%s' — scoring best model.", field)
+                    try:
+                        result = await svc.monitor_best_model(field, trigger="auto_monitor")
+                        if result.score is None:
+                            logger.info("----- [MONITORING] '%s' — no score (no data?), skipping", field)
+                            continue
+
+                        baseline = svc.get_baseline_score(field)
+                        if baseline and svc._score_is_worse(
                             result.score,
-                            baseline if baseline is not None else float("nan"),
-                        )
-                except Exception as e:
-                    logger.error("Auto-monitor: error monitoring field '%s': %s", field, e)
+                            baseline,
+                            result.metric,
+                            settings.MONITORING_DEGRADATION_FACTOR,
+                        ):
+                            logger.warning(
+                                "----- [MONITORING] '%s' — DEGRADED  %s=%.4f  baseline=%.4f  "
+                                "threshold=%.4f → triggering retraining",
+                                field,
+                                result.metric,
+                                result.score,
+                                baseline,
+                                baseline * settings.MONITORING_DEGRADATION_FACTOR,)
+                            model_configs = [c for c in svc.ml_config_service.list_all() if field in c.output_fields]
+
+                            training_svc = _build_training_service(db)
+                            loop = asyncio.get_event_loop()
+                            job_ids = _trigger_field_retraining(field, model_configs, training_svc, loop)
+
+                            if job_ids:
+                                field_states[field] = "retraining"
+                                field_jobs[field] = job_ids
+                                logger.info(
+                                    "----- [RETRAINING] '%s' — %d job(s) queued",
+                                    field,
+                                    len(job_ids),)
+                            else:
+                                logger.error("----- [MONITORING] '%s' — degradation detected but no jobs could be queued",field,)
+                        else:
+                            logger.info(
+                                "----- [MONITORING] '%s' — OK  %s=%.4f  baseline=%.4f",
+                                field,
+                                result.metric,
+                                result.score,
+                                baseline if baseline is not None else float("nan"),)
+                    except Exception as e:
+                        logger.error("----- [MONITORING] '%s' — error: %s", field, e)
         finally:
             db.close()
 

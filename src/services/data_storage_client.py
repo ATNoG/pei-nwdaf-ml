@@ -78,6 +78,44 @@ class DataStorageClient:
             response.raise_for_status()
             return response.json()
 
+    async def probe_data_timestamp(
+        self, cells: list[int], window_duration_seconds: int
+    ) -> int | None:
+        """
+        Discover any available data by issuing a single-record request over the
+        full time range (epoch 0 to far future) for each of the first few cells.
+
+        Returns the window_start_time of the first record found, or None if the
+        data storage has no data at all.  Used to anchor evaluation windows when
+        neither the current-time window nor the training-era window has data.
+        """
+        import time
+
+        far_future = int(time.time()) + 10 * 365 * 24 * 3600
+        url = f"{self.base_url}{self.data_endpoint}"
+
+        async with httpx.AsyncClient() as client:
+            for cell in cells[:5]:
+                try:
+                    params = {
+                        "cell_index": cell,
+                        "start_time": 0,
+                        "end_time": far_future,
+                        "window_duration_seconds": window_duration_seconds,
+                        "offset": 0,
+                        "limit": 1,
+                    }
+                    response = await client.get(url, params=params, timeout=30.0)
+                    if response.status_code == 200:
+                        data = response.json()
+                        if data and isinstance(data, list):
+                            ts = int(data[0].get("window_start_time", 0))
+                            if ts > 0:
+                                return ts
+                except Exception:
+                    continue
+        return None
+
     async def fetch_cell_data(
         self,
         cell_index: int,
