@@ -20,14 +20,15 @@ services:
         condition: service_healthy
 
   postgres:
-    image: postgres:15
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
     container_name: mlflow-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./sql/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
     networks:
       - nwdaf-ml
     ports:
