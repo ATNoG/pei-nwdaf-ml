@@ -53,7 +53,17 @@ def sample_cell_data():
 
 @pytest.fixture
 def mock_mlflow_service():
-    return MagicMock()
+    mock = MagicMock()
+    # Set up a config so the best-model lookup in predict() resolves "test-uuid"
+    mock_config = MagicMock()
+    mock_config.model_id = "test-uuid"
+    mock_config.output_fields = ["latency_mean"]
+    mock.ml_config_service.list_all.return_value = [mock_config]
+    # Tag the model as best for "latency_mean"
+    mock_rm = MagicMock()
+    mock_rm.tags = {"best_for:latency_mean": "true"}
+    mock.client.get_registered_model.return_value = mock_rm
+    return mock
 
 
 @pytest.fixture
@@ -108,7 +118,7 @@ class TestInferenceServicePredict:
             mock_load.return_value = MagicMock()
 
             result = await inference_service.predict(
-                model_id="test-uuid", cell_id=5
+                output_field="latency_mean", cell_id=5, model_id="test-uuid"
             )
 
         assert result["model_id"] == "test-uuid"
@@ -123,11 +133,11 @@ class TestInferenceServicePredict:
     async def test_predict_model_not_found(
         self, inference_service, mock_mlflow_service
     ):
-        """Test that ValueError from get_model propagates."""
-        mock_mlflow_service.get_model.side_effect = ValueError("not found")
-
-        with pytest.raises(ValueError, match="not found"):
-            await inference_service.predict(model_id="bad-uuid", cell_id=0)
+        """Test that passing an unknown model_id raises ValueError."""
+        with pytest.raises(ValueError, match="does not predict field"):
+            await inference_service.predict(
+                output_field="latency_mean", cell_id=0, model_id="bad-uuid"
+            )
 
     async def test_predict_model_not_trained(
         self, inference_service, mock_mlflow_service, sample_model_detail
@@ -137,7 +147,9 @@ class TestInferenceServicePredict:
         mock_mlflow_service.get_model.return_value = sample_model_detail
 
         with pytest.raises(ValueError, match="no trained versions"):
-            await inference_service.predict(model_id="test-uuid", cell_id=0)
+            await inference_service.predict(
+                output_field="latency_mean", cell_id=0, model_id="test-uuid"
+            )
 
     async def test_predict_no_data(
         self,
@@ -157,7 +169,9 @@ class TestInferenceServicePredict:
             mock_registry.get.return_value = MagicMock(return_value=mock_model)
 
             with pytest.raises(ValueError, match="No data available"):
-                await inference_service.predict(model_id="test-uuid", cell_id=99)
+                await inference_service.predict(
+                    output_field="latency_mean", cell_id=99, model_id="test-uuid"
+                )
 
     async def test_predict_insufficient_data(
         self,
@@ -184,7 +198,9 @@ class TestInferenceServicePredict:
             mock_registry.get.return_value = MagicMock(return_value=mock_model)
 
             with pytest.raises(ValueError, match="Insufficient data"):
-                await inference_service.predict(model_id="test-uuid", cell_id=5)
+                await inference_service.predict(
+                    output_field="latency_mean", cell_id=5, model_id="test-uuid"
+                )
 
     async def test_predict_model_failure(
         self,
@@ -209,7 +225,9 @@ class TestInferenceServicePredict:
             mock_registry.get.return_value = MagicMock(return_value=mock_model)
 
             with pytest.raises(RuntimeError, match="Prediction failed"):
-                await inference_service.predict(model_id="test-uuid", cell_id=5)
+                await inference_service.predict(
+                    output_field="latency_mean", cell_id=5, model_id="test-uuid"
+                )
 
     async def test_predict_correct_timestamp_calculation(
         self,
@@ -242,7 +260,9 @@ class TestInferenceServicePredict:
         ) as mock_ts:
             mock_registry.get.return_value = MagicMock(return_value=mock_model)
 
-            await inference_service.predict(model_id="test-uuid", cell_id=5)
+            await inference_service.predict(
+                output_field="latency_mean", cell_id=5, model_id="test-uuid"
+            )
 
             expected_seconds = (
                 config.lookback_steps * config.window_duration_seconds
