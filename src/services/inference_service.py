@@ -27,7 +27,7 @@ class InferenceService:
         self.mlflow_service = mlflow_service
         self.data_storage_client = data_storage_client
 
-    async def predict(self, model_id: str, cell_id: int) -> dict:
+    async def predict(self, output_field:str, cell_id: int, model_id: str | None = None) -> dict:
         """
         Run inference for a single cell using a trained model.
 
@@ -42,6 +42,31 @@ class InferenceService:
             ValueError: If model not found, not trained, or insufficient data.
             RuntimeError: If prediction fails.
         """
+        configs = self.mlflow_service.ml_config_service.list_all()
+
+        best_id = next(
+            (
+                config.model_id for config in configs
+                if self.mlflow_service.client
+                    .get_registered_model(config.model_id)
+                    .tags.get(f"best_for:{output_field}") == "true"
+            ),
+            None,
+        )
+
+        if best_id is None:
+            raise ValueError(
+              f"No best model designated for field '{output_field}'. "
+              f"Run POST /v1/performance/{output_field}/evaluate first."
+            )
+
+        if model_id is None:
+            model_id = best_id
+        else:
+            config = next((config for config in configs if config.model_id == model_id), None)
+            if config is None or output_field not in config.output_fields:
+                raise ValueError(f"Model '{model_id}' does not predict field '{output_field}'.")
+        
         # Load model detail (config + version info) — sync call, run in thread
         model_detail = await asyncio.to_thread(
             self.mlflow_service.get_model, model_id

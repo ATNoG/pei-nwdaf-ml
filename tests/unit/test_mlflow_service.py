@@ -51,18 +51,18 @@ class TestMLflowServiceCreate:
 
         # Verify config service create was called
         mock_config_service.create.assert_called_once()
-        db_config = mock_config_service.create.call_args[0][0]
+        model_config = mock_config_service.create.call_args[0][0]
 
         # Verify it's a ModelConfigDB instance with correct data
-        assert isinstance(db_config, ModelConfigDB)
-        assert db_config.name == "test_model"
-        assert db_config.architecture == "lstm"
-        assert db_config.input_fields == ["latency_mean", "rsrp_mean", "sinr_mean"]
-        assert db_config.output_fields == ["latency_mean"]
-        assert db_config.window_duration_seconds == 60
-        assert db_config.lookback_steps == 30
-        assert db_config.forecast_steps == 5
-        assert db_config.hidden_size == 32
+        assert isinstance(model_config, ModelConfigDB)
+        assert model_config.name == "test_model"
+        assert model_config.architecture == "lstm"
+        assert model_config.input_fields == ["latency_mean", "rsrp_mean", "sinr_mean"]
+        assert model_config.output_fields == ["latency_mean"]
+        assert model_config.window_duration_seconds == 60
+        assert model_config.lookback_steps == 30
+        assert model_config.forecast_steps == 5
+        assert model_config.hidden_size == 32
 
     def test_create_model_rollback_on_db_error(self, mock_mlflow_client, mock_config_service, sample_model_config):
         """Test that MLflow model is cleaned up if database insert fails."""
@@ -88,19 +88,19 @@ class TestMLflowServiceGet:
     def test_get_model_success(self, mock_mlflow_client, mock_config_service):
         """Test successfully retrieving a model."""
         # Setup database mock
-        mock_db_config = MagicMock(spec=ModelConfigDB)
-        mock_db_config.model_id = "test-model-uuid"
-        mock_db_config.name = "my_test_model"
-        mock_db_config.architecture = "lstm"
-        mock_db_config.input_fields = ["latency_mean", "rsrp_mean", "sinr_mean"]
-        mock_db_config.output_fields = ["latency_mean"]
-        mock_db_config.window_duration_seconds = 60
-        mock_db_config.lookback_steps = 30
-        mock_db_config.forecast_steps = 5
-        mock_db_config.hidden_size = 32
-        mock_db_config.created_at = datetime(2024, 2, 1, 0, 0, 0)
+        mock_model_config = MagicMock(spec=ModelConfigDB)
+        mock_model_config.model_id = "test-model-uuid"
+        mock_model_config.name = "my_test_model"
+        mock_model_config.architecture = "lstm"
+        mock_model_config.input_fields = ["latency_mean", "rsrp_mean", "sinr_mean"]
+        mock_model_config.output_fields = ["latency_mean"]
+        mock_model_config.window_duration_seconds = 60
+        mock_model_config.lookback_steps = 30
+        mock_model_config.forecast_steps = 5
+        mock_model_config.hidden_size = 32
+        mock_model_config.created_at = datetime(2024, 2, 1, 0, 0, 0)
 
-        mock_config_service.get_config.return_value = mock_db_config
+        mock_config_service.get_config.return_value = mock_model_config
         mock_config_service.config_from_db.return_value = ModelConfig(
             architecture=ArchitectureType.LSTM,
             input_fields=["latency_mean", "rsrp_mean", "sinr_mean"],
@@ -139,9 +139,9 @@ class TestMLflowServiceGet:
     def test_get_model_not_found_in_mlflow(self, mock_mlflow_client, mock_config_service):
         """Test getting a model that exists in DB but not in MLflow."""
         # Setup database mock
-        mock_db_config = MagicMock(spec=ModelConfigDB)
-        mock_db_config.model_id = "test-model-uuid"
-        mock_config_service.get_config.return_value = mock_db_config
+        mock_model_config = MagicMock(spec=ModelConfigDB)
+        mock_model_config.model_id = "test-model-uuid"
+        mock_config_service.get_config.return_value = mock_model_config
 
         # MLflow returns not found
         mock_mlflow_client.get_registered_model.side_effect = MlflowException("Not found")
@@ -154,12 +154,12 @@ class TestMLflowServiceGet:
     def test_get_model_with_version_info(self, mock_mlflow_client, mock_config_service):
         """Test retrieving a model with training version info."""
         # Setup database mock
-        mock_db_config = MagicMock(spec=ModelConfigDB)
-        mock_db_config.model_id = "test-model-uuid"
-        mock_db_config.name = "my_test_model"
-        mock_db_config.created_at = datetime(2024, 2, 1, 0, 0, 0)
+        mock_model_config = MagicMock(spec=ModelConfigDB)
+        mock_model_config.model_id = "test-model-uuid"
+        mock_model_config.name = "my_test_model"
+        mock_model_config.created_at = datetime(2024, 2, 1, 0, 0, 0)
 
-        mock_config_service.get_config.return_value = mock_db_config
+        mock_config_service.get_config.return_value = mock_model_config
         mock_config_service.config_from_db.return_value = ModelConfig(
             architecture=ArchitectureType.LSTM,
             input_fields=["latency_mean"],
