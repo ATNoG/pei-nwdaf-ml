@@ -64,7 +64,7 @@ class TestInferenceRouter:
         try:
             response = client.post(
                 "/v1/inference",
-                json={"model_id": "test-uuid", "cell_id": 5},
+                json={"output_field": "latency_mean", "model_id": "test-uuid", "cell_id": 5},
             )
 
             assert response.status_code == 200
@@ -78,7 +78,7 @@ class TestInferenceRouter:
             assert data["predictions"][0]["step"] == 1
             assert data["predictions"][0]["values"]["latency_mean"] == 10.0
             mock_inference_service.predict.assert_called_once_with(
-                model_id="test-uuid", cell_id=5
+                output_field="latency_mean", cell_id=5, model_id="test-uuid"
             )
         finally:
             app.dependency_overrides.clear()
@@ -97,7 +97,7 @@ class TestInferenceRouter:
         try:
             response = client.post(
                 "/v1/inference",
-                json={"model_id": "bad-uuid", "cell_id": 0},
+                json={"output_field": "latency_mean", "model_id": "bad-uuid", "cell_id": 0},
             )
 
             assert response.status_code == 422
@@ -121,7 +121,7 @@ class TestInferenceRouter:
         try:
             response = client.post(
                 "/v1/inference",
-                json={"model_id": "test-uuid", "cell_id": 0},
+                json={"output_field": "latency_mean", "model_id": "test-uuid", "cell_id": 0},
             )
 
             assert response.status_code == 422
@@ -145,7 +145,7 @@ class TestInferenceRouter:
         try:
             response = client.post(
                 "/v1/inference",
-                json={"model_id": "test-uuid", "cell_id": 5},
+                json={"output_field": "latency_mean", "model_id": "test-uuid", "cell_id": 5},
             )
 
             assert response.status_code == 500
@@ -167,7 +167,7 @@ class TestInferenceRouter:
         try:
             response = client.post(
                 "/v1/inference",
-                json={"model_id": "test-uuid", "cell_id": 5},
+                json={"output_field": "latency_mean", "model_id": "test-uuid", "cell_id": 5},
             )
 
             assert response.status_code == 500
@@ -175,20 +175,33 @@ class TestInferenceRouter:
         finally:
             app.dependency_overrides.clear()
 
-    def test_missing_model_id_422(self, client):
-        """Test that missing model_id fails FastAPI validation."""
-        response = client.post(
-            "/v1/inference",
-            json={"cell_id": 5},
-        )
+    def test_model_id_optional_accepted(self, client, mock_inference_service):
+        """Test that omitting model_id is valid — service selects best model."""
+        mock_inference_service.predict.return_value = _make_success_result()
 
-        assert response.status_code == 422
+        from src.routers.v1.inference_router import get_inference_service
+        from main import app
+
+        app.dependency_overrides[get_inference_service] = lambda: mock_inference_service
+
+        try:
+            response = client.post(
+                "/v1/inference",
+                json={"output_field": "latency_mean", "cell_id": 5},
+            )
+
+            assert response.status_code == 200
+            mock_inference_service.predict.assert_called_once_with(
+                output_field="latency_mean", cell_id=5, model_id=None
+            )
+        finally:
+            app.dependency_overrides.clear()
 
     def test_negative_cell_id_422(self, client):
         """Test that negative cell_id fails FastAPI validation."""
         response = client.post(
             "/v1/inference",
-            json={"model_id": "test-uuid", "cell_id": -1},
+            json={"output_field": "latency_mean", "model_id": "test-uuid", "cell_id": -1},
         )
 
         assert response.status_code == 422
@@ -197,7 +210,16 @@ class TestInferenceRouter:
         """Test that missing cell_id fails FastAPI validation."""
         response = client.post(
             "/v1/inference",
-            json={"model_id": "test-uuid"},
+            json={"output_field": "latency_mean", "model_id": "test-uuid"},
+        )
+
+        assert response.status_code == 422
+
+    def test_missing_output_field_422(self, client):
+        """Test that missing output_field fails FastAPI validation."""
+        response = client.post(
+            "/v1/inference",
+            json={"model_id": "test-uuid", "cell_id": 5},
         )
 
         assert response.status_code == 422
