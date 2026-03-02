@@ -9,7 +9,10 @@ from fastapi import FastAPI
 
 from src.core.config import settings
 from src.db.database import init_db
+import src.db.expiry_policy  # noqa: F401 — register table with SQLAlchemy Base
+import src.db.expiry_audit  # noqa: F401 — register table with SQLAlchemy Base
 from src.routers import router
+from src.services.expiry_service import ExpiryService, ExpiryScheduler
 
 # Configure logging
 logging.basicConfig(
@@ -40,9 +43,19 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info("Database initialized successfully")
 
+    # Start model expiry scheduler
+    expiry_service = ExpiryService()
+    app.state.expiry_service = expiry_service
+    expiry_scheduler = ExpiryScheduler(expiry_service)
+    expiry_scheduler.start()
+    app.state.expiry_scheduler = expiry_scheduler
+
     yield
 
     logger.info("Shutting down NWDAF ML Service...")
+    expiry_scheduler = getattr(app.state, "expiry_scheduler", None)
+    if expiry_scheduler:
+        expiry_scheduler.stop()
 
 
 # Create FastAPI app
