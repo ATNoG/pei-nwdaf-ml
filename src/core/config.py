@@ -34,5 +34,11 @@ class Settings(BaseSettings):
     # Database Configuration
     DATABASE_URL: str
 
+    # Auto-monitoring
+    MONITORING_ENABLED: bool = True
+    MONITORING_INTERVAL_SECONDS: int = 300
+    MONITORING_TRIGGER_MODE: str = "time"         # "time" | "data" | "both"
+    MONITORING_DEGRADATION_FACTOR: float = 1.5
+
 
 settings = Settings()

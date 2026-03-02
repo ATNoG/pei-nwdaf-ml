@@ -267,32 +267,40 @@ class TestInferenceRequest:
     """Tests for InferenceRequest schema."""
 
     def test_valid_request(self):
-        """Test creating a valid inference request."""
-        req = InferenceRequest(model_id="uuid-123", cell_id=5)
+        """Test creating a valid inference request with all fields."""
+        req = InferenceRequest(output_field="latency_mean", model_id="uuid-123", cell_id=5)
 
+        assert req.output_field == "latency_mean"
         assert req.model_id == "uuid-123"
         assert req.cell_id == 5
 
     def test_cell_id_zero_valid(self):
         """Test that cell_id=0 is valid (boundary)."""
-        req = InferenceRequest(model_id="uuid-123", cell_id=0)
+        req = InferenceRequest(output_field="latency_mean", model_id="uuid-123", cell_id=0)
 
         assert req.cell_id == 0
+
+    def test_model_id_optional(self):
+        """Test that model_id is optional (defaults to None — uses best model)."""
+        req = InferenceRequest(output_field="latency_mean", cell_id=5)
+
+        assert req.model_id is None
+        assert req.cell_id == 5
 
     def test_negative_cell_id_invalid(self):
         """Test that negative cell_id is rejected."""
         with pytest.raises(ValidationError):
-            InferenceRequest(model_id="uuid-123", cell_id=-1)
+            InferenceRequest(output_field="latency_mean", model_id="uuid-123", cell_id=-1)
 
-    def test_missing_model_id_invalid(self):
-        """Test that model_id is required."""
+    def test_missing_output_field_invalid(self):
+        """Test that output_field is required."""
         with pytest.raises(ValidationError):
             InferenceRequest(cell_id=5)
 
     def test_missing_cell_id_invalid(self):
         """Test that cell_id is required."""
         with pytest.raises(ValidationError):
-            InferenceRequest(model_id="uuid-123")
+            InferenceRequest(output_field="latency_mean", model_id="uuid-123")
 
 
 class TestForecastStepPrediction:

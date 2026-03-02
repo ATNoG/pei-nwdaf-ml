@@ -7,9 +7,9 @@ from src.schemas.model import ArchitectureType
 
 class InferenceRequest(BaseModel):
     """Request schema for running inference"""
-
-    model_id: str = Field(..., description="UUID of the trained model to use for prediction")
+    output_field: str = Field(..., description="Name of the output field to predict")
     cell_id: int = Field(..., ge=0, description="Cell index to fetch data for and predict")
+    model_id: str | None = Field(None, description="UUID of the trained model to use for prediction")
 
 
 class ForecastStepPrediction(BaseModel):
