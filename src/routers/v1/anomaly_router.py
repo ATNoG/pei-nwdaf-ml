@@ -361,7 +361,9 @@ async def run_anomaly_detection(
 ) -> AnomalyDetectionResult:
     """Run anomaly detection for all IPs in a cell."""
     try:
-        return await detection_service.detect(request.cell_id, request.model_id)
+        return await detection_service.detect(
+            request.cell_id, request.model_id, request.lookback_seconds
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
