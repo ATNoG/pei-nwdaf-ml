@@ -228,10 +228,24 @@ class TestAnomalyDetectionSchemas:
         r = AnomalyDetectionRequest(cell_id=5, model_id="uuid-1")
         assert r.cell_id == 5
         assert r.model_id == "uuid-1"
+        assert r.lookback_seconds == 1800
+
+    def test_detection_request_defaults(self):
+        r = AnomalyDetectionRequest(cell_id=5)
+        assert r.model_id is None
+        assert r.lookback_seconds == 1800
+
+    def test_detection_request_custom_lookback(self):
+        r = AnomalyDetectionRequest(cell_id=0, lookback_seconds=7200)
+        assert r.lookback_seconds == 7200
 
     def test_detection_request_negative_cell_invalid(self):
         with pytest.raises(ValidationError):
             AnomalyDetectionRequest(cell_id=-1, model_id="uuid-1")
+
+    def test_detection_request_zero_lookback_invalid(self):
+        with pytest.raises(ValidationError):
+            AnomalyDetectionRequest(cell_id=0, lookback_seconds=0)
 
     def test_window_score(self):
         ws = WindowScore(

@@ -129,7 +129,14 @@ class AnomalyDetectionRequest(BaseModel):
     """Request schema for running anomaly detection."""
 
     cell_id: int = Field(..., ge=0, description="Cell index to analyse")
-    model_id: str = Field(..., description="UUID of the trained anomaly model to use")
+    model_id: str | None = Field(
+        None,
+        description="UUID of the trained anomaly model to use. "
+        "If omitted, the system selects the compatible trained model with lowest training loss.",
+    )
+    lookback_seconds: int = Field(
+        default=1800, gt=0, description="How far back to fetch data (seconds, default 30min)"
+    )
 
 
 class WindowScore(BaseModel):
