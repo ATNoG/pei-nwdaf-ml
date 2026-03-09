@@ -32,7 +32,7 @@ class AnomalyDetectionService:
         self.anomaly_config_service = anomaly_config_service
 
     async def detect(
-        self, cell_id: int, model_id: str | None = None, lookback_seconds: int = 3600
+        self, cell_id: int, model_id: str | None = None, lookback_seconds: int = 1800
     ) -> AnomalyDetectionResult:
         """
         Run anomaly detection for all IPs in a cell.
@@ -181,13 +181,17 @@ class AnomalyDetectionService:
         if not sample:
             raise ValueError(f"No data available for cell {cell_id}")
 
-        logger.info(f"Auto-select: fetched {len(sample)} sample records for cell {cell_id}")
+        logger.info(
+            f"Auto-select: fetched {len(sample)} sample records for cell {cell_id}"
+        )
 
         available_fields: set[str] = set()
         for record in sample:
             available_fields.update(record.keys())
 
-        logger.info(f"Auto-select: available fields in cell {cell_id}: {sorted(available_fields)}")
+        logger.info(
+            f"Auto-select: available fields in cell {cell_id}: {sorted(available_fields)}"
+        )
 
         # Filter models whose input_fields are all present
         compatible = []
@@ -200,11 +204,15 @@ class AnomalyDetectionService:
                     f"missing fields: {sorted(missing)}"
                 )
             else:
-                logger.info(f"Auto-select: model {cfg.model_id} ({cfg.name}) is compatible")
+                logger.info(
+                    f"Auto-select: model {cfg.model_id} ({cfg.name}) is compatible"
+                )
                 compatible.append(cfg)
 
         if not compatible:
-            raise ValueError("No trained anomaly model has input_fields matching this cell's data")
+            raise ValueError(
+                "No trained anomaly model has input_fields matching this cell's data"
+            )
 
         # Pick the one with lowest training loss from MLflow
         client = MlflowClient()
@@ -230,7 +238,9 @@ class AnomalyDetectionService:
         if best_model_id is None:
             raise ValueError("No compatible anomaly model has a recorded training loss")
 
-        logger.info(f"Auto-selected model {best_model_id} (training_loss={best_loss:.6f})")
+        logger.info(
+            f"Auto-selected model {best_model_id} (training_loss={best_loss:.6f})"
+        )
         return best_model_id
 
     def _load_model_and_scaler(

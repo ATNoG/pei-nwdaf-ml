@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     KAFKA_INPUT_TOPIC: str = "network.data.processed"
     KAFKA_OUTPUT_TOPIC: str = "network.ml.results"
     KAFKA_ENABLED: bool = True
+    KAFKA_DEBOUNCE_SECONDS: int = 30
 
 
 settings = Settings()
