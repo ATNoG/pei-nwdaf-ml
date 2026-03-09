@@ -324,6 +324,18 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info("Database initialized successfully")
 
+    # Release any training locks left over from a previous crash or restart
+    from src.db.database import SessionLocal
+    from src.db.model_config import ModelConfigDB
+    db = SessionLocal()
+    try:
+        released = db.query(ModelConfigDB).filter(ModelConfigDB.is_training == True).update({"is_training": False})
+        db.commit()
+        if released:
+            logger.warning("Released %d stale training lock(s) from previous run", released)
+    finally:
+        db.close()
+
     monitor_task = None
     if settings.MONITORING_ENABLED:
         monitor_task = asyncio.create_task(_monitoring_loop())
