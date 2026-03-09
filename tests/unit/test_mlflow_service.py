@@ -201,6 +201,7 @@ class TestMLflowServiceList:
     def test_list_models_empty(self, mock_mlflow_client, mock_config_service):
         """Test listing models when none exist."""
         mock_config_service.list_all.return_value = []
+        mock_mlflow_client.search_registered_models.return_value = []
 
         service = MLflowService(mock_mlflow_client, mock_config_service)
         result = service.list_models()
@@ -209,7 +210,6 @@ class TestMLflowServiceList:
 
     def test_list_models_multiple(self, mock_mlflow_client, mock_config_service):
         """Test listing multiple models."""
-        # Create mock database configs
         mock_config1 = MagicMock(spec=ModelConfigDB)
         mock_config1.model_id = "uuid-1"
         mock_config1.name = "model_one"
@@ -224,28 +224,22 @@ class TestMLflowServiceList:
 
         mock_config_service.list_all.return_value = [mock_config1, mock_config2]
 
-        # Setup MLflow mocks for version info
+        # search_registered_models returns all models in one call
         mock_rm1 = MagicMock()
+        mock_rm1.name = "uuid-1"
         mock_rm1.latest_versions = []
 
         mock_version = MagicMock()
         mock_version.version = "3"
         mock_rm2 = MagicMock()
+        mock_rm2.name = "uuid-2"
         mock_rm2.latest_versions = [mock_version]
 
-        def get_model_side_effect(model_id):
-            if model_id == "uuid-1":
-                return mock_rm1
-            elif model_id == "uuid-2":
-                return mock_rm2
-            raise MlflowException("Not found")
-
-        mock_mlflow_client.get_registered_model.side_effect = get_model_side_effect
+        mock_mlflow_client.search_registered_models.return_value = [mock_rm1, mock_rm2]
 
         service = MLflowService(mock_mlflow_client, mock_config_service)
         result = service.list_models()
 
-        # Verify results
         assert len(result) == 2
 
         assert result[0].id == "uuid-1"
