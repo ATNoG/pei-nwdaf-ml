@@ -4,6 +4,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3-dev \
+    librdkafka-dev \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
