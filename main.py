@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from src.core.config import settings
 from src.db.database import init_db
 from src.routers import router
+from src.services.inference_pipeline import setup_inference_pipeline
 
 # Configure logging
 logging.basicConfig(
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 for noisy in ("httpx", "httpcore", "botocore", "urllib3"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
+
 def _build_performance_service(db):
     """
     Construct a PerformanceService outside of FastAPI's DI system.
@@ -32,10 +34,11 @@ def _build_performance_service(db):
     Mirrors the manual construction in get_performance_service() in the router.
     """
     from mlflow import MlflowClient
+
     from src.services.config_service import MLConfigService
+    from src.services.data_storage_client import DataStorageClient
     from src.services.mlflow_service import MLflowService
     from src.services.performance_service import PerformanceService
-    from src.services.data_storage_client import DataStorageClient
 
     client = MlflowClient()
     config_svc = MLConfigService(db)
@@ -51,10 +54,11 @@ def _build_training_service(db):
     performance degradation is detected.
     """
     from mlflow import MlflowClient
+
     from src.services.config_service import MLConfigService
+    from src.services.data_storage_client import DataStorageClient
     from src.services.mlflow_service import MLflowService
     from src.services.training_service import TrainingService
-    from src.services.data_storage_client import DataStorageClient
 
     client = MlflowClient()
     config_svc = MLConfigService(db)
@@ -72,7 +76,7 @@ def _trigger_field_retraining(field, model_configs, training_svc, loop):
     Returns a list of queued job_ids (configs that failed to queue are skipped).
     """
     from src.db.training_job import TrainingJobDB
-    from src.routers.v1.training_router import training_executor, _run_training_sync
+    from src.routers.v1.training_router import _run_training_sync, training_executor
 
     job_ids = []
     for cfg in model_configs:
@@ -88,7 +92,9 @@ def _trigger_field_retraining(field, model_configs, training_svc, loop):
         lookback = last_job.lookback_seconds if last_job else 86400
         try:
             job_info = training_svc.create_training_job(cfg.model_id, lookback)
-            loop.run_in_executor(training_executor, _run_training_sync, job_info["job_id"])
+            loop.run_in_executor(
+                training_executor, _run_training_sync, job_info["job_id"]
+            )
             job_ids.append(job_info["job_id"])
             logger.info(
                 "Auto-monitor: queued retraining job %s for model %s (field '%s')",
@@ -155,7 +161,9 @@ async def _monitoring_loop() -> None:
 
     last_check_ts = int(time.time())
     # Per-field state machine (persists across cycles, resets on restart)
-    field_states: dict[str, str] = {}   # field → "monitoring" | "retraining" | "evaluating"
+    field_states: dict[str, str] = (
+        {}
+    )  # field → "monitoring" | "retraining" | "evaluating"
     field_jobs: dict[str, list[str]] = {}  # field → job_ids currently being tracked
 
     while True:
@@ -165,7 +173,9 @@ async def _monitoring_loop() -> None:
         if settings.MONITORING_TRIGGER_MODE in ("data", "both"):
             data_client = DataStorageClient()
             if not await _has_new_data(data_client, last_check_ts):
-                logger.debug("Auto-monitor: no new data since last check, skipping cycle")
+                logger.debug(
+                    "Auto-monitor: no new data since last check, skipping cycle"
+                )
                 last_check_ts = int(time.time())
                 continue
 
@@ -189,15 +199,20 @@ async def _monitoring_loop() -> None:
                 if state == "retraining":
                     from src.db.training_job import TrainingJobDB
 
-                    jobs = [db.get(TrainingJobDB, jid) for jid in field_jobs.get(field, [])]
-                    active = [j for j in jobs if j and j.status in ("queued", "running")]
+                    jobs = [
+                        db.get(TrainingJobDB, jid) for jid in field_jobs.get(field, [])
+                    ]
+                    active = [
+                        j for j in jobs if j and j.status in ("queued", "running")
+                    ]
 
                     if active:
                         logger.info(
                             "----- [RETRAINING] '%s' — %d/%d job(s) still running.",
                             field,
                             len(active),
-                            len(jobs),)
+                            len(jobs),
+                        )
                         continue  # check again next cycle
 
                     failed = [j for j in jobs if j and j.status == "failed"]
@@ -208,7 +223,8 @@ async def _monitoring_loop() -> None:
                             "----- [RETRAINING] '%s' — job %s FAILED: %s",
                             field,
                             j.job_id,
-                            j.error_message,)
+                            j.error_message,
+                        )
 
                     if completed:
                         field_states[field] = "evaluating"
@@ -216,32 +232,42 @@ async def _monitoring_loop() -> None:
                             "----- [RETRAINING] '%s' — all done (%d completed, %d failed) → moving to EVALUATING",
                             field,
                             len(completed),
-                            len(failed),)
+                            len(failed),
+                        )
                     else:
-                        logger.error("----- [RETRAINING] '%s' — all jobs failed → returning to MONITORING",field,)
+                        logger.error(
+                            "----- [RETRAINING] '%s' — all jobs failed → returning to MONITORING",
+                            field,
+                        )
                         field_states[field] = "monitoring"
                         field_jobs.pop(field, None)
 
                 # EVALUATING: re-elect a best model then return to monitoring
                 elif state == "evaluating":
-                    logger.info("----- [EVALUATING] '%s' — scoring all retrained models.", field)
+                    logger.info(
+                        "----- [EVALUATING] '%s' — scoring all retrained models.", field
+                    )
                     try:
                         best = svc.get_best_model(field)
                         metric = best.metric if best and best.metric else "rmse"
                         result = await svc.evaluate_field(field, metric)
-                        best_score = next((m.score for m in result.models if m.is_best), float("nan"))
+                        best_score = next(
+                            (m.score for m in result.models if m.is_best), float("nan")
+                        )
 
                         logger.info(
                             "----- [EVALUATING] '%s' — new best: %s  %s=%.4f",
                             field,
                             result.best_model_id,
                             metric,
-                            best_score,)
+                            best_score,
+                        )
                     except Exception as e:
                         logger.error(
                             "----- [EVALUATING] '%s' — evaluation FAILED: %s",
                             field,
-                            e,)
+                            e,
+                        )
                     finally:
                         field_states[field] = "monitoring"
                         field_jobs.pop(field, None)
@@ -251,9 +277,14 @@ async def _monitoring_loop() -> None:
                 else:
                     logger.info("----- [MONITORING] '%s' — scoring best model.", field)
                     try:
-                        result = await svc.monitor_best_model(field, trigger="auto_monitor")
+                        result = await svc.monitor_best_model(
+                            field, trigger="auto_monitor"
+                        )
                         if result.score is None:
-                            logger.info("----- [MONITORING] '%s' — no score (no data?), skipping", field)
+                            logger.info(
+                                "----- [MONITORING] '%s' — no score (no data?), skipping",
+                                field,
+                            )
                             continue
 
                         baseline = svc.get_baseline_score(field)
@@ -270,12 +301,19 @@ async def _monitoring_loop() -> None:
                                 result.metric,
                                 result.score,
                                 baseline,
-                                baseline * settings.MONITORING_DEGRADATION_FACTOR,)
-                            model_configs = [c for c in svc.ml_config_service.list_all() if field in c.output_fields]
+                                baseline * settings.MONITORING_DEGRADATION_FACTOR,
+                            )
+                            model_configs = [
+                                c
+                                for c in svc.ml_config_service.list_all()
+                                if field in c.output_fields
+                            ]
 
                             training_svc = _build_training_service(db)
                             loop = asyncio.get_event_loop()
-                            job_ids = _trigger_field_retraining(field, model_configs, training_svc, loop)
+                            job_ids = _trigger_field_retraining(
+                                field, model_configs, training_svc, loop
+                            )
 
                             if job_ids:
                                 field_states[field] = "retraining"
@@ -283,20 +321,26 @@ async def _monitoring_loop() -> None:
                                 logger.info(
                                     "----- [RETRAINING] '%s' — %d job(s) queued",
                                     field,
-                                    len(job_ids),)
+                                    len(job_ids),
+                                )
                             else:
-                                logger.error("----- [MONITORING] '%s' — degradation detected but no jobs could be queued",field,)
+                                logger.error(
+                                    "----- [MONITORING] '%s' — degradation detected but no jobs could be queued",
+                                    field,
+                                )
                         else:
                             logger.info(
                                 "----- [MONITORING] '%s' — OK  %s=%.4f  baseline=%.4f",
                                 field,
                                 result.metric,
                                 result.score,
-                                baseline if baseline is not None else float("nan"),)
+                                baseline if baseline is not None else float("nan"),
+                            )
                     except Exception as e:
                         logger.error("----- [MONITORING] '%s' — error: %s", field, e)
         finally:
             db.close()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -316,6 +360,9 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing database tables...")
     init_db()
     logger.info("Database initialized successfully")
+
+    if settings.KAFKA_ENABLED:
+        setup_inference_pipeline()
 
     monitor_task = None
     if settings.MONITORING_ENABLED:
@@ -360,9 +407,7 @@ async def root():
 async def health():
     """Health check endpoint."""
     # TODO: Add actual health checks (MLflow, data-storage connectivity)
-    return {
-        "status": "healthy"
-    }
+    return {"status": "healthy"}
 
 
 if __name__ == "__main__":
