@@ -122,6 +122,7 @@ class DataStorageClient:
         start_timestamp: int,
         end_timestamp: int,
         window_duration_seconds: int,
+        ip_src: str | None = None,
     ) -> list[dict]:
         """
         Fetch processed latency data for a specific cell with pagination.
@@ -133,6 +134,8 @@ class DataStorageClient:
             start_timestamp: Start time (Unix epoch seconds)
             end_timestamp: End time (Unix epoch seconds)
             window_duration_seconds: Window duration for aggregation
+            ip_src: Optional IP source filter. Use "*" to include ip_src in
+                    the response grouped per IP. Default None = existing behavior.
 
         Returns:
             List of data windows with metrics (all pages combined)
@@ -144,7 +147,7 @@ class DataStorageClient:
 
         async with httpx.AsyncClient() as client:
             while True:
-                params = {
+                params: dict[str, int | str] = {
                     "cell_index": cell_index,
                     "start_time": start_timestamp,
                     "end_time": end_timestamp,
@@ -152,6 +155,8 @@ class DataStorageClient:
                     "offset": offset,
                     "limit": limit,
                 }
+                if ip_src is not None:
+                    params["ip_src"] = ip_src
 
                 response = await client.get(url, params=params, timeout=60.0)
                 response.raise_for_status()
