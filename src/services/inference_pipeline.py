@@ -13,9 +13,9 @@ from datetime import datetime, timezone
 from src.core.config import settings
 from src.schemas.anomaly import AnomalyDetectionResult
 from src.services.anomaly_detection_service import AnomalyDetectionService
+from src.services.inference_service import InferenceService
 
 logger = logging.getLogger(__name__)
-
 
 
 class InferencePipeline:
@@ -26,9 +26,11 @@ class InferencePipeline:
         self,
         bridge,
         anomaly_detection_service: AnomalyDetectionService,
+        inference_service: InferenceService,
     ):
         self.bridge = bridge
         self.anomaly_detection_service = anomaly_detection_service
+        self.inference_service = inference_service
         self._last_run: dict[int, float] = {}
         self._semaphore = asyncio.Semaphore(self._MAX_CONCURRENT)
 
@@ -66,8 +68,38 @@ class InferencePipeline:
             except Exception as e:
                 logger.warning("Anomaly detection skipped for cell %s: %s", cell_id, e)
 
+            for output_field in self._get_forecastable_fields():
+                try:
+                    forecast = await self.inference_service.predict(
+                        output_field=output_field, cell_id=cell_id
+                    )
+                    results.append({"type": "forecast", "result": _serialize_forecast(forecast)})
+                except Exception as e:
+                    logger.debug(
+                        "Forecast %s skipped for cell %s: %s", output_field, cell_id, e
+                    )
+
             if results:
                 self._publish(cell_id, results)
+
+    def _get_forecastable_fields(self) -> list[str]:
+        """Get output_fields that have a best model designated in MLflow."""
+        fields: list[str] = []
+        try:
+            for (
+                config
+            ) in self.inference_service.mlflow_service.ml_config_service.list_all():
+                rm = self.inference_service.mlflow_service.client.get_registered_model(
+                    config.model_id
+                )
+                for tag_key, tag_val in rm.tags.items():
+                    if tag_key.startswith("best_for:") and tag_val == "true":
+                        field = tag_key.removeprefix("best_for:")
+                        if field not in fields:
+                            fields.append(field)
+        except Exception as e:
+            logger.warning("Failed to discover forecastable fields: %s", e)
+        return fields
 
     def _publish(self, cell_id: int, results: list[dict]):
         msg = json.dumps(
@@ -91,6 +123,17 @@ def _serialize_anomaly(result: AnomalyDetectionResult) -> dict:
     return result.model_dump()
 
 
+def _serialize_forecast(result: dict) -> dict:
+    """Convert forecast result dict (with Pydantic objects) to JSON-safe dict."""
+    result = result.copy()
+    if "predictions" in result:
+        result["predictions"] = [
+            p.model_dump() if hasattr(p, "model_dump") else p
+            for p in result["predictions"]
+        ]
+    return result
+
+
 def setup_inference_pipeline():
     """Start the Kafka inference pipeline in a daemon thread.
 
@@ -111,11 +154,14 @@ def setup_inference_pipeline():
 
 
 async def _start_pipeline():
-    from utils.kmw import PyKafBridge
+    from mlflow.tracking import MlflowClient
 
     from src.db.database import SessionLocal
     from src.services.anomaly_config_service import AnomalyConfigService
+    from src.services.config_service import MLConfigService
     from src.services.data_storage_client import DataStorageClient
+    from src.services.mlflow_service import MLflowService
+    from utils.kmw import PyKafBridge
 
     bridge = PyKafBridge(
         settings.KAFKA_INPUT_TOPIC,
@@ -130,7 +176,11 @@ async def _start_pipeline():
         data_storage_client, anomaly_config_service
     )
 
-    pipeline = InferencePipeline(bridge, anomaly_detection_service)
+    ml_config_service = MLConfigService(db)
+    mlflow_service = MLflowService(MlflowClient(), ml_config_service)
+    inference_service = InferenceService(mlflow_service, data_storage_client)
+
+    pipeline = InferencePipeline(bridge, anomaly_detection_service, inference_service)
     bridge.bind_topic(settings.KAFKA_INPUT_TOPIC, pipeline.on_message)
     await bridge.start_consumer()
 
