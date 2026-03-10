@@ -7,10 +7,13 @@ from sqlalchemy.orm import Session
 
 from src.core.dependencies import get_mlflow_client
 from src.db.database import get_db
+from src.core.config import settings
+from src.core.monitoring_state import get_field_jobs, get_field_state, get_last_checked
 from src.schemas.performance import (
     EvalMetricType,
     FieldEvaluationResponse,
     ModelPerformance,
+    MonitoringStatusResponse,
     ScoreHistoryResponse,
 )
 from src.services.data_storage_client import DataStorageClient
@@ -81,6 +84,21 @@ async def get_best_model(
     except Exception as e:
         logger.error(f"Failed to get best model for field '{field_name}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    
+@router.post("/{field_name}/set-best/{model_id}", response_model=ModelPerformance)
+async def set_best_model(
+    field_name: str,
+    model_id: str,
+    performance_service: PerformanceService = Depends(get_performance_service),
+) -> ModelPerformance:
+    """Override the best model for a field without running a new evaluation."""
+    try:
+        return performance_service.set_best_model(field_name, model_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to set best model for field '{field_name}': {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/{field_name}/monitor", response_model=ModelPerformance)
@@ -106,7 +124,21 @@ async def monitor_best_model(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Registered before GET /{field_name} to prevent FastAPI matching "history" as field_name
+# Registered before GET /{field_name} to prevent FastAPI matching "status"/"history" as field_name
+@router.get("/{field_name}/status", response_model=MonitoringStatusResponse)
+async def get_monitoring_status(field_name: str) -> MonitoringStatusResponse:
+    """Return the current state machine state for a monitored field."""
+    return MonitoringStatusResponse(
+        field_name=field_name,
+        state=get_field_state(field_name),
+        active_job_ids=get_field_jobs(field_name),
+        last_checked_at=get_last_checked(field_name),
+        monitoring_enabled=settings.MONITORING_ENABLED,
+        monitoring_interval_seconds=settings.MONITORING_INTERVAL_SECONDS,
+        monitoring_degradation_factor=settings.MONITORING_DEGRADATION_FACTOR,
+    )
+
+
 @router.get("/{field_name}/history", response_model=ScoreHistoryResponse)
 async def get_score_history(
     field_name: str,
