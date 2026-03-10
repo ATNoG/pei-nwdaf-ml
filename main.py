@@ -20,6 +20,7 @@ from src.core.monitoring_state import (
     set_last_checked,
 )
 from src.db.database import init_db
+from src.notification import AlertLevel, notification_center
 from src.routers import router
 from src.services.inference_pipeline import setup_inference_pipeline
 
@@ -204,7 +205,9 @@ async def _monitoring_loop() -> None:
                     from src.db.training_job import TrainingJobDB
 
                     jobs = [db.get(TrainingJobDB, jid) for jid in get_field_jobs(field)]
-                    active = [j for j in jobs if j and j.status in ("queued", "running")]
+                    active = [
+                        j for j in jobs if j and j.status in ("queued", "running")
+                    ]
 
                     if active:
                         logger.info(
@@ -234,8 +237,21 @@ async def _monitoring_loop() -> None:
                             len(completed),
                             len(failed),
                         )
+                        await notification_center.notify(
+                            f"Retraining completed for '{field}': "
+                            f"{len(completed)} succeeded, {len(failed)} failed. "
+                            f"Evaluating best model.",
+                            AlertLevel.INFO,
+                        )
                     else:
-                        logger.error("----- [RETRAINING] '%s' — all jobs failed → returning to MONITORING",field,)
+                        logger.error(
+                            "----- [RETRAINING] '%s' — all jobs failed → returning to MONITORING",
+                            field,
+                        )
+                        await notification_center.notify(
+                            f"Retraining failed for '{field}': all jobs failed.",
+                            AlertLevel.WARNING,
+                        )
                         set_field_state(field, "monitoring")
                         clear_field_jobs(field)
 
@@ -259,6 +275,21 @@ async def _monitoring_loop() -> None:
                             metric,
                             best_score,
                         )
+                        prev_id = best.model_id if best else None
+                        if result.best_model_id != prev_id:
+                            await notification_center.notify(
+                                f"Best model changed for '{field}': "
+                                f"{prev_id} → {result.best_model_id} "
+                                f"({metric}={best_score:.4f})",
+                                AlertLevel.WARNING,
+                            )
+                        else:
+                            await notification_center.notify(
+                                f"Model re-evaluated for '{field}': "
+                                f"{result.best_model_id} remains best "
+                                f"({metric}={best_score:.4f})",
+                                AlertLevel.INFO,
+                            )
                     except Exception as e:
                         logger.error(
                             "----- [EVALUATING] '%s' — evaluation FAILED: %s",
@@ -299,6 +330,14 @@ async def _monitoring_loop() -> None:
                                 result.score,
                                 baseline,
                                 baseline * settings.MONITORING_DEGRADATION_FACTOR,
+                            )
+                            await notification_center.notify(
+                                f"Performance degradation detected for '{field}': "
+                                f"{result.metric}={result.score:.4f} "
+                                f"(baseline={baseline:.4f}, "
+                                f"threshold={baseline * settings.MONITORING_DEGRADATION_FACTOR:.4f}). "
+                                f"Triggering retraining.",
+                                AlertLevel.CRITICAL,
                             )
                             model_configs = [
                                 c
@@ -365,12 +404,19 @@ async def lifespan(app: FastAPI):
     # Release any training locks left over from a previous crash or restart
     from src.db.database import SessionLocal
     from src.db.model_config import ModelConfigDB
+
     db = SessionLocal()
     try:
-        released = db.query(ModelConfigDB).filter(ModelConfigDB.is_training == True).update({"is_training": False})
+        released = (
+            db.query(ModelConfigDB)
+            .filter(ModelConfigDB.is_training == True)
+            .update({"is_training": False})
+        )
         db.commit()
         if released:
-            logger.warning("Released %d stale training lock(s) from previous run", released)
+            logger.warning(
+                "Released %d stale training lock(s) from previous run", released
+            )
     finally:
         db.close()
 
