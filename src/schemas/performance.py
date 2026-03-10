@@ -31,6 +31,7 @@ class ModelPerformance(BaseModel):
     )
     metric: str | None = Field(None, description="Which metric produced the score (e.g. 'rmse')")
     is_best: bool = Field(False, description="True for the model with the best score for this field")
+    baseline_score: float | None = Field(None, description="Score at election time — used as degradation reference")
     last_trained_at: datetime | None = Field(None, description="Last training completion timestamp")
     evaluated_at: datetime | None = Field(None, description="When the score was last computed")
 
@@ -49,6 +50,18 @@ class FieldEvaluationResponse(BaseModel):
     last_evaluated_at: datetime | None = Field(
         None, description="Timestamp of the most recent evaluation"
     )
+
+
+class MonitoringStatusResponse(BaseModel):
+    """Current state machine status for a monitored field."""
+
+    field_name: str
+    state: str = Field(..., description="Current state: monitoring | retraining | evaluating")
+    active_job_ids: list[str] = Field(default_factory=list, description="Training job IDs tracked during retraining")
+    last_checked_at: datetime | None = Field(None, description="When the last successful monitoring cycle completed")
+    monitoring_enabled: bool
+    monitoring_interval_seconds: int
+    monitoring_degradation_factor: float
 
 
 class ScoreHistoryEntry(BaseModel):
