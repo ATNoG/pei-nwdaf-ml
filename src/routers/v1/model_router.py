@@ -2,16 +2,26 @@ from fastapi import APIRouter, Depends, HTTPException
 from src.services.mlflow_service import MLflowService
 from src.services.data_storage_client import DataStorageClient
 from src.core.dependencies import get_mlflow_client
-from src.schemas.model import (ModelConfig,ModelCreate,ModelDetail,ModelSummary)
+from src.schemas.model import ModelConfig, ModelCreate, ModelDetail, ModelSummary, ModelSummaryDetail
 router = APIRouter()
 
-@router.get("", response_model=list[ModelSummary])
+@router.get("", response_model=list[ModelSummary] | list[ModelSummaryDetail])
 async def get_models(
     output_field: str | None = None,
+    include_details: bool = False,
     mlflow_service: MLflowService = Depends(get_mlflow_client),
-) -> list[ModelSummary]:
-    """Get all registered models, optionally filtered by output field name."""
-    models = mlflow_service.list_models()
+) -> list[ModelSummary] | list[ModelSummaryDetail]:
+    """Get all registered models, optionally filtered by output field name.
+
+    Pass include_details=true to receive enriched metadata (last_trained_at,
+    best_for_fields, score_per_field, is_training, etc.) at no extra cost —
+    uses a single MLflow search call regardless of model count.
+    """
+    if include_details:
+        models = mlflow_service.list_models_detailed()
+    else:
+        models = mlflow_service.list_models()
+
     if output_field:
         valid_ids = {
             c.model_id
@@ -19,6 +29,7 @@ async def get_models(
             if output_field in c.output_fields
         }
         models = [m for m in models if m.id in valid_ids]
+
     return models
 
 

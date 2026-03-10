@@ -83,6 +83,23 @@ class ModelSummary(BaseModel):
     )
 
 
+class ModelSummaryDetail(BaseModel):
+    """Enriched summary response when include_details=true is requested."""
+
+    id: str = Field(..., description="Model ID")
+    name: str = Field(..., description="Model name")
+    architecture: ArchitectureType = Field(..., description="Model architecture")
+    created_at: datetime | None = Field(None, description="Model creation timestamp")
+    latest_version: int | None = Field(None, description="Latest registered model version number")
+    last_trained_at: datetime | None = Field(None, description="When the latest version was registered")
+    mlflow_run_id: str | None = Field(None, description="MLflow run ID of the latest version")
+    current_stage: str | None = Field(None, description="MLflow stage of latest version (None/Staging/Production/Archived)")
+    is_training: bool = Field(False, description="Whether a training job is currently running")
+    best_for_fields: list[str] = Field(default_factory=list, description="Fields for which this model is the elected best")
+    score_per_field: dict[str, float] = Field(default_factory=dict, description="Latest evaluation score per field")
+    eval_metric_per_field: dict[str, str] = Field(default_factory=dict, description="Metric used for evaluation per field")
+
+
 class ModelDetail(BaseModel):
     """Detailed response for a specific model."""
 

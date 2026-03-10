@@ -43,10 +43,10 @@ def extract_fields(
     output_data = []
 
     for window in data:
-        input_row = [float(window.get(field, 0.0)) for field in input_fields]
+        input_row = [float(window.get(field) or 0.0) for field in input_fields]
         input_data.append(input_row)
 
-        output_row = [float(window.get(field, 0.0)) for field in output_fields]
+        output_row = [float(window.get(field) or 0.0) for field in output_fields]
         output_data.append(output_row)
 
     return input_data, output_data
@@ -132,7 +132,7 @@ def prepare_last_sequence(
 
     input_data = []
     for window in recent_windows:
-        input_row = [float(window.get(field, 0.0)) for field in input_fields]
+        input_row = [float(window.get(field) or 0.0) for field in input_fields]
         input_data.append(input_row)
 
     input_arr = np.array(input_data, dtype=np.float32)
