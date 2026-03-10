@@ -5,11 +5,20 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 import mlflow
 from fastapi import FastAPI
 
 from src.core.config import settings
+from src.core.monitoring_state import (
+    clear_field_jobs,
+    get_field_jobs,
+    get_field_state,
+    set_field_jobs,
+    set_field_state,
+    set_last_checked,
+)
 from src.db.database import init_db
 from src.notification import AlertLevel, notification_center
 from src.routers import router
@@ -161,11 +170,6 @@ async def _monitoring_loop() -> None:
     )
 
     last_check_ts = int(time.time())
-    # Per-field state machine (persists across cycles, resets on restart)
-    field_states: dict[str, str] = (
-        {}
-    )  # field → "monitoring" | "retraining" | "evaluating"
-    field_jobs: dict[str, list[str]] = {}  # field → job_ids currently being tracked
 
     while True:
         await asyncio.sleep(settings.MONITORING_INTERVAL_SECONDS)
@@ -194,15 +198,13 @@ async def _monitoring_loop() -> None:
             logger.info("Auto-monitor: checking %d field(s): %s", len(fields), fields)
 
             for field in fields:
-                state = field_states.get(field, "monitoring")
+                state = get_field_state(field)
 
                 # RETRAINING: wait for all queued jobs to reach a terminal state
                 if state == "retraining":
                     from src.db.training_job import TrainingJobDB
 
-                    jobs = [
-                        db.get(TrainingJobDB, jid) for jid in field_jobs.get(field, [])
-                    ]
+                    jobs = [db.get(TrainingJobDB, jid) for jid in get_field_jobs(field)]
                     active = [
                         j for j in jobs if j and j.status in ("queued", "running")
                     ]
@@ -228,7 +230,7 @@ async def _monitoring_loop() -> None:
                         )
 
                     if completed:
-                        field_states[field] = "evaluating"
+                        set_field_state(field, "evaluating")
                         logger.info(
                             "----- [RETRAINING] '%s' — all done (%d completed, %d failed) → moving to EVALUATING",
                             field,
@@ -250,8 +252,8 @@ async def _monitoring_loop() -> None:
                             f"Retraining failed for '{field}': all jobs failed.",
                             AlertLevel.WARNING,
                         )
-                        field_states[field] = "monitoring"
-                        field_jobs.pop(field, None)
+                        set_field_state(field, "monitoring")
+                        clear_field_jobs(field)
 
                 # EVALUATING: re-elect a best model then return to monitoring
                 elif state == "evaluating":
@@ -295,8 +297,8 @@ async def _monitoring_loop() -> None:
                             e,
                         )
                     finally:
-                        field_states[field] = "monitoring"
-                        field_jobs.pop(field, None)
+                        set_field_state(field, "monitoring")
+                        clear_field_jobs(field)
                         logger.info("----- [MONITORING] '%s' — resumed", field)
 
                 # MONITORING: score the best model; trigger retraining on degradation
@@ -350,8 +352,8 @@ async def _monitoring_loop() -> None:
                             )
 
                             if job_ids:
-                                field_states[field] = "retraining"
-                                field_jobs[field] = job_ids
+                                set_field_state(field, "retraining")
+                                set_field_jobs(field, job_ids)
                                 logger.info(
                                     "----- [RETRAINING] '%s' — %d job(s) queued",
                                     field,
@@ -363,6 +365,7 @@ async def _monitoring_loop() -> None:
                                     field,
                                 )
                         else:
+                            set_last_checked(field, datetime.now(tz=timezone.utc))
                             logger.info(
                                 "----- [MONITORING] '%s' — OK  %s=%.4f  baseline=%.4f",
                                 field,
@@ -397,6 +400,25 @@ async def lifespan(app: FastAPI):
 
     if settings.KAFKA_ENABLED:
         setup_inference_pipeline()
+
+    # Release any training locks left over from a previous crash or restart
+    from src.db.database import SessionLocal
+    from src.db.model_config import ModelConfigDB
+
+    db = SessionLocal()
+    try:
+        released = (
+            db.query(ModelConfigDB)
+            .filter(ModelConfigDB.is_training == True)
+            .update({"is_training": False})
+        )
+        db.commit()
+        if released:
+            logger.warning(
+                "Released %d stale training lock(s) from previous run", released
+            )
+    finally:
+        db.close()
 
     monitor_task = None
     if settings.MONITORING_ENABLED:
