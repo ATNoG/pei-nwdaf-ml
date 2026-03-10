@@ -59,6 +59,7 @@ class InferencePipeline:
     async def _process(self, cell_id: int):
         async with self._semaphore:
             results: list[dict] = []
+            all_used_windows: dict[str, dict] = {}
 
             try:
                 anomaly = await self.anomaly_detection_service.detect(cell_id)
@@ -73,14 +74,27 @@ class InferencePipeline:
                     forecast = await self.inference_service.predict(
                         output_field=output_field, cell_id=cell_id
                     )
-                    results.append({"type": "forecast", "result": _serialize_forecast(forecast)})
+
+                    for window in forecast.pop("used_data", []):
+                        ts = str(window.get("window_start_time"))
+                        if ts not in all_used_windows:
+                            all_used_windows[ts] = window
+
+                    results.append(
+                        {"type": "forecast", "result": _serialize_forecast(forecast)}
+                    )
                 except Exception as e:
                     logger.debug(
                         "Forecast %s skipped for cell %s: %s", output_field, cell_id, e
                     )
 
             if results:
-                self._publish(cell_id, results)
+                used_data = sorted(
+                    all_used_windows.values(),
+                    key=lambda w: w.get("window_start_time", ""),
+                )
+
+                self._publish(cell_id, results, used_data if used_data else None)
 
     def _get_forecastable_fields(self) -> list[str]:
         """Get output_fields that have a best model designated in MLflow."""
@@ -101,14 +115,16 @@ class InferencePipeline:
             logger.warning("Failed to discover forecastable fields: %s", e)
         return fields
 
-    def _publish(self, cell_id: int, results: list[dict]):
-        msg = json.dumps(
-            {
-                "cell_id": cell_id,
-                "results": results,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-        )
+    def _publish(self, cell_id: int, results: list[dict], used_data: list[dict] | None):
+
+        tmp = {
+            "cell_id": cell_id,
+            "results": results,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        if used_data is not None:
+            tmp["used_data"] = used_data
+        msg = json.dumps(tmp)
         self.bridge.produce(settings.KAFKA_OUTPUT_TOPIC, msg)
         logger.info(
             "Published %d result(s) for cell %s to %s",
