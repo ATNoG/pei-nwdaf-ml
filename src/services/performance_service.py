@@ -266,6 +266,7 @@ class PerformanceService:
                 score_str = tags.get(_score_key(field_name))
                 eval_at_str = tags.get(_eval_at_key(field_name))
                 metric_str = tags.get(_metric_key(field_name))
+                baseline_str = tags.get(_baseline_key(field_name))
 
                 return ModelPerformance(
                     model_id=model_config.model_id,
@@ -276,11 +277,40 @@ class PerformanceService:
                     score=float(score_str) if score_str else None,
                     metric=metric_str or "rmse",
                     is_best=True,
+                    baseline_score=float(baseline_str) if baseline_str else None,
                     last_trained_at=model_detail.last_trained_at,
                     evaluated_at=datetime.fromisoformat(eval_at_str) if eval_at_str else None,
                 )
 
         return None
+    
+    def set_best_model(self, field_name: str, model_id: str) -> ModelPerformance:
+        """
+        Override best model designation for field_name without scoring.
+
+        Removes best_for:{field} from the current best (if any) and sets it
+        on the given model_id. Score/metric/baseline tags are left untouched.
+
+        Raises ValueError if model_id does not exist or does not predict field_name.
+        """
+        # Validate model exists and predicts the field
+        config = self.ml_config_service.get_config(model_id)
+        if config is None:
+            raise ValueError(f"Model ID '{model_id}' does not exist.")
+        if field_name not in config.output_fields:
+            raise ValueError(f"Model ID '{model_id}' does not predict field '{field_name}'.")
+        
+        # Remove best tag from current best
+        current_best = self.get_best_model(field_name)
+        if current_best and current_best.model_id != model_id:
+            try:
+                self.client.delete_registered_model_tag(current_best.model_id, _best_key(field_name))
+            except MlflowException:
+                pass
+        
+        self.client.set_registered_model_tag(model_id, _best_key(field_name), "true")
+
+        return self.get_best_model(field_name)
 
     async def monitor_best_model(
         self, field_name: str, trigger: str = "monitor"
@@ -570,7 +600,7 @@ class PerformanceService:
                 continue
 
             pred_vals = pred[field_idx::num_out].tolist()
-            truth_vals = [float(w.get(field_name, 0.0)) for w in truth_windows]
+            truth_vals = [float(w.get(field_name) or 0.0) for w in truth_windows]
 
             all_pred_vals.extend(pred_vals)
             all_truth_vals.extend(truth_vals)
