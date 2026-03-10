@@ -3,15 +3,15 @@
 import asyncio
 import logging
 
-import numpy as np
 import mlflow
+import numpy as np
 
-from src.schemas.model import ArchitectureType, ModelConfig
-from src.schemas.inference import ForecastStepPrediction
-from src.services.mlflow_service import MLflowService
-from src.services.data_storage_client import DataStorageClient
-from src.services.data_preparation import calculate_timestamps, prepare_last_sequence
 from src.models import MODEL_REGISTRY
+from src.schemas.inference import ForecastStepPrediction
+from src.schemas.model import ArchitectureType, ModelConfig
+from src.services.data_preparation import calculate_timestamps, prepare_last_sequence
+from src.services.data_storage_client import DataStorageClient
+from src.services.mlflow_service import MLflowService
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,9 @@ class InferenceService:
         self.mlflow_service = mlflow_service
         self.data_storage_client = data_storage_client
 
-    async def predict(self, output_field:str, cell_id: int, model_id: str | None = None) -> dict:
+    async def predict(
+        self, output_field: str, cell_id: int, model_id: str | None = None
+    ) -> dict:
         """
         Run inference for a single cell using a trained model.
 
@@ -46,31 +48,35 @@ class InferenceService:
 
         best_id = next(
             (
-                config.model_id for config in configs
-                if self.mlflow_service.client
-                    .get_registered_model(config.model_id)
-                    .tags.get(f"best_for:{output_field}") == "true"
+                config.model_id
+                for config in configs
+                if self.mlflow_service.client.get_registered_model(
+                    config.model_id
+                ).tags.get(f"best_for:{output_field}")
+                == "true"
             ),
             None,
         )
 
         if best_id is None:
             raise ValueError(
-              f"No best model designated for field '{output_field}'. "
-              f"Run POST /v1/performance/{output_field}/evaluate first."
+                f"No best model designated for field '{output_field}'. "
+                f"Run POST /v1/performance/{output_field}/evaluate first."
             )
 
         if model_id is None:
             model_id = best_id
         else:
-            config = next((config for config in configs if config.model_id == model_id), None)
+            config = next(
+                (config for config in configs if config.model_id == model_id), None
+            )
             if config is None or output_field not in config.output_fields:
-                raise ValueError(f"Model '{model_id}' does not predict field '{output_field}'.")
-        
+                raise ValueError(
+                    f"Model '{model_id}' does not predict field '{output_field}'."
+                )
+
         # Load model detail (config + version info) — sync call, run in thread
-        model_detail = await asyncio.to_thread(
-            self.mlflow_service.get_model, model_id
-        )
+        model_detail = await asyncio.to_thread(self.mlflow_service.get_model, model_id)
         config = model_detail.config
 
         # Validate model has been trained
@@ -143,6 +149,7 @@ class InferenceService:
             "input_fields": config.input_fields,
             "output_fields": config.output_fields,
             "predictions": predictions,
+            "used_data": cell_data[-config.lookback_steps :],
         }
 
     def _load_trained_model(
