@@ -130,11 +130,43 @@ class InferenceService:
         except Exception as e:
             raise RuntimeError(f"Prediction failed: {str(e)}")
 
-        # Structure predictions
+        # Calculate input data timestamps and window overlap
+        from datetime import datetime
+        used_data = cell_data[-config.lookback_steps :]
+
+        # Get timestamps from used data
+        first_window = used_data[0]
+        last_window = used_data[-1]
+
+        # Extract timestamps (handle both int and ISO string formats)
+        def extract_timestamp(window, field_name):
+            ts = window.get(field_name, 0)
+            if isinstance(ts, str):
+                return int(datetime.fromisoformat(ts).timestamp())
+            return int(ts)
+
+        input_data_start = extract_timestamp(first_window, "window_start_time")
+        last_window_end = extract_timestamp(last_window, "window_end_time")
+        if last_window_end == 0:
+            # If window_end_time not available, calculate it
+            last_window_end = extract_timestamp(last_window, "window_start_time") + config.window_duration_seconds
+
+        # Calculate window overlap from first two windows
+        window_overlap = 0
+        if len(used_data) >= 2:
+            first_start = extract_timestamp(used_data[0], "window_start_time")
+            second_start = extract_timestamp(used_data[1], "window_start_time")
+            step_size = second_start - first_start
+            window_overlap = config.window_duration_seconds - step_size
+
+        # Structure predictions with timestamps
         predictions = self._structure_predictions(
             raw_predictions=raw_predictions,
             output_fields=config.output_fields,
             forecast_steps=config.forecast_steps,
+            last_window_end=last_window_end,
+            window_duration_seconds=config.window_duration_seconds,
+            window_overlap=window_overlap,
         )
 
         return {
@@ -146,10 +178,13 @@ class InferenceService:
             "lookback_steps": config.lookback_steps,
             "forecast_steps": config.forecast_steps,
             "window_duration_seconds": config.window_duration_seconds,
+            "window_overlap": window_overlap,
+            "input_data_start": input_data_start,
+            "input_data_end": last_window_end,
             "input_fields": config.input_fields,
             "output_fields": config.output_fields,
             "predictions": predictions,
-            "used_data": cell_data[-config.lookback_steps :],
+            "used_data": used_data,
         }
 
     def _load_trained_model(
@@ -215,6 +250,9 @@ class InferenceService:
         raw_predictions: np.ndarray,
         output_fields: list[str],
         forecast_steps: int,
+        last_window_end: int,
+        window_duration_seconds: int,
+        window_overlap: int = 0,
     ) -> list[ForecastStepPrediction]:
         """
         Convert raw model output into structured predictions.
@@ -226,6 +264,9 @@ class InferenceService:
             raw_predictions: Raw model output, shape (1, forecast_steps * num_outputs).
             output_fields: List of output field names.
             forecast_steps: Number of forecast steps.
+            last_window_end: End timestamp of last input window (epoch seconds).
+            window_duration_seconds: Duration of each window in seconds.
+            window_overlap: Overlap between consecutive windows in seconds (0 for tumbling).
 
         Returns:
             List of ForecastStepPrediction with field-value mappings per step.
@@ -241,6 +282,9 @@ class InferenceService:
                 f"* output_fields={num_outputs})"
             )
 
+        # Calculate step size (distance between window starts)
+        step_size = window_duration_seconds - window_overlap
+
         predictions = []
         for step_idx in range(forecast_steps):
             start = step_idx * num_outputs
@@ -252,8 +296,19 @@ class InferenceService:
                 for i, field in enumerate(output_fields)
             }
 
+            # Calculate window timestamps for this prediction step
+            # For tumbling: step_size = window_duration (overlap = 0)
+            # For sliding: step_size = window_duration - overlap
+            window_start = last_window_end + (step_idx * step_size)
+            window_end = window_start + window_duration_seconds
+
             predictions.append(
-                ForecastStepPrediction(step=step_idx + 1, values=values_dict)
+                ForecastStepPrediction(
+                    step=step_idx + 1,
+                    window_start_time=window_start,
+                    window_end_time=window_end,
+                    values=values_dict
+                )
             )
 
         return predictions

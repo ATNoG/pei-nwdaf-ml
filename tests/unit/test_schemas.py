@@ -309,25 +309,45 @@ class TestForecastStepPrediction:
     def test_valid_prediction(self):
         """Test creating a valid prediction."""
         pred = ForecastStepPrediction(
-            step=1, values={"latency_mean": 12.345}
+            step=1,
+            window_start_time=1000,
+            window_end_time=1060,
+            values={"latency_mean": 12.345}
         )
 
         assert pred.step == 1
+        assert pred.window_start_time == 1000
+        assert pred.window_end_time == 1060
         assert pred.values == {"latency_mean": 12.345}
 
     def test_step_zero_invalid(self):
         """Test that step=0 is rejected (ge=1)."""
         with pytest.raises(ValidationError):
-            ForecastStepPrediction(step=0, values={"a": 1.0})
+            ForecastStepPrediction(
+                step=0,
+                window_start_time=1000,
+                window_end_time=1060,
+                values={"a": 1.0}
+            )
 
     def test_negative_step_invalid(self):
         """Test that negative step is rejected."""
         with pytest.raises(ValidationError):
-            ForecastStepPrediction(step=-1, values={"a": 1.0})
+            ForecastStepPrediction(
+                step=-1,
+                window_start_time=1000,
+                window_end_time=1060,
+                values={"a": 1.0}
+            )
 
     def test_empty_values_valid(self):
         """Test that empty dict values is valid."""
-        pred = ForecastStepPrediction(step=1, values={})
+        pred = ForecastStepPrediction(
+            step=1,
+            window_start_time=1000,
+            window_end_time=1060,
+            values={}
+        )
 
         assert pred.values == {}
 
@@ -335,6 +355,8 @@ class TestForecastStepPrediction:
         """Test multiple output fields in values."""
         pred = ForecastStepPrediction(
             step=1,
+            window_start_time=1000,
+            window_end_time=1060,
             values={"latency_mean": 1.0, "throughput_mean": 2.0, "sinr_mean": 3.0},
         )
 
@@ -355,17 +377,31 @@ class TestInferenceResult:
             lookback_steps=30,
             forecast_steps=5,
             window_duration_seconds=60,
+            input_data_start=1000,
+            input_data_end=2800,
             input_fields=["rsrp_mean", "sinr_mean"],
             output_fields=["latency_mean"],
             predictions=[
-                ForecastStepPrediction(step=1, values={"latency_mean": 10.0}),
-                ForecastStepPrediction(step=2, values={"latency_mean": 11.0}),
+                ForecastStepPrediction(
+                    step=1,
+                    window_start_time=2800,
+                    window_end_time=2860,
+                    values={"latency_mean": 10.0}
+                ),
+                ForecastStepPrediction(
+                    step=2,
+                    window_start_time=2860,
+                    window_end_time=2920,
+                    values={"latency_mean": 11.0}
+                ),
             ],
         )
 
         assert result.model_id == "uuid-123"
         assert result.model_version == 2
         assert result.architecture == ArchitectureType.LSTM
+        assert result.input_data_start == 1000
+        assert result.input_data_end == 2800
         assert len(result.predictions) == 2
 
     def test_architecture_ann(self):
@@ -379,6 +415,8 @@ class TestInferenceResult:
             lookback_steps=10,
             forecast_steps=3,
             window_duration_seconds=60,
+            input_data_start=1000,
+            input_data_end=1600,
             input_fields=["rsrp_mean"],
             output_fields=["latency_mean"],
             predictions=[],

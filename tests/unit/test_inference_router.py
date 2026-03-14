@@ -37,12 +37,29 @@ def _make_success_result():
         "lookback_steps": 30,
         "forecast_steps": 3,
         "window_duration_seconds": 60,
+        "input_data_start": 1000,
+        "input_data_end": 2800,
         "input_fields": ["rsrp_mean", "sinr_mean"],
         "output_fields": ["latency_mean"],
         "predictions": [
-            ForecastStepPrediction(step=1, values={"latency_mean": 10.0}),
-            ForecastStepPrediction(step=2, values={"latency_mean": 11.0}),
-            ForecastStepPrediction(step=3, values={"latency_mean": 12.0}),
+            ForecastStepPrediction(
+                step=1,
+                window_start_time=2800,
+                window_end_time=2860,
+                values={"latency_mean": 10.0}
+            ),
+            ForecastStepPrediction(
+                step=2,
+                window_start_time=2860,
+                window_end_time=2920,
+                values={"latency_mean": 11.0}
+            ),
+            ForecastStepPrediction(
+                step=3,
+                window_start_time=2920,
+                window_end_time=2980,
+                values={"latency_mean": 12.0}
+            ),
         ],
     }
 
