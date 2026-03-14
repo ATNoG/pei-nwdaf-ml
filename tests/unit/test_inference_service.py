@@ -418,6 +418,9 @@ class TestStructurePredictions:
             raw_predictions=raw,
             output_fields=["latency_mean"],
             forecast_steps=3,
+            last_window_end=1000,
+            window_duration_seconds=60,
+            window_overlap=0,
         )
 
         assert len(result) == 3
@@ -433,6 +436,9 @@ class TestStructurePredictions:
             raw_predictions=raw,
             output_fields=["latency_mean", "throughput_mean"],
             forecast_steps=3,
+            last_window_end=1000,
+            window_duration_seconds=60,
+            window_overlap=0,
         )
 
         assert len(result) == 3
@@ -448,6 +454,9 @@ class TestStructurePredictions:
             raw_predictions=raw,
             output_fields=["latency_mean"],
             forecast_steps=1,
+            last_window_end=1000,
+            window_duration_seconds=60,
+            window_overlap=0,
         )
 
         assert result[0].values["latency_mean"] == 1.123457
@@ -460,6 +469,9 @@ class TestStructurePredictions:
             raw_predictions=raw,
             output_fields=["latency_mean"],
             forecast_steps=3,
+            last_window_end=1000,
+            window_duration_seconds=60,
+            window_overlap=0,
         )
 
         assert result[0].step == 1
@@ -474,6 +486,9 @@ class TestStructurePredictions:
             raw_predictions=raw,
             output_fields=["latency_mean"],
             forecast_steps=1,
+            last_window_end=1000,
+            window_duration_seconds=60,
+            window_overlap=0,
         )
 
         assert isinstance(result[0], ForecastStepPrediction)
@@ -488,4 +503,47 @@ class TestStructurePredictions:
                 raw_predictions=raw,
                 output_fields=["latency_mean"],
                 forecast_steps=3,
+                last_window_end=1000,
+                window_duration_seconds=60,
+                window_overlap=0,
             )
+
+    def test_window_timestamps_tumbling(self, service):
+        """Test window timestamps for tumbling windows (overlap=0)."""
+        raw = np.array([[1.0, 2.0, 3.0]])
+
+        result = service._structure_predictions(
+            raw_predictions=raw,
+            output_fields=["latency_mean"],
+            forecast_steps=3,
+            last_window_end=1000,
+            window_duration_seconds=60,
+            window_overlap=0,
+        )
+
+        # For tumbling windows, each window starts where the previous ended
+        assert result[0].window_start_time == 1000
+        assert result[0].window_end_time == 1060
+        assert result[1].window_start_time == 1060
+        assert result[1].window_end_time == 1120
+        assert result[2].window_start_time == 1120
+        assert result[2].window_end_time == 1180
+
+    def test_window_timestamps_sliding(self, service):
+        """Test window timestamps for sliding windows (overlap>0)."""
+        raw = np.array([[1.0, 2.0]])
+
+        result = service._structure_predictions(
+            raw_predictions=raw,
+            output_fields=["latency_mean"],
+            forecast_steps=2,
+            last_window_end=1000,
+            window_duration_seconds=60,
+            window_overlap=30,
+        )
+
+        # For sliding windows with overlap=30, step_size=30
+        assert result[0].window_start_time == 1000
+        assert result[0].window_end_time == 1060
+        assert result[1].window_start_time == 1030
+        assert result[1].window_end_time == 1090
