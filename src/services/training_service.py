@@ -212,21 +212,25 @@ class TrainingService:
                     },
                 )
 
-                # Mark job as completed
-                job.status = TrainingJobStatus.COMPLETED
-                job.completed_at = datetime.now()
-                self.db.commit()
-
-                logger.info(f"Job {job_id}: Training completed successfully with run {mlflow_run_id}")
+                # Mark job as completed (only if not cancelled)
+                job = self.get_job(job_id)
+                if job and job.status != TrainingJobStatus.CANCELLED:
+                    job.status = TrainingJobStatus.COMPLETED
+                    job.completed_at = datetime.now()
+                    self.db.commit()
+                    logger.info(f"Job {job_id}: Training completed successfully with run {mlflow_run_id}")
 
             finally:
                 # Always release lock
                 self._release_training_lock(job.model_id)
 
         except Exception as e:
-            # Handle any errors
-            logger.error(f"Job {job_id}: Training failed with error: {str(e)}")
+            # If job was cancelled, InterruptedError will be raised — don't overwrite status
             job = self.get_job(job_id)
+            if job and job.status == TrainingJobStatus.CANCELLED:
+                logger.info(f"Job {job_id}: Training interrupted by cancellation")
+                return
+            logger.error(f"Job {job_id}: Training failed with error: {str(e)}")
             if job:
                 job.status = TrainingJobStatus.FAILED
                 job.error_message = str(e)
