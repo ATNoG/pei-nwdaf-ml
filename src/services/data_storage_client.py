@@ -78,12 +78,51 @@ class DataStorageClient:
             response.raise_for_status()
             return response.json()
 
+    async def probe_data_timestamp(
+        self, cells: list[int], window_duration_seconds: int
+    ) -> int | None:
+        """
+        Discover any available data by issuing a single-record request over the
+        full time range (epoch 0 to far future) for each of the first few cells.
+
+        Returns the window_start_time of the first record found, or None if the
+        data storage has no data at all.  Used to anchor evaluation windows when
+        neither the current-time window nor the training-era window has data.
+        """
+        import time
+
+        far_future = int(time.time()) + 10 * 365 * 24 * 3600
+        url = f"{self.base_url}{self.data_endpoint}"
+
+        async with httpx.AsyncClient() as client:
+            for cell in cells[:5]:
+                try:
+                    params = {
+                        "cell_index": cell,
+                        "start_time": 0,
+                        "end_time": far_future,
+                        "window_duration_seconds": window_duration_seconds,
+                        "offset": 0,
+                        "limit": 1,
+                    }
+                    response = await client.get(url, params=params, timeout=30.0)
+                    if response.status_code == 200:
+                        data = response.json()
+                        if data and isinstance(data, list):
+                            ts = int(data[0].get("window_start_time", 0))
+                            if ts > 0:
+                                return ts
+                except Exception:
+                    continue
+        return None
+
     async def fetch_cell_data(
         self,
         cell_index: int,
         start_timestamp: int,
         end_timestamp: int,
         window_duration_seconds: int,
+        ip_src: str | None = None,
     ) -> list[dict]:
         """
         Fetch processed latency data for a specific cell with pagination.
@@ -95,6 +134,8 @@ class DataStorageClient:
             start_timestamp: Start time (Unix epoch seconds)
             end_timestamp: End time (Unix epoch seconds)
             window_duration_seconds: Window duration for aggregation
+            ip_src: Optional IP source filter. Use "*" to include ip_src in
+                    the response grouped per IP. Default None = existing behavior.
 
         Returns:
             List of data windows with metrics (all pages combined)
@@ -106,7 +147,7 @@ class DataStorageClient:
 
         async with httpx.AsyncClient() as client:
             while True:
-                params = {
+                params: dict[str, int | str] = {
                     "cell_index": cell_index,
                     "start_time": start_timestamp,
                     "end_time": end_timestamp,
@@ -114,6 +155,8 @@ class DataStorageClient:
                     "offset": offset,
                     "limit": limit,
                 }
+                if ip_src is not None:
+                    params["ip_src"] = ip_src
 
                 response = await client.get(url, params=params, timeout=60.0)
                 response.raise_for_status()

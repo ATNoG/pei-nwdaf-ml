@@ -38,8 +38,9 @@ async def run_inference(
     """
     try:
         result = await inference_service.predict(
-            model_id=request.model_id,
+            output_field=request.output_field,
             cell_id=request.cell_id,
+            model_id=request.model_id,
         )
         return InferenceResult(**result)
     except ValueError as e:
