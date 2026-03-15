@@ -1,6 +1,7 @@
 """Router for model performance monitoring endpoints."""
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 from src.core.dependencies import get_mlflow_client
 from src.db.database import get_db
 from src.core.config import settings
-from src.core.monitoring_state import get_field_jobs, get_field_state, get_last_checked
+from src.core.monitoring_state import get_field_jobs, get_field_state, get_last_checked, set_field_state, set_last_checked
 from src.schemas.performance import (
     EvalMetricType,
     FieldEvaluationResponse,
@@ -50,11 +51,16 @@ async def evaluate_field(
     keeping comparison fair. The metric is persisted so subsequent /monitor
     calls automatically use the same one. Defaults to RMSE.
     """
+    set_field_state(field_name, "evaluating")
     try:
-        return await performance_service.evaluate_field(field_name, metric.value)
+        result = await performance_service.evaluate_field(field_name, metric.value)
+        set_last_checked(field_name, datetime.now(tz=timezone.utc))
+        return result
     except Exception as e:
         logger.error(f"Evaluation failed for field '{field_name}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        set_field_state(field_name, "monitoring")
 
 
 @router.get("/{field_name}/best", response_model=ModelPerformance)
