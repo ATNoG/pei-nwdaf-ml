@@ -3,7 +3,6 @@ from .fields_router import router as fields_router
 from .training_router import router as training_router
 from .inference_router import router as inference_router
 from .performance_router import router as performance_router
-<<<<<<< HEAD
 from .expiry_router import router as expiry_router
 from .anomaly_router import router as anomaly_router
 from fastapi import APIRouter
