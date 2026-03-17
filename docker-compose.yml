@@ -106,8 +106,6 @@ services:
   mlflow:
     image: ghcr.io/mlflow/mlflow:${MLFLOW_VERSION}
     container_name: mlflow-server
-    ports:
-      - "${MLFLOW_PORT}:${MLFLOW_PORT}"
     depends_on:
       postgres:
         condition: service_healthy
