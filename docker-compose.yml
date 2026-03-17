@@ -53,8 +53,8 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_HOST_AUTH_METHOD: md5 
-  volumes:
+      POSTGRES_HOST_AUTH_METHOD: md5
+    volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
       - nwdaf-ml
