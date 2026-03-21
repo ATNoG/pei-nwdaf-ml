@@ -90,6 +90,7 @@ class DataStorageClient:
         neither the current-time window nor the training-era window has data.
         """
         import time
+        from datetime import datetime, timezone
 
         far_future = int(time.time()) + 10 * 365 * 24 * 3600
         url = f"{self.base_url}{self.data_endpoint}"
@@ -109,7 +110,11 @@ class DataStorageClient:
                     if response.status_code == 200:
                         data = response.json()
                         if data and isinstance(data, list):
-                            ts = int(data[0].get("window_start_time", 0))
+                            raw = data[0].get("window_start_time", 0)
+                            if isinstance(raw, str):
+                                ts = int(datetime.fromisoformat(raw).replace(tzinfo=timezone.utc).timestamp())
+                            else:
+                                ts = int(raw)
                             if ts > 0:
                                 return ts
                 except Exception:
