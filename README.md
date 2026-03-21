@@ -1,104 +1,120 @@
-# pei-nwdaf-ml
+# NWDAF ML Service
 
-> Project for PEI evaluation 25/26
-
-## Overview
-
-ML inference and model management service for the NWDAF platform. Provides real-time ML predictions on network data, manages the complete ML lifecycle including training, versioning, and model selection, and integrates with MLflow for experiment tracking.
+FastAPI service for ML model lifecycle management and performance monitoring on 5G network data.
 
 ## Technologies
 
-- **FastAPI** 0.124.0 - Web framework for REST APIs
-- **PyTorch** 2.9.1 - Deep learning framework
-- **XGBoost** 3.1.2 - Gradient boosting for predictions
-- **scikit-learn** 1.7.2 - ML utilities
-- **MLflow** 3.6.0 - Model registry and experiment tracking
-- **Confluent Kafka** 2.12.2 - Event streaming
-- **WebSockets** 14.1 - Real-time communication
-- **boto3** 1.35.0 - AWS/S3 integration
-- **PostgreSQL** - MLflow backend store
-- **MinIO** - S3-compatible artifact storage
-- **Docker & Docker Compose** - Containerization
 - **Python** 3.13
+- **FastAPI** - REST API framework
+- **PyTorch** - model training
+- **MLflow** - model registry and experiment tracking
+- **PostgreSQL** / **MinIO** - persistence and artifact storage
 
-## Key Features
+## How It Works
 
-- **Multiple inference modes**:
-  - Single cell inference for specific network cells
-  - Batch inference for multiple cells simultaneously
-  - Auto-selection of best-performing models
-  - Manual model selection by name/version/stage
+1. Models are registered with a configuration (architecture, input/output fields, window size, lookback/forecast steps)
+2. Training jobs fetch historical windows from the Data Storage API, build sliding sequences and train a PyTorch model, logging results to MLflow
+3. Inference fetches the latest cell data from ClickHouse and runs the elected best model for that field
+4. A background monitoring loop re-scores the best model per output field on a configurable interval; if performance degrades past a threshold, all models for that field are retrained and re-evaluated automatically
 
-- **Model management**:
-  - Integration with MLflow model registry
-  - Cell-specific models (e.g., `cell_12898855_xgboost`)
-  - Model caching for performance
-  - Support for XGBoost, ANN, LSTM model types
+## Databases & Integrations
 
-- **Kafka integration**:
-  - Consumes from `ml.inference.request` topic
-  - Processes network data from `network.data.processed` topic
-  - Publishes results to `ml.inference.complete` topic
-  - Background consumer thread for async message handling
+| Service | Role |
+|---|---|
+| **MLflow** | Model registry, experiment tracking, per-field performance tags |
+| **PostgreSQL** | Model configs, training job log, score history |
+| **MinIO** | S3-compatible artifact store for trained model weights |
+| **Data Storage API** | Source of processed ClickHouse windows for training, evaluation, and inference |
 
-- **Data storage integration**:
-  - Fetches training data from Data Storage API
-  - Queries latency data with time range and cell filtering
-  - Supports dynamic cell discovery
+## API
 
-- **Monitoring & health**:
-  - System health checks (Kafka, MLflow, Data Storage)
-  - Component status tracking (inference, training, registry, storage)
-  - Performance metrics logging
-  - WebSocket support for real-time monitoring
+Base path: `/v1`
 
-## API Endpoints
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/fields` | List available output fields. `?include_model_status=true` adds `has_models` flag per field |
+| `GET` | `/models` | List all models. `?include_details=true` adds scores, best-for fields, training status |
+| `POST` | `/models` | Create a new model config |
+| `GET` | `/models/{model_id}` | Get model detail |
+| `DELETE` | `/models/{model_id}` | Delete model from registry and config store |
+| `POST` | `/training/train` | Queue a training job (202 Accepted) |
+| `GET` | `/training/jobs` | List training jobs. `?model_id=` / `?status=` filters |
+| `GET` | `/training/jobs/{job_id}` | Get job detail (status, timestamps, error) |
+| `DELETE` | `/training/jobs/{job_id}` | Cancel a job |
+| `POST` | `/inference` | Run inference for a cell. Omit `model_id` to use the best model |
+| `POST` | `/performance/{field}/evaluate` | Score all models for a field, elect best. `?metric=rmse\|mae\|mape\|r2` |
+| `GET` | `/performance/{field}` | Cached evaluation result (no live scoring) |
+| `GET` | `/performance/{field}/best` | Current best model with baseline score and degradation threshold |
+| `POST` | `/performance/{field}/set-best/{model_id}` | Override best model without re-evaluating |
+| `POST` | `/performance/{field}/monitor` | Re-score best model only; does not change best designation |
+| `GET` | `/performance/{field}/status` | State machine status: state, active jobs, next check time, thresholds |
+| `GET` | `/performance/{field}/history` | Full score measurement history. `?model_id=` filter |
 
-- `/ml/inference` - Trigger predictions
-- `/ml/set-model` - Configure specific models
-- `/ml/auto-mode` - Toggle auto-selection
-- `/ml/models` - List registered models
-- `/ml/best-model` - Get best performing model
-- `/health` - Service health status
-- `/kafka/*` - Kafka management
-- `/data/*` - Data operations
-- `/api/v1/*` - v1 API routes
+### Model Config Parameters
 
-## Directory Structure
+| Parameter | Type | Description |
+|---|---|---|
+| `architecture` | `ann` \| `lstm` | Model type |
+| `input_fields` | `list[str]` | Fields used as input features |
+| `output_fields` | `list[str]` | Fields to predict |
+| `window_duration_seconds` | int | Time bucket size in seconds (e.g. 60, 300) |
+| `lookback_steps` | int | Number of past windows fed as input |
+| `forecast_steps` | int | Number of future windows predicted |
+| `hidden_size` | int | Hidden layer width (default: 32) |
+
+### Training Job Statuses
+
+`queued -> running -> completed | failed | cancelled`
+
+### Performance MLflow Tags
+
+| Tag | Description |
+|---|---|
+| `best_for:{field}` | `"true"` on the elected best model |
+| `baseline_score:{field}` | Score at election time - degradation reference |
+| `score_for:{field}` | Latest score |
+| `eval_metric:{field}` | Metric used (`rmse` / `mae` / `mape` / `r2`) |
+| `eval_at:{field}` | ISO timestamp of last evaluation |
+
+## Auto-Monitoring Loop
+
+Runs as a background task on startup when `MONITORING_ENABLED=true`. Per-field state machine:
 
 ```
-ml/
-├── main.py              # FastAPI entry point
-├── src/
-│   ├── interface/       # MLInterface - central communication hub
-│   ├── models/          # Model implementations (ANN, LSTM, XGBoost)
-│   ├── inference/       # InferenceMaker for predictions
-│   ├── services/        # Business logic (inference, training, config, monitoring)
-│   ├── routers/         # FastAPI route handlers
-│   ├── schemas/         # Pydantic data models for validation
-│   ├── mlflow/          # MLflow integration bridge
-│   ├── config/          # Configuration and inference types
-│   └── utils/           # Feature engineering utilities
-└── tests/               # Test suite
+MONITORING --(degraded?)--> RETRAINING --(all jobs done)--> EVALUATING --> MONITORING
 ```
 
-## Quick Start
+- **MONITORING** - re-scores the best model every `MONITORING_INTERVAL_SECONDS`. Triggers retraining if `score > baseline x MONITORING_DEGRADATION_FACTOR`
+- **RETRAINING** - waits for all training jobs to reach a terminal state
+- **EVALUATING** - re-ranks all models and elects a new best
+
+On startup, stale `is_training` locks from crashed runs are automatically cleared.
+
+## Configuration
+
+| Variable | Description |
+|---|---|
+| `MLFLOW_TRACKING_URI` | MLflow server URL |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `DATA_STORAGE_API_URL` | Data Storage service base URL |
+| `DATA_STORAGE_DATA_ENDPOINT` | Processed data endpoint (e.g. `/api/v1/processed`) |
+| `DATA_STORAGE_EXAMPLE_ENDPOINT` | Example schema endpoint |
+| `DATA_STORAGE_CELL_ENDPOINT` | Cell list endpoint |
+| `DATA_STORAGE_EXCLUDED_FIELDS` | Comma-separated metadata fields to exclude from field discovery |
+| `AWS_ACCESS_KEY_ID` | MinIO access key |
+| `AWS_SECRET_ACCESS_KEY` | MinIO secret key |
+| `AWS_S3_ENDPOINT_URL` | MinIO endpoint URL |
+| `MONITORING_ENABLED` | Enable background monitoring loop (default: `true`) |
+| `MONITORING_INTERVAL_SECONDS` | Seconds between monitor checks (default: `300`) |
+| `MONITORING_DEGRADATION_FACTOR` | Score multiplier that triggers retraining (default: `1.5`) |
+| `API_HOST` | Bind address (default: `0.0.0.0`) |
+| `API_PORT` | Port (default: `8060`) |
+| `ML_PORT` | Port (default: `8060`) |
+| `LOG_LEVEL` | Log verbosity (default: `INFO`) |
+
+## Running
 
 ```bash
-docker-compose up
+cp .env.example .env
+docker compose up
 ```
-
-## Infrastructure Dependencies
-
-Requires running services:
-- **PostgreSQL** - MLflow backend
-- **MinIO** - Artifact storage
-- **Kafka** - Message streaming
-- **Data Storage** - Training data access
-
-## Use Cases
-
-- Network latency prediction for 5G cells
-- QoS forecasting and analytics
-- Model performance evaluation on streaming data
-- ML model lifecycle management for network analytics
