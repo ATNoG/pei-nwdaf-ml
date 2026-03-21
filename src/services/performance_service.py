@@ -561,7 +561,7 @@ class PerformanceService:
             if (not data or len(data) < min_windows) and fallback_start_ts is not None:
                 alt_start = fallback_start_ts
                 alt_end = fallback_start_ts + fetch_secs
-                logger.info(
+                logger.debug(
                     "Cell %d: no current data, retrying with probed window [%d, %d]",
                     cell_index,
                     alt_start,
@@ -579,9 +579,11 @@ class PerformanceService:
                     data = None
 
             if not data or len(data) < min_windows:
-                logger.warning(
-                    f"Cell {cell_index}: insufficient data "
-                    f"({len(data) if data else 0} windows, need {min_windows})"
+                logger.debug(
+                    "Cell %d: insufficient data (%d windows, need %d)",
+                    cell_index,
+                    len(data) if data else 0,
+                    min_windows,
                 )
                 continue
 
