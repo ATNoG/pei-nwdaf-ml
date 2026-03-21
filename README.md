@@ -2,6 +2,14 @@
 
 FastAPI service for ML model lifecycle management and performance monitoring on 5G network data.
 
+## Technologies
+
+- **Python** 3.13
+- **FastAPI** - REST API framework
+- **PyTorch** - model training
+- **MLflow** - model registry and experiment tracking
+- **PostgreSQL** / **MinIO** - persistence and artifact storage
+
 ## How It Works
 
 1. Models are registered with a configuration (architecture, input/output fields, window size, lookback/forecast steps)
