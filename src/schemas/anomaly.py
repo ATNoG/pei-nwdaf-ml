@@ -173,6 +173,7 @@ class AnomalyDetectionResult(BaseModel):
 class AnomalyModelMeta(BaseModel):
     """Metadata for a model used in a summary."""
 
+    name: str
     fields: list[str]
     threshold: float
     window_duration_seconds: int

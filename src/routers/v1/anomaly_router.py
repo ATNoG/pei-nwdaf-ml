@@ -394,14 +394,15 @@ async def run_all_anomaly_detection(
             result = await detection_service.detect(
                 request.cell_id, model_cfg.model_id, request.lookback_seconds
             )
-            models_meta[result.model_name] = AnomalyModelMeta(
+            models_meta[result.model_id] = AnomalyModelMeta(
+                name=result.model_name,
                 fields=result.input_fields,
                 threshold=result.threshold_value,
                 window_duration_seconds=result.window_duration_seconds,
             )
             for ip_result in result.results:
                 ip = ip_result.ip_src
-                ip_anomalies.setdefault(ip, {})[result.model_name] = (
+                ip_anomalies.setdefault(ip, {})[result.model_id] = (
                     f"{ip_result.num_anomalies}/{ip_result.num_windows}"
                 )
         except Exception as e:

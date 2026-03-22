@@ -72,14 +72,15 @@ class InferencePipeline:
                     anomaly = await self.anomaly_detection_service.detect(
                         cell_id, model_id=model_cfg.model_id
                     )
-                    models_meta[anomaly.model_name] = AnomalyModelMeta(
+                    models_meta[anomaly.model_id] = AnomalyModelMeta(
+                        name=anomaly.model_name,
                         fields=anomaly.input_fields,
                         threshold=anomaly.threshold_value,
                         window_duration_seconds=anomaly.window_duration_seconds,
                     )
                     for ip_result in anomaly.results:
                         ip = ip_result.ip_src
-                        ip_anomalies.setdefault(ip, {})[anomaly.model_name] = (
+                        ip_anomalies.setdefault(ip, {})[anomaly.model_id] = (
                             f"{ip_result.num_anomalies}/{ip_result.num_windows}"
                         )
                 except Exception as e:
