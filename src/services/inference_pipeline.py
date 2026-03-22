@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timezone
 
 from src.core.config import settings
-from src.schemas.anomaly import AnomalyDetectionResult
+from src.schemas.anomaly import AnomalyDetectionResult, AnomalyDetectionSummary, AnomalyModelMeta
 from src.services.anomaly_detection_service import AnomalyDetectionService
 from src.services.inference_service import InferenceService
 
@@ -61,13 +61,39 @@ class InferencePipeline:
             results: list[dict] = []
             all_used_windows: dict[str, dict] = {}
 
-            try:
-                anomaly = await self.anomaly_detection_service.detect(cell_id)
-                results.append(
-                    {"type": "anomaly", "result": _serialize_anomaly(anomaly)}
+            trained_models = [
+                cfg for cfg in self.anomaly_detection_service.anomaly_config_service.list_all()
+                if cfg.threshold_value is not None
+            ]
+            models_meta: dict[str, AnomalyModelMeta] = {}
+            ip_anomalies: dict[str, dict[str, str]] = {}
+            for model_cfg in trained_models:
+                try:
+                    anomaly = await self.anomaly_detection_service.detect(
+                        cell_id, model_id=model_cfg.model_id
+                    )
+                    models_meta[anomaly.model_name] = AnomalyModelMeta(
+                        fields=anomaly.input_fields,
+                        threshold=anomaly.threshold_value,
+                        window_duration_seconds=anomaly.window_duration_seconds,
+                    )
+                    for ip_result in anomaly.results:
+                        ip = ip_result.ip_src
+                        ip_anomalies.setdefault(ip, {})[anomaly.model_name] = (
+                            f"{ip_result.num_anomalies}/{ip_result.num_windows}"
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "Anomaly detection skipped for cell %s model %s: %s",
+                        cell_id, model_cfg.name, e
+                    )
+            if models_meta:
+                summary = AnomalyDetectionSummary(
+                    cell_id=cell_id,
+                    models=models_meta,
+                    ip_anomalies=ip_anomalies,
                 )
-            except Exception as e:
-                logger.warning("Anomaly detection skipped for cell %s: %s", cell_id, e)
+                results.append({"type": "anomaly", "result": summary.model_dump()})
 
             for output_field in self._get_forecastable_fields():
                 try:
