@@ -11,8 +11,10 @@ from src.core.dependencies import get_db
 from src.schemas.anomaly import (
     AnomalyDetectionRequest,
     AnomalyDetectionResult,
+    AnomalyDetectionSummary,
     AnomalyModelCreate,
     AnomalyModelDetail,
+    AnomalyModelMeta,
     AnomalyModelSummary,
     AnomalyTrainingJobDetail,
     AnomalyTrainingJobSummary,
@@ -359,7 +361,7 @@ async def run_anomaly_detection(
     request: AnomalyDetectionRequest,
     detection_service: AnomalyDetectionService = Depends(get_anomaly_detection_service),
 ) -> AnomalyDetectionResult:
-    """Run anomaly detection for all IPs in a cell."""
+    """Run anomaly detection for all IPs in a cell using a single model."""
     try:
         return await detection_service.detect(
             request.cell_id, request.model_id, request.lookback_seconds
@@ -369,3 +371,45 @@ async def run_anomaly_detection(
     except Exception as e:
         logger.error(f"Anomaly detection failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/detect/all", response_model=AnomalyDetectionSummary)
+async def run_all_anomaly_detection(
+    request: AnomalyDetectionRequest,
+    detection_service: AnomalyDetectionService = Depends(get_anomaly_detection_service),
+) -> AnomalyDetectionSummary:
+    """Run anomaly detection for all IPs in a cell using all trained models."""
+    trained_models = [
+        cfg for cfg in detection_service.anomaly_config_service.list_all()
+        if cfg.threshold_value is not None
+    ]
+    if not trained_models:
+        raise HTTPException(status_code=404, detail="No trained anomaly models available")
+
+    models_meta: dict[str, AnomalyModelMeta] = {}
+    ip_anomalies: dict[str, dict[str, str]] = {}
+
+    for model_cfg in trained_models:
+        try:
+            result = await detection_service.detect(
+                request.cell_id, model_cfg.model_id, request.lookback_seconds
+            )
+            models_meta[result.model_id] = AnomalyModelMeta(
+                name=result.model_name,
+                fields=result.input_fields,
+                threshold=result.threshold_value,
+                window_duration_seconds=result.window_duration_seconds,
+            )
+            for ip_result in result.results:
+                ip = ip_result.ip_src
+                ip_anomalies.setdefault(ip, {})[result.model_id] = (
+                    f"{ip_result.num_anomalies}/{ip_result.num_windows}"
+                )
+        except Exception as e:
+            logger.warning(f"Model {model_cfg.name} skipped: {e}")
+
+    return AnomalyDetectionSummary(
+        cell_id=request.cell_id,
+        models=models_meta,
+        ip_anomalies=ip_anomalies,
+    )

@@ -168,3 +168,24 @@ class AnomalyDetectionResult(BaseModel):
     results: list[IPAnomalyResult] = Field(
         ..., description="Per-IP anomaly detection results"
     )
+
+
+class AnomalyModelMeta(BaseModel):
+    """Metadata for a model used in a summary."""
+
+    name: str
+    fields: list[str]
+    threshold: float
+    window_duration_seconds: int
+
+
+class AnomalyDetectionSummary(BaseModel):
+    """Compact multi-model anomaly detection summary for a cell."""
+
+    cell_id: int
+    models: dict[str, AnomalyModelMeta] = Field(
+        ..., description="Model metadata keyed by model name"
+    )
+    ip_anomalies: dict[str, dict[str, str]] = Field(
+        ..., description="Per-IP anomaly counts keyed by IP then model name (e.g. '3/10')"
+    )
