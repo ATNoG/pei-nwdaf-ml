@@ -1,8 +1,6 @@
 """Router for anomaly detection endpoints."""
 
-import asyncio
 import logging
-from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -29,11 +27,6 @@ from src.services.data_storage_client import DataStorageClient
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Thread pool for background anomaly training tasks
-anomaly_training_executor = ThreadPoolExecutor(
-    max_workers=2, thread_name_prefix="anomaly_training"
-)
-
 
 def get_anomaly_config_service(db: Session = Depends(get_db)) -> AnomalyConfigService:
     return AnomalyConfigService(db)
@@ -56,33 +49,6 @@ def get_anomaly_detection_service(
         data_storage_client=DataStorageClient(),
         anomaly_config_service=AnomalyConfigService(db),
     )
-
-
-def _run_anomaly_training_sync(job_id: str):
-    """Synchronous anomaly training task that runs in a separate thread."""
-    import asyncio
-
-    import mlflow
-    from mlflow import MlflowClient
-
-    from src.core.config import settings
-    from src.db.database import SessionLocal
-    from src.services.anomaly_config_service import AnomalyConfigService
-    from src.services.anomaly_training_service import AnomalyTrainingService
-    from src.services.data_storage_client import DataStorageClient
-
-    db = SessionLocal()
-    try:
-        mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
-        config_service = AnomalyConfigService(db)
-        training_service = AnomalyTrainingService(
-            data_storage_client=DataStorageClient(),
-            anomaly_config_service=config_service,
-            db=db,
-        )
-        asyncio.run(training_service.execute_training(job_id))
-    finally:
-        db.close()
 
 
 # ── Model CRUD ───────────────────────────────────────────────────────
@@ -202,7 +168,9 @@ async def get_anomaly_model(
 
     cfg = config_service.get_config(model_id)
     if not cfg:
-        raise HTTPException(status_code=404, detail=f"Anomaly model '{model_id}' not found")
+        raise HTTPException(
+            status_code=404, detail=f"Anomaly model '{model_id}' not found"
+        )
 
     config = config_service.config_from_db(cfg)
 
@@ -274,13 +242,8 @@ async def train_anomaly_model(
         job_info = training_service.create_training_job(
             request.model_id, request.lookback_seconds
         )
-
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(
-            anomaly_training_executor,
-            _run_anomaly_training_sync,
-            job_info["job_id"],
-        )
+        training_service.dispatch(job_info["job_id"], request.resources)
+        logger.info(f"Anomaly training job {job_info['job_id']} dispatched")
 
         return AnomalyTrainingResponse(
             job_id=job_info["job_id"],
@@ -380,11 +343,14 @@ async def run_all_anomaly_detection(
 ) -> AnomalyDetectionSummary:
     """Run anomaly detection for all IPs in a cell using all trained models."""
     trained_models = [
-        cfg for cfg in detection_service.anomaly_config_service.list_all()
+        cfg
+        for cfg in detection_service.anomaly_config_service.list_all()
         if cfg.threshold_value is not None
     ]
     if not trained_models:
-        raise HTTPException(status_code=404, detail="No trained anomaly models available")
+        raise HTTPException(
+            status_code=404, detail="No trained anomaly models available"
+        )
 
     models_meta: dict[str, AnomalyModelMeta] = {}
     ip_anomalies: dict[str, dict[str, str]] = {}
@@ -402,9 +368,9 @@ async def run_all_anomaly_detection(
             )
             for ip_result in result.results:
                 ip = ip_result.ip_src
-                ip_anomalies.setdefault(ip, {})[result.model_id] = (
-                    f"{ip_result.num_anomalies}/{ip_result.num_windows}"
-                )
+                ip_anomalies.setdefault(ip, {})[
+                    result.model_id
+                ] = f"{ip_result.num_anomalies}/{ip_result.num_windows}"
         except Exception as e:
             logger.warning(f"Model {model_cfg.name} skipped: {e}")
 
