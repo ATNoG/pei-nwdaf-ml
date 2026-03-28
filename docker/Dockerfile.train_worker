@@ -1,0 +1,18 @@
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    python3-dev \
+    librdkafka-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml .
+COPY .python-version .
+COPY uv.lock .
+RUN uv sync --frozen --no-dev --no-install-project
+
+COPY src/ ./src/
+
+CMD ["uv", "run", "-m", "src.workers.train_worker"]
