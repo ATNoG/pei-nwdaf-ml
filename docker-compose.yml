@@ -54,7 +54,7 @@ services:
   postgres:
     build:
       context: .
-      dockerfile: Dockerfile.postgres
+      dockerfile: docker/Dockerfile.postgres
     container_name: mlflow-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
