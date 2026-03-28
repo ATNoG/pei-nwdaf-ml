@@ -18,3 +18,4 @@ class JobSpec:
     resources: JobResources | None = None
     backoff_limit: int = 0
     ttl_seconds: int = 3600
+    active_deadline_seconds: int = 7200

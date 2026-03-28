@@ -320,9 +320,13 @@ class TrainingService:
         from src.services.kube_training import get_kube_training_service
         kube = get_kube_training_service()
         if kube:
-            kube.cancel(job_id)
-            self._release_training_lock(job.model_id)
-            logger.info(f"Released training lock for model {job.model_id}")
+            try:
+                kube.cancel(job_id)
+            except Exception as e:
+                logger.error(f"Failed to delete K8s job for {job_id}: {e}")
+            finally:
+                self._release_training_lock(job.model_id)
+                logger.info(f"Released training lock for model {job.model_id}")
         # else: thread pool worker releases the lock via execute_training's finally block
 
     def _acquire_training_lock(self, model_id: str) -> bool:

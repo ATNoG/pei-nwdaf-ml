@@ -26,6 +26,7 @@ class KubeClient:
             spec=client.V1JobSpec(
                 backoff_limit=spec.backoff_limit,
                 ttl_seconds_after_finished=spec.ttl_seconds,
+                active_deadline_seconds=spec.active_deadline_seconds,
                 template=client.V1PodTemplateSpec(
                     metadata=client.V1ObjectMeta(labels=spec.labels),
                     spec=client.V1PodSpec(
