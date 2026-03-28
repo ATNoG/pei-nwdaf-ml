@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     )
 
     # API Configuration
-    API_HOST: str
-    API_PORT: int
+    API_HOST: str = "0.0.0.0"
+    API_PORT: int = 8060
     LOG_LEVEL: str
 
     # MLflow Configuration
