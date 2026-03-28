@@ -45,5 +45,13 @@ class Settings(BaseSettings):
     KAFKA_ENABLED: bool = True
     KAFKA_DEBOUNCE_SECONDS: int = 30
 
+    # Kubernetes training
+    TRAIN_USE_KUBE: bool = False
+    TRAIN_KUBE_HOST: str = ""
+    TRAIN_KUBE_TOKEN: str = ""
+    TRAIN_KUBE_CA_CERT: str = ""  # base64-encoded PEM CA certificate
+    TRAIN_KUBE_NAMESPACE: str = "default"
+    TRAIN_KUBE_IMAGE: str = ""
+
 
 settings = Settings()
