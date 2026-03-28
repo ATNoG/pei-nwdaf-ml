@@ -82,6 +82,23 @@ ml/
 └── tests/               # Test suite
 ```
 
+## Kubernetes Training
+
+Training jobs can be dispatched as Kubernetes Jobs instead of running locally. Set `TRAIN_USE_KUBE=true` and configure the remaining `TRAIN_KUBE_*` variables in your `.env`.
+
+A pre-built worker image is publicly available on Docker Hub:
+
+```
+TRAIN_KUBE_IMAGE=vcnt00/pei-ml-train-worker:latest
+```
+
+To build and publish your own:
+
+```bash
+docker build -f docker/Dockerfile.train_worker -t <your-registry>/pei-ml-train-worker:latest .
+docker push <your-registry>/pei-ml-train-worker:latest
+```
+
 ## Quick Start
 
 ```bash
