@@ -1,8 +1,9 @@
 from dataclasses import dataclass, field
 
+from pydantic import BaseModel
 
-@dataclass
-class JobResources:
+
+class JobResources(BaseModel):
     cpu: str
     memory: str
 
