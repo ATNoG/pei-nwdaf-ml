@@ -1,6 +1,8 @@
 """Service for training anomaly detection models."""
 
+import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from uuid import uuid4
 
@@ -19,6 +21,26 @@ from src.services.data_preparation import calculate_timestamps, extract_fields
 from src.services.data_storage_client import DataStorageClient
 
 logger = logging.getLogger(__name__)
+
+_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="anomaly_training")
+
+
+def _run_anomaly_training_sync(job_id: str):
+    from src.core.config import settings
+    from src.db.database import SessionLocal
+    from src.services.anomaly_config_service import AnomalyConfigService
+
+    db = SessionLocal()
+    try:
+        mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
+        service = AnomalyTrainingService(
+            data_storage_client=DataStorageClient(),
+            anomaly_config_service=AnomalyConfigService(db),
+            db=db,
+        )
+        asyncio.run(service.execute_training(job_id))
+    finally:
+        db.close()
 
 
 class AnomalyTrainingService:
@@ -81,13 +103,16 @@ class AnomalyTrainingService:
                 logger.error(f"Anomaly job {job_id} not found")
                 return
 
-            if job.status == TrainingJobStatus.CANCELLED:
-                logger.info(f"Anomaly job {job_id} was cancelled before execution")
-                return
-
-            job.status = TrainingJobStatus.RUNNING
-            job.started_at = datetime.now()
+            result = self.db.execute(
+                update(AnomalyTrainingJobDB)
+                .where(AnomalyTrainingJobDB.job_id == job_id)
+                .where(AnomalyTrainingJobDB.status == TrainingJobStatus.QUEUED)
+                .values(status=TrainingJobStatus.RUNNING, started_at=datetime.now())
+            )
             self.db.commit()
+            if result.rowcount == 0:
+                logger.info(f"Anomaly job {job_id} was not in QUEUED state (likely cancelled), aborting")
+                return
 
             try:
                 config_db = self.anomaly_config_service.get_config(job.model_id)
@@ -171,6 +196,14 @@ class AnomalyTrainingService:
             query = query.filter(AnomalyTrainingJobDB.status == status)
         return query.all()
 
+    def dispatch(self, job_id: str, resources) -> None:
+        from src.services.kube_training import get_kube_training_service
+        kube = get_kube_training_service()
+        if kube:
+            kube.to_kube(job_id, resources, "anomaly")
+        else:
+            asyncio.get_running_loop().run_in_executor(_executor, _run_anomaly_training_sync, job_id)
+
     def cancel_job(self, job_id: str):
         job = self.get_job(job_id)
         if not job:
@@ -190,7 +223,12 @@ class AnomalyTrainingService:
             except Exception as e:
                 logger.error(f"Failed to terminate MLflow run: {e}")
 
-        self._release_training_lock(job.model_id)
+        from src.services.kube_training import get_kube_training_service
+        kube = get_kube_training_service()
+        if kube:
+            kube.cancel(job_id)
+            self._release_training_lock(job.model_id)
+        # else: thread pool worker releases the lock via execute_training's finally block
 
     # ── Internal helpers ──────────────────────────────────────────────
 
