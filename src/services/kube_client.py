@@ -34,7 +34,7 @@ class KubeClient:
                             client.V1Container(
                                 name="worker",
                                 image=spec.image,
-                                image_pull_policy="Always",
+                                image_pull_policy="IfNotPresent",
                                 env=[
                                     client.V1EnvVar(name=k, value=v)
                                     for k, v in spec.env.items()
@@ -49,6 +49,14 @@ class KubeClient:
         self._batch.create_namespaced_job(namespace=spec.namespace, body=job)
         logger.info(f"Created K8s Job '{spec.name}' in namespace '{spec.namespace}'")
         return spec.name
+
+    def get_job(self, name: str, namespace: str) -> client.V1Job | None:
+        try:
+            return self._batch.read_namespaced_job(name=name, namespace=namespace)
+        except ApiException as e:
+            if e.status == 404:
+                return None
+            raise
 
     def delete_job(self, name: str, namespace: str) -> None:
         try:

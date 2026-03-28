@@ -46,3 +46,11 @@ class KubeTrainingService:
 
     def cancel(self, job_id: str):
         self._kube_client.delete_job(f"ml-train-{job_id}", settings.TRAIN_KUBE_NAMESPACE)
+
+    def is_job_dead(self, job_id: str) -> bool:
+        """Returns True if the K8s job has failed or no longer exists."""
+        job = self._kube_client.get_job(f"ml-train-{job_id}", settings.TRAIN_KUBE_NAMESPACE)
+        if job is None:
+            return True
+        conditions = job.status.conditions or []
+        return any(c.type == "Failed" and c.status == "True" for c in conditions)

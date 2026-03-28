@@ -14,5 +14,6 @@ COPY uv.lock .
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY src/ ./src/
+RUN uv sync --frozen --no-dev
 
-CMD ["uv", "run", "-m", "src.workers.train_worker"]
+CMD ["uv", "run", "--no-sync", "-m", "src.workers.train_worker"]
