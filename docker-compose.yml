@@ -7,7 +7,7 @@ services:
     container_name: pei-ml
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile.main
     ports:
       - "8060:8060"
     environment:
