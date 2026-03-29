@@ -683,10 +683,8 @@ class TrainingService:
         """
         def status_callback(epoch, max_epochs, loss, **kwargs):
             """Callback for logging progress and checking cancellation."""
-            # Log progress every 10 epochs
-            if epoch % 10 == 0:
-                logger.info(f"Epoch {epoch}/{max_epochs}: loss={loss:.6f}")
-                mlflow.log_metric("training_loss", loss, step=epoch)
+            logger.info(f"Epoch {epoch}/{max_epochs}: loss={loss:.6f}")
+            mlflow.log_metric("training_loss", loss, step=epoch)
 
             # Check if job was cancelled (check every epoch)
             job = self.get_job(job_id)
