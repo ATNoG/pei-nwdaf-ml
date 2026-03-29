@@ -117,6 +117,20 @@ async def get_training_job(
         if not job:
             raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
+        current_epoch = None
+        current_loss = None
+        if job.status == "running" and job.mlflow_run_id:
+            try:
+                from mlflow.tracking import MlflowClient
+                client = MlflowClient()
+                metrics = client.get_metric_history(job.mlflow_run_id, "training_loss")
+                if metrics:
+                    latest = metrics[-1]
+                    current_epoch = latest.step
+                    current_loss = round(latest.value, 6)
+            except Exception:
+                pass
+
         return TrainingJobDetail(
             job_id=job.job_id,
             model_id=job.model_id,
@@ -126,6 +140,8 @@ async def get_training_job(
             started_at=job.started_at,
             completed_at=job.completed_at,
             error_message=job.error_message,
+            current_epoch=current_epoch,
+            current_loss=current_loss,
         )
     except HTTPException:
         raise

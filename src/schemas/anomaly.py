@@ -117,6 +117,8 @@ class AnomalyTrainingJobDetail(BaseModel):
         None, description="Training completion timestamp"
     )
     error_message: str | None = Field(None, description="Error message if failed")
+    current_epoch: int | None = Field(None, description="Latest training epoch (only while running)")
+    current_loss: float | None = Field(None, description="Latest training loss (only while running)")
 
 
 class AnomalyTrainingJobSummary(BaseModel):

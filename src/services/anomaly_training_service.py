@@ -402,9 +402,8 @@ class AnomalyTrainingService:
             ae = Autoencoder(input_size=num_features, hidden_size=config.hidden_size)
 
             def status_callback(epoch, max_epochs, loss):
-                if epoch % 10 == 0:
-                    logger.info(f"Epoch {epoch}/{max_epochs}: loss={loss:.6f}")
-                    mlflow.log_metric("training_loss", loss, step=epoch)
+                logger.info(f"Epoch {epoch}/{max_epochs}: loss={loss:.6f}")
+                mlflow.log_metric("training_loss", loss, step=epoch)
                 current_job = self.get_job(job_id)
                 if current_job and current_job.status == TrainingJobStatus.CANCELLED:
                     raise InterruptedError("Training cancelled by user")
