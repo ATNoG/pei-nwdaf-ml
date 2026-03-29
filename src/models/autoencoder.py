@@ -102,7 +102,7 @@ class Autoencoder:
 
             if status_callback:
                 try:
-                    status_callback(epoch + 1, max_epochs, epoch_loss)
+                    status_callback(epoch, max_epochs, epoch_loss)
                 except InterruptedError:
                     raise
                 except Exception as e:
