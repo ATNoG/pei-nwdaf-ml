@@ -1,6 +1,8 @@
 """Service for training ML models."""
 
+import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from uuid import uuid4
 import numpy as np
@@ -24,6 +26,30 @@ import mlflow
 from mlflow.tracking import MlflowClient
 
 logger = logging.getLogger(__name__)
+
+_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="training")
+
+
+def _run_training_sync(job_id: str):
+    import mlflow
+    from mlflow import MlflowClient
+    from src.core.config import settings
+    from src.db.database import SessionLocal
+    from src.services.config_service import MLConfigService
+
+    db = SessionLocal()
+    try:
+        mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
+        config_service = MLConfigService(db)
+        service = TrainingService(
+            mlflow_service=MLflowService(MlflowClient(), config_service),
+            data_storage_client=DataStorageClient(),
+            ml_config_service=config_service,
+            db=db,
+        )
+        asyncio.run(service.execute_training(job_id))
+    finally:
+        db.close()
 
 
 class TrainingService:
@@ -114,15 +140,17 @@ class TrainingService:
                 logger.error(f"Job {job_id} not found")
                 return
 
-            # Check if job was cancelled before starting
-            if job.status == TrainingJobStatus.CANCELLED:
-                logger.info(f"Job {job_id} was cancelled before execution")
-                return
-
-            # Update job status to running
-            job.status = TrainingJobStatus.RUNNING
-            job.started_at = datetime.now()
+            # Atomically transition QUEUED -> RUNNING so a concurrent cancel can't be overwritten
+            result = self.db.execute(
+                update(TrainingJobDB)
+                .where(TrainingJobDB.job_id == job_id)
+                .where(TrainingJobDB.status == TrainingJobStatus.QUEUED)
+                .values(status=TrainingJobStatus.RUNNING, started_at=datetime.now())
+            )
             self.db.commit()
+            if result.rowcount == 0:
+                logger.info(f"Job {job_id} was not in QUEUED state (likely cancelled), aborting")
+                return
 
             # Lock is already acquired in create_training_job
             try:
@@ -251,6 +279,14 @@ class TrainingService:
             query = query.filter(TrainingJobDB.status == status)
         return query.all()
 
+    def dispatch(self, job_id: str, resources) -> None:
+        from src.services.kube_training import get_kube_training_service
+        kube = get_kube_training_service()
+        if kube:
+            kube.to_kube(job_id, resources, "forecast")
+        else:
+            asyncio.get_running_loop().run_in_executor(_executor, _run_training_sync, job_id)
+
     def cancel_job(self, job_id: str):
         """
         Cancel a training job.
@@ -281,9 +317,17 @@ class TrainingService:
             except Exception as e:
                 logger.error(f"Failed to terminate MLflow run: {str(e)}")
 
-        # Release training lock
-        self._release_training_lock(job.model_id)
-        logger.info(f"Released training lock for model {job.model_id}")
+        from src.services.kube_training import get_kube_training_service
+        kube = get_kube_training_service()
+        if kube:
+            try:
+                kube.cancel(job_id)
+            except Exception as e:
+                logger.error(f"Failed to delete K8s job for {job_id}: {e}")
+            finally:
+                self._release_training_lock(job.model_id)
+                logger.info(f"Released training lock for model {job.model_id}")
+        # else: thread pool worker releases the lock via execute_training's finally block
 
     def _acquire_training_lock(self, model_id: str) -> bool:
         """
@@ -639,10 +683,8 @@ class TrainingService:
         """
         def status_callback(epoch, max_epochs, loss, **kwargs):
             """Callback for logging progress and checking cancellation."""
-            # Log progress every 10 epochs
-            if epoch % 10 == 0:
-                logger.info(f"Epoch {epoch}/{max_epochs}: loss={loss:.6f}")
-                mlflow.log_metric("training_loss", loss, step=epoch)
+            logger.info(f"Epoch {epoch}/{max_epochs}: loss={loss:.6f}")
+            mlflow.log_metric("training_loss", loss, step=epoch)
 
             # Check if job was cancelled (check every epoch)
             job = self.get_job(job_id)

@@ -1,8 +1,6 @@
 """Router for anomaly detection endpoints."""
 
-import asyncio
 import logging
-from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -11,8 +9,10 @@ from src.core.dependencies import get_db
 from src.schemas.anomaly import (
     AnomalyDetectionRequest,
     AnomalyDetectionResult,
+    AnomalyDetectionSummary,
     AnomalyModelCreate,
     AnomalyModelDetail,
+    AnomalyModelMeta,
     AnomalyModelSummary,
     AnomalyTrainingJobDetail,
     AnomalyTrainingJobSummary,
@@ -26,11 +26,6 @@ from src.services.data_storage_client import DataStorageClient
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-# Thread pool for background anomaly training tasks
-anomaly_training_executor = ThreadPoolExecutor(
-    max_workers=2, thread_name_prefix="anomaly_training"
-)
 
 
 def get_anomaly_config_service(db: Session = Depends(get_db)) -> AnomalyConfigService:
@@ -54,33 +49,6 @@ def get_anomaly_detection_service(
         data_storage_client=DataStorageClient(),
         anomaly_config_service=AnomalyConfigService(db),
     )
-
-
-def _run_anomaly_training_sync(job_id: str):
-    """Synchronous anomaly training task that runs in a separate thread."""
-    import asyncio
-
-    import mlflow
-    from mlflow import MlflowClient
-
-    from src.core.config import settings
-    from src.db.database import SessionLocal
-    from src.services.anomaly_config_service import AnomalyConfigService
-    from src.services.anomaly_training_service import AnomalyTrainingService
-    from src.services.data_storage_client import DataStorageClient
-
-    db = SessionLocal()
-    try:
-        mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
-        config_service = AnomalyConfigService(db)
-        training_service = AnomalyTrainingService(
-            data_storage_client=DataStorageClient(),
-            anomaly_config_service=config_service,
-            db=db,
-        )
-        asyncio.run(training_service.execute_training(job_id))
-    finally:
-        db.close()
 
 
 # ── Model CRUD ───────────────────────────────────────────────────────
@@ -200,7 +168,9 @@ async def get_anomaly_model(
 
     cfg = config_service.get_config(model_id)
     if not cfg:
-        raise HTTPException(status_code=404, detail=f"Anomaly model '{model_id}' not found")
+        raise HTTPException(
+            status_code=404, detail=f"Anomaly model '{model_id}' not found"
+        )
 
     config = config_service.config_from_db(cfg)
 
@@ -272,13 +242,8 @@ async def train_anomaly_model(
         job_info = training_service.create_training_job(
             request.model_id, request.lookback_seconds
         )
-
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(
-            anomaly_training_executor,
-            _run_anomaly_training_sync,
-            job_info["job_id"],
-        )
+        training_service.dispatch(job_info["job_id"], request.resources)
+        logger.info(f"Anomaly training job {job_info['job_id']} dispatched")
 
         return AnomalyTrainingResponse(
             job_id=job_info["job_id"],
@@ -324,6 +289,20 @@ async def get_anomaly_training_job(
     if not job:
         raise HTTPException(status_code=404, detail=f"Anomaly job {job_id} not found")
 
+    current_epoch = None
+    current_loss = None
+    if job.status == "running" and job.mlflow_run_id:
+        try:
+            from mlflow.tracking import MlflowClient
+            client = MlflowClient()
+            metrics = client.get_metric_history(job.mlflow_run_id, "training_loss")
+            if metrics:
+                latest = metrics[-1]
+                current_epoch = latest.step
+                current_loss = round(latest.value, 6)
+        except Exception:
+            pass
+
     return AnomalyTrainingJobDetail(
         job_id=job.job_id,
         model_id=job.model_id,
@@ -333,6 +312,8 @@ async def get_anomaly_training_job(
         started_at=job.started_at,
         completed_at=job.completed_at,
         error_message=job.error_message,
+        current_epoch=current_epoch,
+        current_loss=current_loss,
     )
 
 
@@ -359,7 +340,7 @@ async def run_anomaly_detection(
     request: AnomalyDetectionRequest,
     detection_service: AnomalyDetectionService = Depends(get_anomaly_detection_service),
 ) -> AnomalyDetectionResult:
-    """Run anomaly detection for all IPs in a cell."""
+    """Run anomaly detection for all IPs in a cell using a single model."""
     try:
         return await detection_service.detect(
             request.cell_id, request.model_id, request.lookback_seconds
@@ -369,3 +350,48 @@ async def run_anomaly_detection(
     except Exception as e:
         logger.error(f"Anomaly detection failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/detect/all", response_model=AnomalyDetectionSummary)
+async def run_all_anomaly_detection(
+    request: AnomalyDetectionRequest,
+    detection_service: AnomalyDetectionService = Depends(get_anomaly_detection_service),
+) -> AnomalyDetectionSummary:
+    """Run anomaly detection for all IPs in a cell using all trained models."""
+    trained_models = [
+        cfg
+        for cfg in detection_service.anomaly_config_service.list_all()
+        if cfg.threshold_value is not None
+    ]
+    if not trained_models:
+        raise HTTPException(
+            status_code=404, detail="No trained anomaly models available"
+        )
+
+    models_meta: dict[str, AnomalyModelMeta] = {}
+    ip_anomalies: dict[str, dict[str, str]] = {}
+
+    for model_cfg in trained_models:
+        try:
+            result = await detection_service.detect(
+                request.cell_id, model_cfg.model_id, request.lookback_seconds
+            )
+            models_meta[result.model_id] = AnomalyModelMeta(
+                name=result.model_name,
+                fields=result.input_fields,
+                threshold=result.threshold_value,
+                window_duration_seconds=result.window_duration_seconds,
+            )
+            for ip_result in result.results:
+                ip = ip_result.ip_src
+                ip_anomalies.setdefault(ip, {})[
+                    result.model_id
+                ] = f"{ip_result.num_anomalies}/{ip_result.num_windows}"
+        except Exception as e:
+            logger.warning(f"Model {model_cfg.name} skipped: {e}")
+
+    return AnomalyDetectionSummary(
+        cell_id=request.cell_id,
+        models=models_meta,
+        ip_anomalies=ip_anomalies,
+    )
