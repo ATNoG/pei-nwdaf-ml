@@ -379,6 +379,58 @@ async def _monitoring_loop() -> None:
             db.close()
 
 
+async def _kube_reconciliation_loop():
+    """Detect K8s jobs that failed before the worker could update the DB and mark them as FAILED."""
+    from sqlalchemy import update as sa_update
+
+    from src.db.anomaly_model_config import AnomalyModelConfigDB
+    from src.db.anomaly_training_job import AnomalyTrainingJobDB
+    from src.db.database import SessionLocal
+    from src.db.model_config import ModelConfigDB
+    from src.db.training_job import TrainingJobDB
+    from src.schemas.training import TrainingJobStatus
+    from src.services.kube_training import get_kube_training_service
+
+    active = [TrainingJobStatus.RUNNING, TrainingJobStatus.QUEUED]
+
+    while True:
+        await asyncio.sleep(30)
+        kube = get_kube_training_service()
+        if not kube:
+            continue
+        db = SessionLocal()
+        try:
+            for job in db.query(TrainingJobDB).filter(TrainingJobDB.status.in_(active)).all():
+                if kube.is_job_dead(job.job_id):
+                    job.status = TrainingJobStatus.FAILED
+                    job.error_message = "K8s job failed or not found"
+                    job.completed_at = datetime.now()
+                    db.execute(
+                        sa_update(ModelConfigDB)
+                        .where(ModelConfigDB.model_id == job.model_id)
+                        .values(is_training=False)
+                    )
+                    logger.warning("Reconciliation: forecast job %s marked FAILED", job.job_id)
+
+            for job in db.query(AnomalyTrainingJobDB).filter(AnomalyTrainingJobDB.status.in_(active)).all():
+                if kube.is_job_dead(job.job_id):
+                    job.status = TrainingJobStatus.FAILED
+                    job.error_message = "K8s job failed or not found"
+                    job.completed_at = datetime.now()
+                    db.execute(
+                        sa_update(AnomalyModelConfigDB)
+                        .where(AnomalyModelConfigDB.model_id == job.model_id)
+                        .values(is_training=False)
+                    )
+                    logger.warning("Reconciliation: anomaly job %s marked FAILED", job.job_id)
+
+            db.commit()
+        except Exception as e:
+            logger.error("Kube reconciliation error: %s", e)
+        finally:
+            db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
@@ -425,11 +477,20 @@ async def lifespan(app: FastAPI):
         monitor_task = asyncio.create_task(_monitoring_loop())
         logger.info("Auto-monitor task started")
 
+    reconcile_task = None
+    if settings.TRAIN_USE_KUBE:
+        reconcile_task = asyncio.create_task(_kube_reconciliation_loop())
+        logger.info("Kube reconciliation task started")
+
     yield
 
     if monitor_task:
         monitor_task.cancel()
         logger.info("Auto-monitor task stopped")
+
+    if reconcile_task:
+        reconcile_task.cancel()
+        logger.info("Kube reconciliation task stopped")
 
     logger.info("Shutting down NWDAF ML Service...")
 
