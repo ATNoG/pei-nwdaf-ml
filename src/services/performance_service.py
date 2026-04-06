@@ -793,7 +793,7 @@ class PerformanceService:
         f_names = explanation.data["feature_names"]
         f_importance = explanation.data["feature_importance"][0]
         importances = {f_names[i]: round(float(f_importance[i]["mean"]), 6) for i in range(len(f_names))}
-        
+
         ranked = sorted(importances.items(), key=lambda x: x[1], reverse=True)
         logger.info(
             "Permutation importance for field '%s' (metric=%s, n_cells=%d, n_repeats=%d):",
@@ -839,10 +839,9 @@ class PerformanceService:
             raise ValueError(f"Model '{model_id}' has no trained version")
         config = model_detail.config
         model = self._load_model(model_id, model_detail.latest_version, config)
-        fallback_start_ts = await self.data_storage_client.probe_data_timestamp(
-            cells, config.window_duration_seconds
-        )
+        fallback_start_ts = await self.data_storage_client.probe_data_timestamp(cells, config.window_duration_seconds)
         tags = self._get_registered_model_tags(model_id)
+
         metric = tags.get(_metric_key(field_name), "rmse")
         importances = await self._compute_permutation_importance(
             model=model,
@@ -857,12 +856,8 @@ class PerformanceService:
                 f"No usable data found for model '{model_id}' on field '{field_name}'"
             )
         computed_at = datetime.now(timezone.utc)
-        self.client.set_registered_model_tag(
-            model_id, _importance_key(field_name), json.dumps(importances)
-        )
-        self.client.set_registered_model_tag(
-            model_id, _importance_at_key(field_name), computed_at.isoformat()
-        )
+        self.client.set_registered_model_tag(model_id, _importance_key(field_name), json.dumps(importances))
+        self.client.set_registered_model_tag(model_id, _importance_at_key(field_name), computed_at.isoformat())
         return FeatureImportanceResponse(
             field_name=field_name,
             model_id=model_id,

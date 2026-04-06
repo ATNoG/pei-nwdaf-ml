@@ -12,6 +12,7 @@ from src.core.config import settings
 from src.core.monitoring_state import get_field_jobs, get_field_state, get_last_checked, set_field_state, set_last_checked
 from src.schemas.performance import (
     EvalMetricType,
+    FeatureImportanceResponse,
     FieldEvaluationResponse,
     ModelPerformance,
     MonitoringStatusResponse,
@@ -90,7 +91,7 @@ async def get_best_model(
     except Exception as e:
         logger.error(f"Failed to get best model for field '{field_name}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 @router.post("/{field_name}/set-best/{model_id}", response_model=ModelPerformance)
 async def set_best_model(
     field_name: str,
@@ -130,7 +131,6 @@ async def monitor_best_model(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Registered before GET /{field_name} to prevent FastAPI matching "status"/"history" as field_name
 @router.get("/{field_name}/status", response_model=MonitoringStatusResponse)
 async def get_monitoring_status(field_name: str) -> MonitoringStatusResponse:
     """Return the current state machine state for a monitored field."""
@@ -161,6 +161,51 @@ async def get_score_history(
         return performance_service.get_score_history(field_name, model_id)
     except Exception as e:
         logger.error(f"Failed to get score history for field '{field_name}': {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{field_name}/importance", response_model=FeatureImportanceResponse)
+async def get_feature_importance(
+    field_name: str,
+    model_id: str | None = None,
+    performance_service: PerformanceService = Depends(get_performance_service),
+) -> FeatureImportanceResponse:
+    """
+    Return cached permutation importance for field_name.
+
+    If model_id is omitted, returns importance for the elected best model.
+    Returns 404 if no importance has been computed yet.
+    """
+    result = performance_service.get_feature_importance(field_name, model_id)
+    if result is None:
+        detail = (
+            f"No importance data for model '{model_id}' on field '{field_name}'."
+            if model_id
+            else f"No importance data for field '{field_name}'. Run POST /evaluate or POST /{field_name}/models/{{model_id}}/importance first."
+        )
+        raise HTTPException(status_code=404, detail=detail)
+    return result
+
+
+@router.post("/{field_name}/models/{model_id}/importance", response_model=FeatureImportanceResponse)
+async def trigger_model_importance(
+    field_name: str,
+    model_id: str,
+    performance_service: PerformanceService = Depends(get_performance_service),
+) -> FeatureImportanceResponse:
+    """
+    Compute and store permutation importance for a specific model on demand.
+
+    Loads the model, fetches data, runs alibi PermutationImportance, stores results
+    as MLflow tags and returns the result. Use GET /importance to read cached results.
+    """
+    cells = await performance_service.data_storage_client.get_known_cells()
+    try:
+        return await performance_service.trigger_feature_importance(field_name, model_id, cells)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        logger.error(f"Importance computation failed for model '{model_id}' on field '{field_name}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
