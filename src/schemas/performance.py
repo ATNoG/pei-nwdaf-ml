@@ -80,3 +80,19 @@ class ScoreHistoryResponse(BaseModel):
 
     field_name: str
     entries: list[ScoreHistoryEntry]
+
+
+class FeatureImportanceResponse(BaseModel):
+    """Permutation importance scores for each input feature of the best model."""
+
+    field_name: str
+    model_id: str
+    importances: dict[str, float] = Field(
+        ...,
+        description="Per-feature permutation importance (unbounded, in metric units) "
+                    "Positive = shuffling this feature worsened the score (feature is useful) "
+                    "Negative = shuffling this feature improved the score (model is using it counterproductively) "
+                    "Near zero = feature has little influence on predictions.",
+    )
+    metric: str = Field(..., description="Metric used")
+    computed_at: datetime | None = Field(None, description="When importance was last computed")
