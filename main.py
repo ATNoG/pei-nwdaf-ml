@@ -86,7 +86,7 @@ def _trigger_field_retraining(field, model_configs, training_svc, loop):
     Returns a list of queued job_ids (configs that failed to queue are skipped).
     """
     from src.db.training_job import TrainingJobDB
-    from src.routers.v1.training_router import _run_training_sync, training_executor
+    from src.services.training_service import _run_training_sync, _executor as training_executor
 
     job_ids = []
     for cfg in model_configs:
