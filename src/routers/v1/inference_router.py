@@ -41,6 +41,7 @@ async def run_inference(
             output_field=request.output_field,
             cell_id=request.cell_id,
             model_id=request.model_id,
+            explain=request.explain,
         )
         return InferenceResult(**result)
     except ValueError as e:

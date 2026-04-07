@@ -118,7 +118,7 @@ async def monitor_best_model(
 
     Uses the same metric as the original election (stored as eval_metric:{field}
     MLflow tag). Updates score_for and eval_at tags but does NOT change the
-    best_for designation — only a full /evaluate call can change that.
+    best_for designation - only a full /evaluate call can change that.
 
     Returns 422 if no best model has been designated yet.
     """
@@ -217,7 +217,7 @@ async def get_evaluation(
     """
     Return the last cached evaluation result for field_name.
 
-    Reads persisted MLflow tags — no model loading or data fetching occurs.
+    Reads persisted MLflow tags - no model loading or data fetching occurs.
     Models that have never been evaluated will appear with score=None.
     """
     try:

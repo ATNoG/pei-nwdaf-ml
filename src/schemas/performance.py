@@ -31,7 +31,7 @@ class ModelPerformance(BaseModel):
     )
     metric: str | None = Field(None, description="Which metric produced the score (e.g. 'rmse')")
     is_best: bool = Field(False, description="True for the model with the best score for this field")
-    baseline_score: float | None = Field(None, description="Score at election time — used as degradation reference")
+    baseline_score: float | None = Field(None, description="Score at election time - used as degradation reference")
     last_trained_at: datetime | None = Field(None, description="Last training completion timestamp")
     evaluated_at: datetime | None = Field(None, description="When the score was last computed")
 
@@ -82,17 +82,42 @@ class ScoreHistoryResponse(BaseModel):
     entries: list[ScoreHistoryEntry]
 
 
+class FeatureImportanceValue(BaseModel):
+    """Mean and standard deviation of permutation importance across n_repeats shuffles."""
+
+    mean: float = Field(..., description="Mean score degradation across n_repeats shuffles")
+    std: float = Field(..., description="Std deviation across n_repeats shuffles")
+
+
 class FeatureImportanceResponse(BaseModel):
     """Permutation importance scores for each input feature of the best model."""
 
     field_name: str
     model_id: str
-    importances: dict[str, float] = Field(
+    importances: dict[str, FeatureImportanceValue] = Field(
         ...,
-        description="Per-feature permutation importance (unbounded, in metric units) "
-                    "Positive = shuffling this feature worsened the score (feature is useful) "
-                    "Negative = shuffling this feature improved the score (model is using it counterproductively) "
-                    "Near zero = feature has little influence on predictions.",
+        description="Per-feature permutation importance."
+                    "mean: score degradation when feature is shuffled."
+                    "std: stability of the estimate across repeats.",
     )
     metric: str = Field(..., description="Metric used")
     computed_at: datetime | None = Field(None, description="When importance was last computed")
+
+
+class LocalExplanationResponse(BaseModel):
+    """Local explanation for a single prediction."""
+
+    field_name: str
+    model_id: str
+    method: str = Field("kernelshap", description="Explainer used")
+    cell_id: int
+    prediction: list[float] = Field(..., description="Forecast values for the explained field across forecast steps",)
+    attributions: dict[str, float] = Field(
+        ...,
+        description="Per-feature SHAP value."
+                    "Positive = feature pushed prediction above baseline"
+                    "Negative = feature pushed prediction below baseline"
+                    "Sum of all attributions = prediction_mean - baseline",
+    )
+    baseline: float = Field(..., description="Expected model output over training background dataset",)
+    computed_at: datetime
