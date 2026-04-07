@@ -150,14 +150,14 @@ async def _monitoring_loop() -> None:
     monitored output field.
 
     Each field moves through a simple state machine:
-      MONITORING  — score the best model; on degradation trigger retraining
-      RETRAINING  — wait for all queued training jobs to finish
-      EVALUATING  — re-elect a best model via evaluate_field()
+      MONITORING  - score the best model; on degradation trigger retraining
+      RETRAINING  - wait for all queued training jobs to finish
+      EVALUATING  - re-elect a best model via evaluate_field()
 
     Controlled by MONITORING_TRIGGER_MODE:
-      "time"  — run on every interval regardless of new data
-      "data"  — run only when new data has arrived since last cycle
-      "both"  — run on interval only if new data has arrived
+      "time"  - run on every interval regardless of new data
+      "data"  - run only when new data has arrived since last cycle
+      "both"  - run on interval only if new data has arrived
     """
     from src.db.database import SessionLocal
     from src.services.data_storage_client import DataStorageClient
@@ -174,7 +174,7 @@ async def _monitoring_loop() -> None:
     while True:
         await asyncio.sleep(settings.MONITORING_INTERVAL_SECONDS)
 
-        # Data-income gate — skip cycle if no new windows have arrived
+        # Data-income gate - skip cycle if no new windows have arrived
         if settings.MONITORING_TRIGGER_MODE in ("data", "both"):
             data_client = DataStorageClient()
             if not await _has_new_data(data_client, last_check_ts):
@@ -211,7 +211,7 @@ async def _monitoring_loop() -> None:
 
                     if active:
                         logger.info(
-                            "----- [RETRAINING] '%s' — %d/%d job(s) still running.",
+                            "----- [RETRAINING] '%s' - %d/%d job(s) still running.",
                             field,
                             len(active),
                             len(jobs),
@@ -223,7 +223,7 @@ async def _monitoring_loop() -> None:
 
                     for j in failed:
                         logger.error(
-                            "----- [RETRAINING] '%s' — job %s FAILED: %s",
+                            "----- [RETRAINING] '%s' - job %s FAILED: %s",
                             field,
                             j.job_id,
                             j.error_message,
@@ -232,7 +232,7 @@ async def _monitoring_loop() -> None:
                     if completed:
                         set_field_state(field, "evaluating")
                         logger.info(
-                            "----- [RETRAINING] '%s' — all done (%d completed, %d failed) → moving to EVALUATING",
+                            "----- [RETRAINING] '%s' - all done (%d completed, %d failed) → moving to EVALUATING",
                             field,
                             len(completed),
                             len(failed),
@@ -245,7 +245,7 @@ async def _monitoring_loop() -> None:
                         )
                     else:
                         logger.error(
-                            "----- [RETRAINING] '%s' — all jobs failed → returning to MONITORING",
+                            "----- [RETRAINING] '%s' - all jobs failed → returning to MONITORING",
                             field,
                         )
                         await notification_center.notify(
@@ -258,7 +258,7 @@ async def _monitoring_loop() -> None:
                 # EVALUATING: re-elect a best model then return to monitoring
                 elif state == "evaluating":
                     logger.info(
-                        "----- [EVALUATING] '%s' — scoring all retrained models.", field
+                        "----- [EVALUATING] '%s' - scoring all retrained models.", field
                     )
                     try:
                         best = svc.get_best_model(field)
@@ -269,7 +269,7 @@ async def _monitoring_loop() -> None:
                         )
 
                         logger.info(
-                            "----- [EVALUATING] '%s' — new best: %s  %s=%.4f",
+                            "----- [EVALUATING] '%s' - new best: %s  %s=%.4f",
                             field,
                             result.best_model_id,
                             metric,
@@ -292,25 +292,25 @@ async def _monitoring_loop() -> None:
                             )
                     except Exception as e:
                         logger.error(
-                            "----- [EVALUATING] '%s' — evaluation FAILED: %s",
+                            "----- [EVALUATING] '%s' - evaluation FAILED: %s",
                             field,
                             e,
                         )
                     finally:
                         set_field_state(field, "monitoring")
                         clear_field_jobs(field)
-                        logger.info("----- [MONITORING] '%s' — resumed", field)
+                        logger.info("----- [MONITORING] '%s' - resumed", field)
 
                 # MONITORING: score the best model; trigger retraining on degradation
                 else:
-                    logger.info("----- [MONITORING] '%s' — scoring best model.", field)
+                    logger.info("----- [MONITORING] '%s' - scoring best model.", field)
                     try:
                         result = await svc.monitor_best_model(
                             field, trigger="auto_monitor"
                         )
                         if result.score is None:
                             logger.info(
-                                "----- [MONITORING] '%s' — no score (no data?), skipping",
+                                "----- [MONITORING] '%s' - no score (no data?), skipping",
                                 field,
                             )
                             continue
@@ -323,7 +323,7 @@ async def _monitoring_loop() -> None:
                             settings.MONITORING_DEGRADATION_FACTOR,
                         ):
                             logger.warning(
-                                "----- [MONITORING] '%s' — DEGRADED  %s=%.4f  baseline=%.4f  "
+                                "----- [MONITORING] '%s' - DEGRADED  %s=%.4f  baseline=%.4f  "
                                 "threshold=%.4f → triggering retraining",
                                 field,
                                 result.metric,
@@ -355,26 +355,26 @@ async def _monitoring_loop() -> None:
                                 set_field_state(field, "retraining")
                                 set_field_jobs(field, job_ids)
                                 logger.info(
-                                    "----- [RETRAINING] '%s' — %d job(s) queued",
+                                    "----- [RETRAINING] '%s' - %d job(s) queued",
                                     field,
                                     len(job_ids),
                                 )
                             else:
                                 logger.error(
-                                    "----- [MONITORING] '%s' — degradation detected but no jobs could be queued",
+                                    "----- [MONITORING] '%s' - degradation detected but no jobs could be queued",
                                     field,
                                 )
                         else:
                             set_last_checked(field, datetime.now(tz=timezone.utc))
                             logger.info(
-                                "----- [MONITORING] '%s' — OK  %s=%.4f  baseline=%.4f",
+                                "----- [MONITORING] '%s' - OK  %s=%.4f  baseline=%.4f",
                                 field,
                                 result.metric,
                                 result.score,
                                 baseline if baseline is not None else float("nan"),
                             )
                     except Exception as e:
-                        logger.error("----- [MONITORING] '%s' — error: %s", field, e)
+                        logger.error("----- [MONITORING] '%s' - error: %s", field, e)
         finally:
             db.close()
 

@@ -9,6 +9,7 @@ import mlflow
 from mlflow.exceptions import MlflowException
 from sqlalchemy.orm import Session
 
+from src.core.config import settings
 from src.db.score_history import ScoreHistoryDB
 from src.schemas.model import ArchitectureType, ModelConfig
 from src.schemas.performance import (
@@ -105,8 +106,6 @@ class _SequenceIndexBridge:
 class PerformanceService:
     """Service for metric-agnostic model evaluation and best-model designation."""
 
-    MAX_EVAL_CELLS = 3
-
     def __init__(
         self,
         mlflow_service: MLflowService,
@@ -147,7 +146,7 @@ class PerformanceService:
         cells = await self.data_storage_client.get_known_cells()
         logger.info(
             f"Evaluating {len(model_configs)} models for field '{field_name}' "
-            f"using metric '{metric}' and up to {self.MAX_EVAL_CELLS} reference cells "
+            f"using metric '{metric}' and up to {settings.MAX_EVAL_CELLS} reference cells "
             f"(from {len(cells)} known)"
         )
 
@@ -616,7 +615,7 @@ class PerformanceService:
         valid_cells = 0
 
         for cell_index in cells:
-            if valid_cells >= self.MAX_EVAL_CELLS:
+            if valid_cells >= settings.MAX_EVAL_CELLS:
                 break
 
             # Primary fetch: window anchored to now
@@ -742,7 +741,7 @@ class PerformanceService:
         y_list: list[list[float]] = []
 
         for cell_index in cells:
-            if len(X_list) >= self.MAX_EVAL_CELLS:
+            if len(X_list) >= settings.MAX_EVAL_CELLS:
                 break
             data = None
             try:
@@ -792,15 +791,21 @@ class PerformanceService:
 
         f_names = explanation.data["feature_names"]
         f_importance = explanation.data["feature_importance"][0]
-        importances = {f_names[i]: round(float(f_importance[i]["mean"]), 6) for i in range(len(f_names))}
+        importances = {
+            f_names[i]: {
+                "mean": round(float(f_importance[i]["mean"]), 6),
+                "std":  round(float(f_importance[i]["std"]),  6),
+            }
+            for i in range(len(f_names))
+        }
 
-        ranked = sorted(importances.items(), key=lambda x: x[1], reverse=True)
+        ranked = sorted(importances.items(), key=lambda x: x[1]["mean"], reverse=True)
         logger.info(
             "Permutation importance for field '%s' (metric=%s, n_cells=%d, n_repeats=%d):",
             field_name, metric, len(X_list), n_repeats,
         )
-        for name, score in ranked:
-            logger.info("  %-30s %+.6f", name, score)
+        for name, vals in ranked:
+            logger.info("  %-30s mean=%+.6f  std=%.6f", name, vals["mean"], vals["std"])
 
         return importances
 
