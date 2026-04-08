@@ -81,6 +81,7 @@ class TestDataStorageClient:
             mock_client_instance.get.assert_called_once_with(
                 "http://data-storage:8000/api/v1/processed/latency/example",
                 timeout=10.0,
+                headers={},
             )
 
             # Verify excluded fields are removed
