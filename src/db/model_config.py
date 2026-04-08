@@ -24,6 +24,8 @@ class ModelConfigDB(Base):
     hidden_size: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(nullable=False)
     is_training: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    default_cpu: Mapped[str | None] = mapped_column(String, nullable=True)
+    default_memory: Mapped[str | None] = mapped_column(String, nullable=True)
 
     def __repr__(self) -> str:
         return f"<ModelConfigDB(model_id={self.model_id}, name={self.name}, architecture={self.architecture})>"

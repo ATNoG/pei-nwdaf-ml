@@ -86,7 +86,6 @@ def _trigger_field_retraining(field, model_configs, training_svc, loop):
     Returns a list of queued job_ids (configs that failed to queue are skipped).
     """
     from src.db.training_job import TrainingJobDB
-    from src.routers.v1.training_router import _run_training_sync, training_executor
 
     job_ids = []
     for cfg in model_configs:
@@ -102,9 +101,8 @@ def _trigger_field_retraining(field, model_configs, training_svc, loop):
         lookback = last_job.lookback_seconds if last_job else 86400
         try:
             job_info = training_svc.create_training_job(cfg.model_id, lookback)
-            loop.run_in_executor(
-                training_executor, _run_training_sync, job_info["job_id"]
-            )
+            # dispatch resolves default resources from model config automatically
+            training_svc.dispatch(job_info["job_id"], resources=None)
             job_ids.append(job_info["job_id"])
             logger.info(
                 "Auto-monitor: queued retraining job %s for model %s (field '%s')",

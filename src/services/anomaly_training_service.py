@@ -197,7 +197,18 @@ class AnomalyTrainingService:
         return query.all()
 
     def dispatch(self, job_id: str, resources) -> None:
+        from src.db.anomaly_model_config import AnomalyModelConfigDB
+        from src.db.anomaly_training_job import AnomalyTrainingJobDB
+        from src.schemas.kube import JobResources
         from src.services.kube_training import get_kube_training_service
+
+        if resources is None:
+            job = self.db.query(AnomalyTrainingJobDB).filter(AnomalyTrainingJobDB.job_id == job_id).first()
+            if job:
+                cfg = self.db.query(AnomalyModelConfigDB).filter(AnomalyModelConfigDB.model_id == job.model_id).first()
+                if cfg and cfg.default_cpu and cfg.default_memory:
+                    resources = JobResources(cpu=cfg.default_cpu, memory=cfg.default_memory)
+
         kube = get_kube_training_service()
         if kube:
             kube.to_kube(job_id, resources, "anomaly")

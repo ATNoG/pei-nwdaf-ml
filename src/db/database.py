@@ -58,3 +58,20 @@ def get_db_context() -> Generator[Session, None, None]:
 def init_db() -> None:
     """Create all tables in the database."""
     Base.metadata.create_all(bind=engine)
+    # Add new nullable columns to existing tables (idempotent)
+    with engine.connect() as conn:
+        for table, col in [
+            ("model_configs", "default_cpu"),
+            ("model_configs", "default_memory"),
+            ("anomaly_model_configs", "default_cpu"),
+            ("anomaly_model_configs", "default_memory"),
+        ]:
+            try:
+                conn.execute(
+                    __import__("sqlalchemy").text(
+                        f"ALTER TABLE {table} ADD COLUMN {col} VARCHAR"
+                    )
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()

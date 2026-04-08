@@ -280,7 +280,18 @@ class TrainingService:
         return query.all()
 
     def dispatch(self, job_id: str, resources) -> None:
+        from src.db.model_config import ModelConfigDB
+        from src.db.training_job import TrainingJobDB
+        from src.schemas.kube import JobResources
         from src.services.kube_training import get_kube_training_service
+
+        if resources is None:
+            job = self.db.query(TrainingJobDB).filter(TrainingJobDB.job_id == job_id).first()
+            if job:
+                cfg = self.db.query(ModelConfigDB).filter(ModelConfigDB.model_id == job.model_id).first()
+                if cfg and cfg.default_cpu and cfg.default_memory:
+                    resources = JobResources(cpu=cfg.default_cpu, memory=cfg.default_memory)
+
         kube = get_kube_training_service()
         if kube:
             kube.to_kube(job_id, resources, "forecast")
