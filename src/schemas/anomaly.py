@@ -4,8 +4,10 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from src.schemas.kube import JobResources
 
 # ── Model configuration ──────────────────────────────────────────────
+
 
 class AnomalyModelConfig(BaseModel):
     """Immutable anomaly model configuration."""
@@ -77,12 +79,16 @@ class AnomalyModelDetail(BaseModel):
 
 # ── Training ─────────────────────────────────────────────────────────
 
+
 class AnomalyTrainingRequest(BaseModel):
     """Request schema for anomaly model training."""
 
     model_id: str = Field(..., description="UUID of the anomaly model to train")
     lookback_seconds: int = Field(
         ..., gt=0, description="How far back to fetch data (e.g., 604800 for 7 days)"
+    )
+    resources: JobResources | None = Field(
+        None, description="Resource requirements for the training job"
     )
 
 
@@ -111,6 +117,8 @@ class AnomalyTrainingJobDetail(BaseModel):
         None, description="Training completion timestamp"
     )
     error_message: str | None = Field(None, description="Error message if failed")
+    current_epoch: int | None = Field(None, description="Latest training epoch (only while running)")
+    current_loss: float | None = Field(None, description="Latest training loss (only while running)")
 
 
 class AnomalyTrainingJobSummary(BaseModel):
@@ -125,6 +133,7 @@ class AnomalyTrainingJobSummary(BaseModel):
 
 # ── Detection ────────────────────────────────────────────────────────
 
+
 class AnomalyDetectionRequest(BaseModel):
     """Request schema for running anomaly detection."""
 
@@ -135,7 +144,9 @@ class AnomalyDetectionRequest(BaseModel):
         "If omitted, the system selects the compatible trained model with lowest training loss.",
     )
     lookback_seconds: int = Field(
-        default=1800, gt=0, description="How far back to fetch data (seconds, default 30min)"
+        default=1800,
+        gt=0,
+        description="How far back to fetch data (seconds, default 30min)",
     )
 
 
@@ -143,7 +154,9 @@ class WindowScore(BaseModel):
     """Anomaly score for a single time window."""
 
     window_start_time: int = Field(..., description="Window start timestamp (epoch)")
-    reconstruction_error: float = Field(..., description="Reconstruction error for this window")
+    reconstruction_error: float = Field(
+        ..., description="Reconstruction error for this window"
+    )
     is_anomaly: bool = Field(..., description="Whether error exceeds the threshold")
 
 
@@ -167,4 +180,26 @@ class AnomalyDetectionResult(BaseModel):
     input_fields: list[str] = Field(..., description="Input fields used")
     results: list[IPAnomalyResult] = Field(
         ..., description="Per-IP anomaly detection results"
+    )
+
+
+class AnomalyModelMeta(BaseModel):
+    """Metadata for a model used in a summary."""
+
+    name: str
+    fields: list[str]
+    threshold: float
+    window_duration_seconds: int
+
+
+class AnomalyDetectionSummary(BaseModel):
+    """Compact multi-model anomaly detection summary for a cell."""
+
+    cell_id: int
+    models: dict[str, AnomalyModelMeta] = Field(
+        ..., description="Model metadata keyed by model name"
+    )
+    ip_anomalies: dict[str, dict[str, str]] = Field(
+        ...,
+        description="Per-IP anomaly counts keyed by IP then model name (e.g. '3/10')",
     )

@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     )
 
     # API Configuration
-    API_HOST: str
-    API_PORT: int
+    API_HOST: str = "0.0.0.0"
+    API_PORT: int = 8060
     LOG_LEVEL: str
 
     # MLflow Configuration
@@ -51,6 +51,14 @@ class Settings(BaseSettings):
     POLICY_ENABLED: bool = False
     POLICY_FAILOPEN: bool = True
     POLICY_ROLENAME: str = "ML"
+
+    # Kubernetes training
+    TRAIN_USE_KUBE: bool = False
+    TRAIN_KUBE_HOST: str = ""
+    TRAIN_KUBE_TOKEN: str = ""
+    TRAIN_KUBE_CA_CERT: str = ""  # base64-encoded PEM CA certificate
+    TRAIN_KUBE_NAMESPACE: str = "default"
+    TRAIN_KUBE_IMAGE: str = ""
 
 
 settings = Settings()
