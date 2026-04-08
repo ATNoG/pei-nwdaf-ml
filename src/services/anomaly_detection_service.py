@@ -200,7 +200,7 @@ class AnomalyDetectionService:
             missing = model_fields - available_fields
             if missing:
                 logger.info(
-                    f"Auto-select: model {cfg.model_id} ({cfg.name}) incompatible — "
+                    f"Auto-select: model {cfg.model_id} ({cfg.name}) incompatible - "
                     f"missing fields: {sorted(missing)}"
                 )
             else:

@@ -95,7 +95,7 @@ class TestInferenceRouter:
             assert data["predictions"][0]["step"] == 1
             assert data["predictions"][0]["values"]["latency_mean"] == 10.0
             mock_inference_service.predict.assert_called_once_with(
-                output_field="latency_mean", cell_id=5, model_id="test-uuid"
+                output_field="latency_mean", cell_id=5, model_id="test-uuid", explain=False
             )
         finally:
             app.dependency_overrides.clear()
@@ -193,7 +193,7 @@ class TestInferenceRouter:
             app.dependency_overrides.clear()
 
     def test_model_id_optional_accepted(self, client, mock_inference_service):
-        """Test that omitting model_id is valid — service selects best model."""
+        """Test that omitting model_id is valid - service selects best model."""
         mock_inference_service.predict.return_value = _make_success_result()
 
         from src.routers.v1.inference_router import get_inference_service
@@ -209,7 +209,7 @@ class TestInferenceRouter:
 
             assert response.status_code == 200
             mock_inference_service.predict.assert_called_once_with(
-                output_field="latency_mean", cell_id=5, model_id=None
+                output_field="latency_mean", cell_id=5, model_id=None, explain=False
             )
         finally:
             app.dependency_overrides.clear()
