@@ -1,5 +1,6 @@
 """Service for evaluating and monitoring model performance per output field."""
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -8,9 +9,11 @@ import mlflow
 from mlflow.exceptions import MlflowException
 from sqlalchemy.orm import Session
 
+from src.core.config import settings
 from src.db.score_history import ScoreHistoryDB
 from src.schemas.model import ArchitectureType, ModelConfig
 from src.schemas.performance import (
+    FeatureImportanceResponse,
     FieldEvaluationResponse,
     ModelPerformance,
     ScoreHistoryEntry,
@@ -24,7 +27,7 @@ from src.models import MODEL_REGISTRY
 
 logger = logging.getLogger(__name__)
 
-# Metrics where a higher value is better — affects best-election and degradation direction
+# Metrics where a higher value is better - affects best-election and degradation direction
 _HIGHER_IS_BETTER: frozenset[str] = frozenset({"r2"})
 
 
@@ -48,10 +51,60 @@ def _baseline_key(field_name: str) -> str:
     return f"baseline_score:{field_name}"
 
 
+def _importance_key(field_name: str) -> str:
+    return f"importance:{field_name}"
+
+
+def _importance_at_key(field_name: str) -> str:
+    return f"importance_at:{field_name}"
+
+
+def _make_alibi_scorer(metric: str, score_fn):
+    """
+    Wrap _compute_score into an alibi-compatible scorer (higher = better).
+    Error metrics (rmse, mae, mape) are negated so alibi's convention holds.
+    Sets __name__ = metric so alibi keys the result dict by metric name.
+    """
+    def scorer(y_true, y_pred):
+        val = score_fn(list(y_pred), list(y_true), metric)
+        return val if metric == "r2" else -val
+
+    return scorer
+
+
+class _SequenceIndexBridge:
+    """
+    Bridges 2D permutation methods with 3D sequence models.
+
+    Encodes (n_cells, lookback, n_fields) as (n_cells, n_fields) float indices
+    pointing into a pool of real observed sequences.
+
+    Pool layout:
+        indices 0..n_cells-1  -> real cell sequences
+    """
+
+    def __init__(self, X_all: np.ndarray):
+        self.pool = X_all.astype(np.float32)  # (n_cells, lookback, n_fields)
+        self.n_cells = len(X_all)
+
+    def encode(self, n_fields: int) -> np.ndarray:
+        """Identity encoding: cell i uses its own sequences for every field."""
+        return np.tile(np.arange(self.n_cells, dtype=np.float32)[:, np.newaxis], (1, n_fields))  # (n_cells, n_fields)
+
+    def reconstruct(self, X_2d: np.ndarray) -> np.ndarray:
+        """Look up real sequences from pool using float indices (rounded + clipped)."""
+        n_samples, n_fields = X_2d.shape
+        lookback = self.pool.shape[1]
+        X_3d = np.zeros((n_samples, lookback, n_fields), dtype=np.float32)
+        for s in range(n_samples):
+            for i in range(n_fields):
+                idx = int(round(np.clip(X_2d[s, i], 0, len(self.pool) - 1)))
+                X_3d[s, :, i] = self.pool[idx, :, i]
+        return X_3d
+
+
 class PerformanceService:
     """Service for metric-agnostic model evaluation and best-model designation."""
-
-    MAX_EVAL_CELLS = 3
 
     def __init__(
         self,
@@ -93,7 +146,7 @@ class PerformanceService:
         cells = await self.data_storage_client.get_known_cells()
         logger.info(
             f"Evaluating {len(model_configs)} models for field '{field_name}' "
-            f"using metric '{metric}' and up to {self.MAX_EVAL_CELLS} reference cells "
+            f"using metric '{metric}' and up to {settings.MAX_EVAL_CELLS} reference cells "
             f"(from {len(cells)} known)"
         )
 
@@ -104,13 +157,15 @@ class PerformanceService:
                 "Evaluation fallback anchor: window_start_time=%d (data found in storage)",
                 fallback_start_ts,)
         else:
-            logger.warning("Evaluation: no data found in storage for any time range — scores will be None")
+            logger.warning("Evaluation: no data found in storage for any time range - scores will be None")
 
         evaluated_at = datetime.now(tz=timezone.utc)
         evaluated_at_str = evaluated_at.isoformat()
 
         performances: list[ModelPerformance] = []
         scored: list[tuple[str, float]] = []  # (model_id, score)
+        loaded_models: dict[str, object] = {}  # to avoid loading the same model twice for importance calculation
+        detail_map: dict[str, object] = {}
 
         for model_config in model_configs:
             model_detail = self.mlflow_service.get_model(model_config.model_id)
@@ -126,14 +181,16 @@ class PerformanceService:
             )
 
             if model_detail.latest_version is None:
-                # Not trained — skip scoring
+                # Not trained - skip scoring
                 performances.append(base)
                 continue
 
             config = model_detail.config
 
+            detail_map[model_config.model_id] = model_detail
             try:
                 model = self._load_model(model_config.model_id, model_detail.latest_version, config)
+                loaded_models[model_config.model_id] = model
                 score = await self._compute_score_for_model(model, config, field_name, cells, metric, fallback_start_ts)
             except Exception as e:
                 logger.warning(
@@ -165,6 +222,22 @@ class PerformanceService:
             evaluated_at_str=evaluated_at_str,
             metric=metric,
         )
+
+        if best_model_id and best_model_id in loaded_models:
+            try:
+                importances = await self._compute_permutation_importance(
+                    model=loaded_models[best_model_id],
+                    config=detail_map[best_model_id].config,
+                    field_name=field_name,
+                    cells=cells,
+                    metric=metric,
+                    fallback_start_ts=fallback_start_ts,
+                )
+                if importances is not None:
+                    self.client.set_registered_model_tag(best_model_id, _importance_key(field_name), json.dumps(importances))
+                    self.client.set_registered_model_tag(best_model_id, _importance_at_key(field_name), evaluated_at_str)
+            except Exception as e:
+                logger.warning("Permutation importance failed for '%s': %s", field_name, e)
 
         for p in performances:
             p.is_best = p.model_id == best_model_id
@@ -283,7 +356,7 @@ class PerformanceService:
                 )
 
         return None
-    
+
     def set_best_model(self, field_name: str, model_id: str) -> ModelPerformance:
         """
         Override best model designation for field_name without scoring.
@@ -299,7 +372,7 @@ class PerformanceService:
             raise ValueError(f"Model ID '{model_id}' does not exist.")
         if field_name not in config.output_fields:
             raise ValueError(f"Model ID '{model_id}' does not predict field '{field_name}'.")
-        
+
         # Remove best tag from current best
         current_best = self.get_best_model(field_name)
         if current_best and current_best.model_id != model_id:
@@ -307,7 +380,7 @@ class PerformanceService:
                 self.client.delete_registered_model_tag(current_best.model_id, _best_key(field_name))
             except MlflowException:
                 pass
-        
+
         self.client.set_registered_model_tag(model_id, _best_key(field_name), "true")
 
         return self.get_best_model(field_name)
@@ -320,7 +393,7 @@ class PerformanceService:
 
         Reads eval_metric:{field} tag so monitoring always uses the same metric
         as the original election. Updates score_for and eval_at tags but does NOT
-        change the best_for tag — designation only changes via a full /evaluate call.
+        change the best_for tag - designation only changes via a full /evaluate call.
 
         Args:
             trigger: Label written to history row ("monitor" for manual calls,
@@ -359,7 +432,7 @@ class PerformanceService:
         evaluated_at = datetime.now(tz=timezone.utc)
         evaluated_at_str = evaluated_at.isoformat()
 
-        # Update score + timestamp tags only — best_for and baseline_score stay unchanged
+        # Update score + timestamp tags only - best_for and baseline_score stay unchanged
         if score is not None:
             self.client.set_registered_model_tag(
                 best.model_id, _score_key(field_name), str(score)
@@ -542,7 +615,7 @@ class PerformanceService:
         valid_cells = 0
 
         for cell_index in cells:
-            if valid_cells >= self.MAX_EVAL_CELLS:
+            if valid_cells >= settings.MAX_EVAL_CELLS:
                 break
 
             # Primary fetch: window anchored to now
@@ -639,6 +712,164 @@ class PerformanceService:
             return (1.0 - ss_res / ss_tot) if ss_tot > 0 else 0.0
 
         raise ValueError(f"Unknown metric: {metric!r}")
+
+    async def _compute_permutation_importance(
+        self,
+        model,
+        config: ModelConfig,
+        field_name: str,
+        cells: list[int],
+        metric: str,
+        fallback_start_ts: int | None,
+        n_repeats: int = 5,
+    ) -> dict[str, float] | None:
+        """
+        Compute permutation importance for all input fields via alibi's PermutationImportance.
+
+        importance[i] = baseline_score - permuted_score (positive = feature is important).
+        Works for both error metrics (negated for alibi convention) and r2.
+        """
+        from alibi.explainers import PermutationImportance
+
+        min_windows = config.lookback_steps + config.forecast_steps
+        fetch_secs = max(min_windows * config.window_duration_seconds, 86400)
+        start_ts, end_ts = calculate_timestamps(fetch_secs)
+        field_idx = config.output_fields.index(field_name)
+        num_out = len(config.output_fields)
+
+        X_list: list[np.ndarray] = []
+        y_list: list[list[float]] = []
+
+        for cell_index in cells:
+            if len(X_list) >= settings.MAX_EVAL_CELLS:
+                break
+            data = None
+            try:
+                data = await self.data_storage_client.fetch_cell_data(
+                    cell_index=cell_index,
+                    start_timestamp=start_ts,
+                    end_timestamp=end_ts,
+                    window_duration_seconds=config.window_duration_seconds,
+                )
+            except Exception:
+                pass
+            if (not data or len(data) < min_windows) and fallback_start_ts is not None:
+                try:
+                    data = await self.data_storage_client.fetch_cell_data(
+                        cell_index=cell_index,
+                        start_timestamp=fallback_start_ts,
+                        end_timestamp=fallback_start_ts + fetch_secs,
+                        window_duration_seconds=config.window_duration_seconds,
+                    )
+                except Exception:
+                    data = None
+            if not data or len(data) < min_windows:
+                continue
+
+            data.sort(key=lambda x: x.get("window_start_time", 0))
+            eval_data = data[-min_windows:]
+            X = prepare_last_sequence(eval_data[: config.lookback_steps], config.input_fields, config.lookback_steps)
+            X_list.append(X[0])  # strip batch dim -> (lookback_steps, num_input_fields)
+            y_list.append([float(w.get(field_name) or 0.0) for w in eval_data[config.lookback_steps :]])
+
+        if not X_list:
+            logger.warning("Permutation importance: no usable cells for '%s'", field_name)
+            return None
+
+        bridge = _SequenceIndexBridge(np.stack(X_list, axis=0))
+        X_2d = bridge.encode(len(config.input_fields))
+        y_1d = np.array([float(np.mean(y)) for y in y_list])
+
+        def predict_fn(X: np.ndarray) -> np.ndarray:
+            X_3d = bridge.reconstruct(X)
+            preds = model.predict(X_3d)
+            return preds[:, field_idx::num_out].mean(axis=1)
+
+        scorer = _make_alibi_scorer(metric, self._compute_score)
+        explainer = PermutationImportance(predictor=predict_fn, score_fns=scorer, feature_names=config.input_fields)
+        explanation = explainer.explain(X_2d, y_1d, n_repeats=n_repeats, kind="difference")
+
+        f_names = explanation.data["feature_names"]
+        f_importance = explanation.data["feature_importance"][0]
+        importances = {
+            f_names[i]: {
+                "mean": round(float(f_importance[i]["mean"]), 6),
+                "std":  round(float(f_importance[i]["std"]),  6),
+            }
+            for i in range(len(f_names))
+        }
+
+        ranked = sorted(importances.items(), key=lambda x: x[1]["mean"], reverse=True)
+        logger.info(
+            "Permutation importance for field '%s' (metric=%s, n_cells=%d, n_repeats=%d):",
+            field_name, metric, len(X_list), n_repeats,
+        )
+        for name, vals in ranked:
+            logger.info("  %-30s mean=%+.6f  std=%.6f", name, vals["mean"], vals["std"])
+
+        return importances
+
+    def get_feature_importance(
+        self, field_name: str, model_id: str | None = None
+    ) -> FeatureImportanceResponse | None:
+        """Read cached permutation importance from MLflow tags. model_id=None -> best model."""
+        if model_id is None:
+            best = self.get_best_model(field_name)
+            if best is None:
+                return None
+            model_id = best.model_id
+            metric = best.metric or "rmse"
+        else:
+            tags = self._get_registered_model_tags(model_id)
+            metric = tags.get(_metric_key(field_name), "rmse")
+        tags = self._get_registered_model_tags(model_id)
+        raw = tags.get(_importance_key(field_name))
+        at_str = tags.get(_importance_at_key(field_name))
+        if not raw:
+            return None
+        return FeatureImportanceResponse(
+            field_name=field_name,
+            model_id=model_id,
+            importances=json.loads(raw),
+            metric=metric,
+            computed_at=datetime.fromisoformat(at_str) if at_str else None,
+        )
+
+    async def trigger_feature_importance(
+        self, field_name: str, model_id: str, cells: list[int]
+    ) -> FeatureImportanceResponse:
+        """Load model, compute permutation importance on demand, store as MLflow tags."""
+        model_detail = self.mlflow_service.get_model(model_id)
+        if model_detail.latest_version is None:
+            raise ValueError(f"Model '{model_id}' has no trained version")
+        config = model_detail.config
+        model = self._load_model(model_id, model_detail.latest_version, config)
+        fallback_start_ts = await self.data_storage_client.probe_data_timestamp(cells, config.window_duration_seconds)
+        tags = self._get_registered_model_tags(model_id)
+
+        metric = tags.get(_metric_key(field_name), "rmse")
+        importances = await self._compute_permutation_importance(
+            model=model,
+            config=config,
+            field_name=field_name,
+            cells=cells,
+            metric=metric,
+            fallback_start_ts=fallback_start_ts,
+        )
+        if importances is None:
+            raise ValueError(
+                f"No usable data found for model '{model_id}' on field '{field_name}'"
+            )
+        computed_at = datetime.now(timezone.utc)
+        self.client.set_registered_model_tag(model_id, _importance_key(field_name), json.dumps(importances))
+        self.client.set_registered_model_tag(model_id, _importance_at_key(field_name), computed_at.isoformat())
+        return FeatureImportanceResponse(
+            field_name=field_name,
+            model_id=model_id,
+            importances=importances,
+            metric=metric,
+            computed_at=computed_at,
+        )
 
     def _update_tags(
         self,
