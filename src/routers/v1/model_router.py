@@ -21,7 +21,7 @@ async def get_models(
     """Get all registered models, optionally filtered by output field name.
 
     Pass include_details=true to receive enriched metadata (last_trained_at,
-    best_for_fields, score_per_field, is_training, etc.) at no extra cost —
+    best_for_fields, score_per_field, is_training, etc.) at no extra cost -
     uses a single MLflow search call regardless of model count.
     """
     if include_details:

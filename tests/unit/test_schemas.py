@@ -281,7 +281,7 @@ class TestInferenceRequest:
         assert req.cell_id == 0
 
     def test_model_id_optional(self):
-        """Test that model_id is optional (defaults to None — uses best model)."""
+        """Test that model_id is optional (defaults to None - uses best model)."""
         req = InferenceRequest(output_field="latency_mean", cell_id=5)
 
         assert req.model_id is None

@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 import mlflow
 import numpy as np
@@ -9,11 +10,15 @@ import numpy as np
 from src.models import MODEL_REGISTRY
 from src.schemas.inference import ForecastStepPrediction
 from src.schemas.model import ArchitectureType, ModelConfig
+from src.schemas.performance import LocalExplanationResponse
 from src.services.data_preparation import calculate_timestamps, prepare_last_sequence
 from src.services.data_storage_client import DataStorageClient
 from src.services.mlflow_service import MLflowService
 
 logger = logging.getLogger(__name__)
+
+# (model_id, run_id) -> X_background (invalidated automatically when model version changes)
+_background_cache: dict[tuple[str, str], np.ndarray] = {}
 
 
 class InferenceService:
@@ -28,7 +33,7 @@ class InferenceService:
         self.data_storage_client = data_storage_client
 
     async def predict(
-        self, output_field: str, cell_id: int, model_id: str | None = None
+        self, output_field: str, cell_id: int, model_id: str | None = None, explain: bool = False
     ) -> dict:
         """
         Run inference for a single cell using a trained model.
@@ -75,7 +80,7 @@ class InferenceService:
                     f"Model '{model_id}' does not predict field '{output_field}'."
                 )
 
-        # Load model detail (config + version info) — sync call, run in thread
+        # Load model detail (config + version info) - sync call, run in thread
         model_detail = await asyncio.to_thread(self.mlflow_service.get_model, model_id)
         config = model_detail.config
 
@@ -86,7 +91,7 @@ class InferenceService:
                 f"Train the model first via POST /v1/training/train"
             )
 
-        # Load trained model from MLflow — sync call, run in thread
+        # Load trained model from MLflow - sync call, run in thread
         model = await asyncio.to_thread(
             self._load_trained_model,
             model_id=model_id,
@@ -173,6 +178,21 @@ class InferenceService:
             window_overlap=window_overlap,
         )
 
+        explanation = None
+        if explain:
+            try:
+                explanation = await self._explain_kernelshap(
+                    model=model,
+                    config=config,
+                    model_id=model_id,
+                    version=model_detail.latest_version,
+                    field_name=output_field,
+                    cell_id=cell_id,
+                    X_instance=X,
+                )
+            except Exception as e:
+                logger.warning("KernelSHAP explanation failed for cell %d field '%s': %s", cell_id, output_field, e)
+
         return {
             "model_id": model_id,
             "model_name": model_detail.name,
@@ -189,7 +209,91 @@ class InferenceService:
             "output_fields": config.output_fields,
             "predictions": predictions,
             "used_data": used_data,
+            "explanation": explanation,
         }
+
+    def _load_background(self, model_id: str, run_id: str) -> np.ndarray:
+        """Load KernelSHAP background from MLflow artifact, with in-memory cache."""
+        cache_key = (model_id, run_id)
+        if cache_key in _background_cache:
+            return _background_cache[cache_key]
+
+        artifact_path = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="background/background.npz")
+        data = np.load(artifact_path)
+        X_background = data["X_background"].astype(np.float32)
+        _background_cache[cache_key] = X_background
+        logger.info(
+            "Loaded KernelSHAP background for model %s run %s - %d cells cached",
+            model_id, run_id, len(X_background),
+        )
+        return X_background
+
+    async def _explain_kernelshap(
+        self,
+        model,
+        config: ModelConfig,
+        model_id: str,
+        version: int,
+        field_name: str,
+        cell_id: int,
+        X_instance: np.ndarray,
+        n_samples: int = 200,
+    ) -> LocalExplanationResponse:
+        """Explain a single prediction using KernelSHAP with training-time background."""
+        from alibi.explainers import KernelShap
+        from src.services.performance_service import _SequenceIndexBridge
+
+        client = mlflow.tracking.MlflowClient()
+        mv = client.get_model_version(model_id, str(version))
+        run_id = mv.run_id
+
+        X_background = self._load_background(model_id, run_id)
+
+        field_idx = config.output_fields.index(field_name)
+        num_out = len(config.output_fields)
+        n_fields = len(config.input_fields)
+
+        # Pool: target instance at index 0, training background at indices 1..N
+        all_sequences = np.concatenate([X_instance, X_background], axis=0)
+        bridge = _SequenceIndexBridge(all_sequences)
+
+        def predict_fn(X_2d: np.ndarray) -> np.ndarray:
+            X_3d = bridge.reconstruct(X_2d)
+            preds = model.predict(X_3d)
+            return preds[:, field_idx::num_out].mean(axis=1)
+
+        x_instance_2d = np.array([[0.0] * n_fields])       # index 0 = target
+        background_2d = bridge.encode(n_fields)[1:]         # indices 1..N = training cells
+
+        explainer = KernelShap(predict_fn, feature_names=config.input_fields)
+        explainer.fit(background_2d)
+        explanation = explainer.explain(x_instance_2d, nsamples=n_samples)
+
+        shap_values = explanation.data["shap_values"][0][0]
+        expected_value = float(explanation.data["expected_value"][0])
+
+        attributions = {
+            name: round(float(v), 6)
+            for name, v in zip(config.input_fields, shap_values)
+        }
+        pred_for_field = model.predict(X_instance)[0][field_idx::num_out].tolist()
+
+        logger.info(
+            "KernelSHAP cell=%d field='%s' baseline=%.4f attributions=%s",
+            cell_id, field_name, expected_value,
+            {k: v for k, v in sorted(attributions.items(), key=lambda x: abs(x[1]), reverse=True)},
+        )
+
+        return LocalExplanationResponse(
+            field_name=field_name,
+            model_id=model_id,
+            method="kernelshap",
+            cell_id=cell_id,
+            prediction=pred_for_field,
+            attributions=attributions,
+            baseline=round(expected_value, 6),
+            computed_at=datetime.now(timezone.utc),
+        )
 
     def _load_trained_model(
         self,

@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     MONITORING_INTERVAL_SECONDS: int = 300
     MONITORING_TRIGGER_MODE: str = "time"  # "time" | "data" | "both"
     MONITORING_DEGRADATION_FACTOR: float = 1.5
+    MAX_EVAL_CELLS: int = 10
 
     KAFKA_HOST: str = "kafka"
     KAFKA_PORT: str = "9092"
