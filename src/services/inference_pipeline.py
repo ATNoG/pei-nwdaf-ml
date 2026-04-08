@@ -35,7 +35,7 @@ class InferencePipeline:
         self._semaphore = asyncio.Semaphore(self._MAX_CONCURRENT)
 
     def on_message(self, data: dict) -> dict:
-        """Kafka bind callback — schedules async processing."""
+        """Kafka bind callback - schedules async processing."""
         try:
             content = json.loads(data["content"])
         except (KeyError, json.JSONDecodeError) as e:

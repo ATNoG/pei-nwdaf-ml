@@ -130,14 +130,14 @@ class AnomalyTrainingService:
                 if not cell_data_dict:
                     raise ValueError("No data available from any cell")
 
-                # Build flat feature vectors — each window is one sample
+                # Build flat feature vectors - each window is one sample
                 all_features = []
                 for cell_index, cell_data in cell_data_dict.items():
                     try:
                         inputs, _ = extract_fields(cell_data, config.input_fields, [])
                         all_features.extend(inputs)
                         logger.info(
-                            f"Anomaly job {job_id}: Cell {cell_index} — {len(inputs)} windows"
+                            f"Anomaly job {job_id}: Cell {cell_index} - {len(inputs)} windows"
                         )
                     except Exception as e:
                         logger.warning(
@@ -334,7 +334,7 @@ class AnomalyTrainingService:
             # (e.g., switching from aggregated to per-IP data).
             if kept == 0:
                 logger.warning(
-                    "Contamination filter would remove all samples — skipping filter. "
+                    "Contamination filter would remove all samples - skipping filter. "
                     "This may indicate a change in data distribution or granularity."
                 )
                 return X
@@ -409,7 +409,7 @@ class AnomalyTrainingService:
                 np.savez(scaler_path, mean=scaler_mean, std=scaler_std)
                 mlflow.log_artifact(scaler_path, artifact_path="scaler")
 
-            # Always train from scratch — scaler + threshold must match
+            # Always train from scratch - scaler + threshold must match
             ae = Autoencoder(input_size=num_features, hidden_size=config.hidden_size)
 
             def status_callback(epoch, max_epochs, loss):

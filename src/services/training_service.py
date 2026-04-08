@@ -216,6 +216,10 @@ class TrainingService:
                 X_train = np.concatenate(all_X, axis=0)
                 y_train = np.concatenate(all_y, axis=0)
 
+                # One representative window per cell (last = most recent training window)
+                # Used as KernelSHAP background artifact - avoids live data fetches at explain time
+                X_background = np.stack([X[-1] for X in all_X], axis=0)
+
                 logger.info(
                     f"Job {job_id}: Combined training data - "
                     f"{len(X_train)} sequences from {successful_cells} cells "
@@ -230,6 +234,7 @@ class TrainingService:
                     architecture=config.architecture,
                     X_train=X_train,
                     y_train=y_train,
+                    X_background=X_background,
                     config_dict={
                         "hidden_size": config.hidden_size,
                         "lookback_steps": config.lookback_steps,
@@ -253,7 +258,7 @@ class TrainingService:
                 self._release_training_lock(job.model_id)
 
         except Exception as e:
-            # If job was cancelled, InterruptedError will be raised — don't overwrite status
+            # If job was cancelled, InterruptedError will be raised - don't overwrite status
             job = self.get_job(job_id)
             if job and job.status == TrainingJobStatus.CANCELLED:
                 logger.info(f"Job {job_id}: Training interrupted by cancellation")
@@ -457,6 +462,7 @@ class TrainingService:
         architecture: ArchitectureType,
         X_train: np.ndarray,
         y_train: np.ndarray,
+        X_background: np.ndarray,
         config_dict: dict,
     ) -> str:
         """
@@ -535,7 +541,16 @@ class TrainingService:
             version = self._register_or_update_model(model_id, model_uri)
             mlflow.set_tag("model_version", version)
 
-            logger.info(f"Model {model_id} v{version} logged successfully")
+            # Store KernelSHAP background - one representative window per training cell
+            import os, tempfile
+            with tempfile.TemporaryDirectory() as tmpdir:
+                bg_path = os.path.join(tmpdir, "background.npz")
+                np.savez(bg_path, X_background=X_background)
+                mlflow.log_artifact(bg_path, artifact_path="background")
+            logger.info(
+                f"Model {model_id} v{version} logged successfully - "
+                f"KernelSHAP background stored ({len(X_background)} cells)"
+            )
 
             return run_id
 

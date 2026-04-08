@@ -4,7 +4,7 @@ FastAPI service for ML model lifecycle management and performance monitoring on 
 
 ## Technologies
 
-- **Python** 3.13
+- **Python** 3.12
 - **FastAPI** - REST API framework
 - **PyTorch** - model training
 - **MLflow** - model registry and experiment tracking

@@ -3,6 +3,7 @@
 from pydantic import BaseModel, Field
 
 from src.schemas.model import ArchitectureType
+from src.schemas.performance import LocalExplanationResponse
 
 
 class InferenceRequest(BaseModel):
@@ -10,6 +11,11 @@ class InferenceRequest(BaseModel):
     output_field: str = Field(..., description="Name of the output field to predict")
     cell_id: int = Field(..., ge=0, description="Cell index to fetch data for and predict")
     model_id: str | None = Field(None, description="UUID of the trained model to use for prediction")
+    explain: bool = Field(
+        False,
+        description="If true, compute local attributions alongside the prediction. "
+                    "Significantly slower, as it loads training-time background from MLflow artifact.",
+    )
 
 
 class ForecastStepPrediction(BaseModel):
@@ -36,4 +42,8 @@ class InferenceResult(BaseModel):
     input_data_end: int = Field(..., description="End timestamp of last input window used (epoch seconds)")
     input_fields: list[str] = Field(..., description="Input fields used for prediction")
     output_fields: list[str] = Field(..., description="Output fields being predicted")
-    predictions: list[ForecastStepPrediction] = Field(...,description="Predictions broken down by forecast step and output field",)
+    predictions: list[ForecastStepPrediction] = Field(...,description="Predictions broken down by forecast step and output field")
+    explanation: LocalExplanationResponse | None = Field(
+        None,
+        description="Local explanation. Populated only when explain=true in the request.",
+    )
