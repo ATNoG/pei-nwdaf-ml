@@ -135,8 +135,10 @@ class TrainingService:
                 logger.info(f"Job {job_id}: Fetching data from {start_ts} to {end_ts}")
 
                 # Fetch data for all cells
+                # Derive component_id for policy enforcement
+                component_id = f"ml-{model_detail.name}" if model_detail.name else None
                 cell_data_dict = await self._fetch_all_cell_data(
-                    start_ts, end_ts, config.window_duration_seconds
+                    start_ts, end_ts, config.window_duration_seconds, component_id
                 )
 
                 if not cell_data_dict:
@@ -336,6 +338,7 @@ class TrainingService:
         start_timestamp: int,
         end_timestamp: int,
         window_duration_seconds: int,
+        component_id: str | None = None,
     ) -> dict[int, list[dict]]:
         """
         Fetch data for all known cells.
@@ -344,12 +347,13 @@ class TrainingService:
             start_timestamp: Start time
             end_timestamp: End time
             window_duration_seconds: Window duration from model config
+            component_id: Optional component ID to pass for policy enforcement
 
         Returns:
             Dict mapping cell_index to list of data windows
         """
         # Get all known cells
-        cells = await self.data_storage_client.get_known_cells()
+        cells = await self.data_storage_client.get_known_cells(component_id=component_id)
         logger.info(f"Found {len(cells)} cells to fetch data from")
 
         # Fetch data for each cell
@@ -361,6 +365,7 @@ class TrainingService:
                     start_timestamp=start_timestamp,
                     end_timestamp=end_timestamp,
                     window_duration_seconds=window_duration_seconds,
+                    component_id=component_id,
                 )
                 if data:
                     # Sort by timestamp to ensure proper sequence order

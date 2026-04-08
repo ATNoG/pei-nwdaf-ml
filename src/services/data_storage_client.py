@@ -17,17 +17,24 @@ class DataStorageClient:
             f.strip() for f in settings.DATA_STORAGE_EXCLUDED_FIELDS.split(",") if f.strip()
         )
 
-    async def get_available_fields(self) -> list[str]:
+    async def get_available_fields(self, component_id: str | None = None) -> list[str]:
         """
         Get available data field names from the data-storage example endpoint.
 
         Returns a list of field names, excluding metadata fields defined in
         DATA_STORAGE_EXCLUDED_FIELDS.
+
+        Args:
+            component_id: Optional component ID to pass as X-Component-ID header
+                for policy enforcement.
         """
         url = f"{self.base_url}{self.example_endpoint}"
+        headers = {}
+        if component_id:
+            headers["X-Component-ID"] = component_id
 
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=10.0)
+            response = await client.get(url, timeout=10.0, headers=headers)
             response.raise_for_status()
 
             data = response.json()
@@ -64,26 +71,39 @@ class DataStorageClient:
 
         return (len(invalid_fields) == 0, invalid_fields)
 
-    async def get_known_cells(self) -> list[int]:
+    async def get_known_cells(self, component_id: str | None = None) -> list[int]:
         """
         Get list of all known cell indexes from data-storage API.
+
+        Args:
+            component_id: Optional component ID to pass as X-Component-ID header
+                for policy enforcement.
 
         Returns:
             List of cell indexes (integers)
         """
         url = f"{self.base_url}{self.cell_endpoint}"
+        headers = {}
+        if component_id:
+            headers["X-Component-ID"] = component_id
 
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=30.0)
+            response = await client.get(url, timeout=30.0, headers=headers)
             response.raise_for_status()
             return response.json()
 
     async def probe_data_timestamp(
-        self, cells: list[int], window_duration_seconds: int
+        self, cells: list[int], window_duration_seconds: int, component_id: str | None = None
     ) -> int | None:
         """
         Discover any available data by issuing a single-record request over the
         full time range (epoch 0 to far future) for each of the first few cells.
+
+        Args:
+            cells: List of cell indexes to probe.
+            window_duration_seconds: Window duration for aggregation.
+            component_id: Optional component ID to pass as X-Component-ID header
+                for policy enforcement.
 
         Returns the window_start_time of the first record found, or None if the
         data storage has no data at all.  Used to anchor evaluation windows when
@@ -106,7 +126,10 @@ class DataStorageClient:
                         "offset": 0,
                         "limit": 1,
                     }
-                    response = await client.get(url, params=params, timeout=30.0)
+                    headers = {}
+                    if component_id:
+                        headers["X-Component-ID"] = component_id
+                    response = await client.get(url, params=params, timeout=30.0, headers=headers)
                     if response.status_code == 200:
                         data = response.json()
                         if data and isinstance(data, list):
@@ -128,6 +151,7 @@ class DataStorageClient:
         end_timestamp: int,
         window_duration_seconds: int,
         ip_src: str | None = None,
+        component_id: str | None = None,
     ) -> list[dict]:
         """
         Fetch processed latency data for a specific cell with pagination.
@@ -141,6 +165,8 @@ class DataStorageClient:
             window_duration_seconds: Window duration for aggregation
             ip_src: Optional IP source filter. Use "*" to include ip_src in
                     the response grouped per IP. Default None = existing behavior.
+            component_id: Optional component ID to pass as X-Component-ID header
+                    for policy enforcement.
 
         Returns:
             List of data windows with metrics (all pages combined)
@@ -163,7 +189,11 @@ class DataStorageClient:
                 if ip_src is not None:
                     params["ip_src"] = ip_src
 
-                response = await client.get(url, params=params, timeout=60.0)
+                headers = {}
+                if component_id:
+                    headers["X-Component-ID"] = component_id
+
+                response = await client.get(url, params=params, timeout=60.0, headers=headers)
                 response.raise_for_status()
                 batch = response.json()
 

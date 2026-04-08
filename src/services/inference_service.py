@@ -99,11 +99,15 @@ class InferenceService:
         buffer_seconds = config.window_duration_seconds
         start_ts, end_ts = calculate_timestamps(lookback_seconds + buffer_seconds)
 
+        # Derive component_id for policy enforcement
+        component_id = f"ml-{model_detail.name}" if model_detail.name else None
+
         cell_data = await self.data_storage_client.fetch_cell_data(
             cell_index=cell_id,
             start_timestamp=start_ts,
             end_timestamp=end_ts,
             window_duration_seconds=config.window_duration_seconds,
+            component_id=component_id,
         )
 
         if not cell_data:
