@@ -202,16 +202,15 @@ class AnomalyTrainingService:
         from src.schemas.kube import JobResources
         from src.services.kube_training import get_kube_training_service
 
-        if resources is None:
-            job = self.db.query(AnomalyTrainingJobDB).filter(AnomalyTrainingJobDB.job_id == job_id).first()
-            if job:
-                cfg = self.db.query(AnomalyModelConfigDB).filter(AnomalyModelConfigDB.model_id == job.model_id).first()
-                if cfg and cfg.default_cpu and cfg.default_memory:
-                    resources = JobResources(cpu=cfg.default_cpu, memory=cfg.default_memory)
+        job = self.db.query(AnomalyTrainingJobDB).filter(AnomalyTrainingJobDB.job_id == job_id).first()
+        if resources is None and job:
+            cfg = self.db.query(AnomalyModelConfigDB).filter(AnomalyModelConfigDB.model_id == job.model_id).first()
+            if cfg and cfg.default_cpu and cfg.default_memory:
+                resources = JobResources(cpu=cfg.default_cpu, memory=cfg.default_memory)
 
         kube = get_kube_training_service()
         if kube:
-            kube.to_kube(job_id, resources, "anomaly")
+            kube.to_kube(job.model_id, job_id, resources, "anomaly")
         else:
             asyncio.get_running_loop().run_in_executor(_executor, _run_anomaly_training_sync, job_id)
 
@@ -238,7 +237,7 @@ class AnomalyTrainingService:
         kube = get_kube_training_service()
         if kube:
             try:
-                kube.cancel(job_id)
+                kube.cancel(job.model_id)
             except Exception as e:
                 logger.error(f"Failed to delete K8s job for {job_id}: {e}")
             finally:

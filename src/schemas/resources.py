@@ -2,8 +2,9 @@ from pydantic import BaseModel
 
 
 class ResourceUsageEntry(BaseModel):
-    job_id: str
+    job_id: str | None = None
     model_id: str
+    model_name: str | None = None
     job_type: str
     status: str
     cpu_request: str | None = None

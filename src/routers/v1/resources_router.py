@@ -2,18 +2,18 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from src.core.dependencies import get_db
 from src.schemas.resources import (
     ModelResourceDefaults,
     ResourcesUsageResponse,
-    ResourceUsageEntry,
 )
 from src.services.resources_service import (
+    generate_prometheus_metrics,
     get_model_defaults,
-    list_active_job_usage,
+    list_all_model_usage,
     set_model_defaults,
 )
 
@@ -23,9 +23,20 @@ router = APIRouter()
 
 @router.get("/usage", response_model=ResourcesUsageResponse)
 async def get_resources_usage(db: Session = Depends(get_db)) -> ResourcesUsageResponse:
-    """Return resource allocations and live usage for all running or queued training jobs."""
-    entries: list[ResourceUsageEntry] = list_active_job_usage(db)
-    return ResourcesUsageResponse(jobs=entries)
+    """Return resource usage for all models; idle models have null resource fields."""
+    return ResourcesUsageResponse(jobs=list_all_model_usage(db))
+
+
+@router.get("/metrics", response_class=Response)
+async def get_resources_metrics(db: Session = Depends(get_db)) -> Response:
+    """Return Prometheus text-format metrics for all models (0 when idle)."""
+    return Response(content=generate_prometheus_metrics(db), media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
+@router.get("/metrics/{model_id}", response_class=Response)
+async def get_model_resources_metrics(model_id: str, db: Session = Depends(get_db)) -> Response:
+    """Return Prometheus text-format metrics for a specific model (0 when idle)."""
+    return Response(content=generate_prometheus_metrics(db, model_id=model_id), media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 @router.put("/defaults/{model_id}", response_model=ModelResourceDefaults)
