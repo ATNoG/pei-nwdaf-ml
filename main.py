@@ -86,7 +86,6 @@ def _trigger_field_retraining(field, model_configs, training_svc, loop):
     Returns a list of queued job_ids (configs that failed to queue are skipped).
     """
     from src.db.training_job import TrainingJobDB
-    from src.services.training_service import _run_training_sync, _executor as training_executor
 
     job_ids = []
     for cfg in model_configs:
@@ -102,9 +101,8 @@ def _trigger_field_retraining(field, model_configs, training_svc, loop):
         lookback = last_job.lookback_seconds if last_job else 86400
         try:
             job_info = training_svc.create_training_job(cfg.model_id, lookback)
-            loop.run_in_executor(
-                training_executor, _run_training_sync, job_info["job_id"]
-            )
+            # dispatch resolves default resources from model config automatically
+            training_svc.dispatch(job_info["job_id"], resources=None)
             job_ids.append(job_info["job_id"])
             logger.info(
                 "Auto-monitor: queued retraining job %s for model %s (field '%s')",
@@ -400,8 +398,10 @@ async def _kube_reconciliation_loop():
             continue
         db = SessionLocal()
         try:
-            for job in db.query(TrainingJobDB).filter(TrainingJobDB.status.in_(active)).all():
-                if kube.is_job_dead(job.job_id):
+            for job in (
+                db.query(TrainingJobDB).filter(TrainingJobDB.status.in_(active)).all()
+            ):
+                if kube.is_job_dead(job.model_id):
                     job.status = TrainingJobStatus.FAILED
                     job.error_message = "K8s job failed or not found"
                     job.completed_at = datetime.now()
@@ -410,10 +410,16 @@ async def _kube_reconciliation_loop():
                         .where(ModelConfigDB.model_id == job.model_id)
                         .values(is_training=False)
                     )
-                    logger.warning("Reconciliation: forecast job %s marked FAILED", job.job_id)
+                    logger.warning(
+                        "Reconciliation: forecast job %s marked FAILED", job.job_id
+                    )
 
-            for job in db.query(AnomalyTrainingJobDB).filter(AnomalyTrainingJobDB.status.in_(active)).all():
-                if kube.is_job_dead(job.job_id):
+            for job in (
+                db.query(AnomalyTrainingJobDB)
+                .filter(AnomalyTrainingJobDB.status.in_(active))
+                .all()
+            ):
+                if kube.is_job_dead(job.model_id):
                     job.status = TrainingJobStatus.FAILED
                     job.error_message = "K8s job failed or not found"
                     job.completed_at = datetime.now()
@@ -422,7 +428,9 @@ async def _kube_reconciliation_loop():
                         .where(AnomalyModelConfigDB.model_id == job.model_id)
                         .values(is_training=False)
                     )
-                    logger.warning("Reconciliation: anomaly job %s marked FAILED", job.job_id)
+                    logger.warning(
+                        "Reconciliation: anomaly job %s marked FAILED", job.job_id
+                    )
 
             db.commit()
         except Exception as e:
