@@ -22,6 +22,8 @@ class AnomalyModelConfigDB(Base):
     threshold_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(nullable=False)
     is_training: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    default_cpu: Mapped[str | None] = mapped_column(String, nullable=True)
+    default_memory: Mapped[str | None] = mapped_column(String, nullable=True)
 
     def __repr__(self) -> str:
         return f"<AnomalyModelConfigDB(model_id={self.model_id}, name={self.name})>"
