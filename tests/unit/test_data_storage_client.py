@@ -16,6 +16,7 @@ def mock_settings():
         mock.DATA_STORAGE_EXCLUDED_FIELDS = "window_start_time,window_end_time,window_duration_seconds,cell_index,network,sample_count"
         mock.DATA_STORAGE_DATA_ENDPOINT = "/api/v1/processed/latency"
         mock.DATA_STORAGE_CELL_ENDPOINT = "/api/v1/cell"
+        mock.ENCRYPTION_ENABLED = False
         yield mock
 
 
@@ -62,12 +63,14 @@ class TestDataStorageClient:
     @pytest.mark.asyncio
     async def test_get_available_fields_success(self, mock_settings, sample_example_response):
         """Test successfully fetching available fields."""
+        import json as _json
         client = DataStorageClient()
 
         # Mock httpx response
         with patch("httpx.AsyncClient") as mock_async_client:
             mock_response = MagicMock()
-            mock_response.json.return_value = sample_example_response
+            mock_response.content = _json.dumps(sample_example_response).encode()
+            mock_response.headers = {}
             mock_response.raise_for_status = MagicMock()
 
             mock_client_instance = AsyncMock()
@@ -81,6 +84,7 @@ class TestDataStorageClient:
             mock_client_instance.get.assert_called_once_with(
                 "http://data-storage:8000/api/v1/processed/latency/example",
                 timeout=10.0,
+                headers={},
             )
 
             # Verify excluded fields are removed
@@ -104,11 +108,13 @@ class TestDataStorageClient:
     @pytest.mark.asyncio
     async def test_get_available_fields_empty_response(self, mock_settings):
         """Test handling empty response."""
+        import json as _json
         client = DataStorageClient()
 
         with patch("httpx.AsyncClient") as mock_async_client:
             mock_response = MagicMock()
-            mock_response.json.return_value = []
+            mock_response.content = _json.dumps([]).encode()
+            mock_response.headers = {}
             mock_response.raise_for_status = MagicMock()
 
             mock_client_instance = AsyncMock()
@@ -162,6 +168,7 @@ class TestDataStorageClient:
             mock.DATA_STORAGE_API_URL = "http://data-storage:8000"
             mock.DATA_STORAGE_EXAMPLE_ENDPOINT = "/api/v1/processed/latency/example"
             mock.DATA_STORAGE_EXCLUDED_FIELDS = " field1 , field2 ,  field3  "
+            mock.ENCRYPTION_ENABLED = False
 
             client = DataStorageClient()
 
@@ -174,6 +181,7 @@ class TestDataStorageClient:
             mock.DATA_STORAGE_API_URL = "http://data-storage:8000"
             mock.DATA_STORAGE_EXAMPLE_ENDPOINT = "/api/v1/processed/latency/example"
             mock.DATA_STORAGE_EXCLUDED_FIELDS = ""
+            mock.ENCRYPTION_ENABLED = False
 
             client = DataStorageClient()
 
@@ -182,11 +190,13 @@ class TestDataStorageClient:
     @pytest.mark.asyncio
     async def test_validate_fields_all_valid(self, mock_settings, sample_example_response):
         """Test validating fields when all are valid."""
+        import json as _json
         client = DataStorageClient()
 
         with patch("httpx.AsyncClient") as mock_async_client:
             mock_response = MagicMock()
-            mock_response.json.return_value = sample_example_response
+            mock_response.content = _json.dumps(sample_example_response).encode()
+            mock_response.headers = {}
             mock_response.raise_for_status = MagicMock()
 
             mock_client_instance = AsyncMock()
@@ -202,11 +212,13 @@ class TestDataStorageClient:
     @pytest.mark.asyncio
     async def test_validate_fields_some_invalid(self, mock_settings, sample_example_response):
         """Test validating fields when some are invalid."""
+        import json as _json
         client = DataStorageClient()
 
         with patch("httpx.AsyncClient") as mock_async_client:
             mock_response = MagicMock()
-            mock_response.json.return_value = sample_example_response
+            mock_response.content = _json.dumps(sample_example_response).encode()
+            mock_response.headers = {}
             mock_response.raise_for_status = MagicMock()
 
             mock_client_instance = AsyncMock()
@@ -224,11 +236,13 @@ class TestDataStorageClient:
     @pytest.mark.asyncio
     async def test_validate_fields_all_invalid(self, mock_settings, sample_example_response):
         """Test validating fields when all are invalid."""
+        import json as _json
         client = DataStorageClient()
 
         with patch("httpx.AsyncClient") as mock_async_client:
             mock_response = MagicMock()
-            mock_response.json.return_value = sample_example_response
+            mock_response.content = _json.dumps(sample_example_response).encode()
+            mock_response.headers = {}
             mock_response.raise_for_status = MagicMock()
 
             mock_client_instance = AsyncMock()
@@ -244,12 +258,14 @@ class TestDataStorageClient:
     @pytest.mark.asyncio
     async def test_get_known_cells_success(self, mock_settings):
         """Test successfully fetching known cells."""
+        import json as _json
         client = DataStorageClient()
         mock_cells = [0, 1, 2, 5, 7]
 
         with patch("httpx.AsyncClient") as mock_async_client:
             mock_response = MagicMock()
-            mock_response.json.return_value = mock_cells
+            mock_response.content = _json.dumps(mock_cells).encode()
+            mock_response.headers = {}
             mock_response.raise_for_status = MagicMock()
 
             mock_client_instance = AsyncMock()
@@ -264,6 +280,7 @@ class TestDataStorageClient:
     @pytest.mark.asyncio
     async def test_fetch_cell_data_success(self, mock_settings):
         """Test successfully fetching cell data."""
+        import json as _json
         client = DataStorageClient()
         mock_data = [
             {
@@ -277,7 +294,8 @@ class TestDataStorageClient:
 
         with patch("httpx.AsyncClient") as mock_async_client:
             mock_response = MagicMock()
-            mock_response.json.return_value = mock_data
+            mock_response.content = _json.dumps(mock_data).encode()
+            mock_response.headers = {}
             mock_response.raise_for_status = MagicMock()
 
             mock_client_instance = AsyncMock()

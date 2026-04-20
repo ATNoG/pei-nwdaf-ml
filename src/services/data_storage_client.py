@@ -1,8 +1,13 @@
 """Client for interacting with the Data Storage API."""
 
+import json
+import logging
+
 import httpx
 
 from src.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class DataStorageClient:
@@ -16,6 +21,45 @@ class DataStorageClient:
         self.excluded_fields = set(
             f.strip() for f in settings.DATA_STORAGE_EXCLUDED_FIELDS.split(",") if f.strip()
         )
+        self._encryptor_client = None
+        self._handshake_done = False
+        self._session_token: str | None = None
+        if settings.ENCRYPTION_ENABLED:
+            from encryptor.core.secure_channel_client import EncryptorClient
+            self._encryptor_client = EncryptorClient()
+
+    def _ensure_handshake(self) -> None:
+        """Perform the DH handshake with data-storage if not yet done."""
+        if self._encryptor_client is None or self._handshake_done:
+            return
+        try:
+            self._encryptor_client.handshake(self.base_url)
+            self._handshake_done = True
+            self._session_token = self._encryptor_client.session_token
+            logger.info(
+                "Encryption handshake with data-storage completed (session=%s).",
+                self._session_token,
+            )
+        except Exception as exc:
+            logger.warning("Encryption handshake failed, continuing without encryption: %s", exc)
+            self._encryptor_client = None
+
+    @property
+    def _auth_headers(self) -> dict[str, str]:
+        """Headers to attach to every data-storage request."""
+        if self._session_token:
+            return {"X-Session-Token": self._session_token}
+        return {}
+
+    def _decrypt_response(self, response: httpx.Response) -> bytes:
+        """Decrypt the response body if the server marked it as encrypted."""
+        if (
+            self._encryptor_client is not None
+            and self._handshake_done
+            and response.headers.get("X-Encrypted") == "true"
+        ):
+            return self._encryptor_client.decrypt(response.content)
+        return response.content
 
     async def get_available_fields(self) -> list[str]:
         """
@@ -24,13 +68,15 @@ class DataStorageClient:
         Returns a list of field names, excluding metadata fields defined in
         DATA_STORAGE_EXCLUDED_FIELDS.
         """
+        self._ensure_handshake()
         url = f"{self.base_url}{self.example_endpoint}"
 
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=10.0)
+            response = await client.get(url, timeout=10.0, headers=self._auth_headers)
             response.raise_for_status()
 
-            data = response.json()
+            raw = self._decrypt_response(response)
+            data = json.loads(raw)
 
             # data is a list with at least one example record
             if not data or not isinstance(data, list):
@@ -71,12 +117,13 @@ class DataStorageClient:
         Returns:
             List of cell indexes (integers)
         """
+        self._ensure_handshake()
         url = f"{self.base_url}{self.cell_endpoint}"
 
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=30.0)
+            response = await client.get(url, timeout=30.0, headers=self._auth_headers)
             response.raise_for_status()
-            return response.json()
+            return json.loads(self._decrypt_response(response))
 
     async def probe_data_timestamp(
         self, cells: list[int], window_duration_seconds: int
@@ -92,6 +139,7 @@ class DataStorageClient:
         import time
         from datetime import datetime, timezone
 
+        self._ensure_handshake()
         far_future = int(time.time()) + 10 * 365 * 24 * 3600
         url = f"{self.base_url}{self.data_endpoint}"
 
@@ -106,9 +154,11 @@ class DataStorageClient:
                         "offset": 0,
                         "limit": 1,
                     }
-                    response = await client.get(url, params=params, timeout=30.0)
+                    response = await client.get(
+                        url, params=params, timeout=30.0, headers=self._auth_headers
+                    )
                     if response.status_code == 200:
-                        data = response.json()
+                        data = json.loads(self._decrypt_response(response))
                         if data and isinstance(data, list):
                             raw = data[0].get("window_start_time", 0)
                             if isinstance(raw, str):
@@ -145,6 +195,7 @@ class DataStorageClient:
         Returns:
             List of data windows with metrics (all pages combined)
         """
+        self._ensure_handshake()
         url = f"{self.base_url}{self.data_endpoint}"
         all_data = []
         offset = 0
@@ -163,9 +214,11 @@ class DataStorageClient:
                 if ip_src is not None:
                     params["ip_src"] = ip_src
 
-                response = await client.get(url, params=params, timeout=60.0)
+                response = await client.get(
+                    url, params=params, timeout=60.0, headers=self._auth_headers
+                )
                 response.raise_for_status()
-                batch = response.json()
+                batch = json.loads(self._decrypt_response(response))
 
                 if not batch:
                     # No more data
