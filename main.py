@@ -446,6 +446,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"MLflow tracking URI: {settings.MLFLOW_TRACKING_URI}")
     logger.info(f"Data Storage API: {settings.DATA_STORAGE_API_URL}")
     logger.info(f"Database URL: {settings.DATABASE_URL}")
+    logger.info(f"Policy Service: {settings.POLICY_SERVICE_URL} (enabled={settings.POLICY_ENABLED})")
 
     os.environ["MLFLOW_S3_ENDPOINT_URL"] = settings.MLFLOW_S3_ENDPOINT_URL
     os.environ["AWS_ACCESS_KEY_ID"] = settings.AWS_ACCESS_KEY_ID
@@ -485,6 +486,100 @@ async def lifespan(app: FastAPI):
         monitor_task = asyncio.create_task(_monitoring_loop())
         logger.info("Auto-monitor task started")
 
+    # Policy Service integration
+    policy_client = None
+    policy_heartbeat_task = None
+    if settings.POLICY_ENABLED:
+        try:
+            from src.services.config_service import MLConfigService
+            from policy_client import PolicyClient
+
+            policy_client = PolicyClient(
+                service_url=settings.POLICY_SERVICE_URL,
+                component_id=settings.POLICY_COMPONENT_ID,
+                enable_policy=True,
+                fail_open=settings.POLICY_FAILOPEN,
+            )
+
+            # Register ML service as a component
+            registered = await policy_client.register_component(
+                component_type="ml_agent",
+                role=settings.POLICY_ROLENAME,
+            )
+
+            if registered:
+                await policy_client.start_heartbeat()
+                logger.info(f"Policy client registered: {settings.POLICY_COMPONENT_ID}")
+
+                # Reuse mlflow client for model registration to avoid resource leaks
+                from mlflow import MlflowClient
+                mlflow_client_for_policy = MlflowClient()
+
+                # Register all existing ML models
+                db = SessionLocal()
+                try:
+                    config_service = MLConfigService(db)
+                    models = config_service.list_all()
+                    for model in models:
+                        result = await policy_client.register_ml_model(
+                            model_id=model.model_id,
+                            model_name=model.name,
+                            input_fields=model.input_fields,
+                            output_fields=model.output_fields,
+                            data_type="network_prediction",  # Default data type
+                            architecture=model.architecture,
+                            window_duration_seconds=model.window_duration_seconds,
+                        )
+                        if result:
+                            logger.info(f"Registered ML model with policy: {model.name}")
+                        else:
+                            logger.warning(f"Failed to register model {model.name} with policy (returned False)")
+                finally:
+                    db.close()
+
+                # Store on app state for dependency injection
+                app.state.policy_client = policy_client
+
+                # Track registered models to avoid re-registering
+                _registered_models = set()
+
+                # Start background task to register new models
+                async def _model_registration_loop():
+                    """Periodically check for new models and register them."""
+                    nonlocal _registered_models
+                    while True:
+                        await asyncio.sleep(60)  # Check every minute
+                        db = SessionLocal()
+                        try:
+                            config_service = MLConfigService(db)
+                            models = config_service.list_all()
+                            for model in models:
+                                # Only register models we haven't seen yet
+                                if model.model_id not in _registered_models:
+                                    result = await policy_client.register_ml_model(
+                                        model_id=model.model_id,
+                                        model_name=model.name,
+                                        input_fields=model.input_fields,
+                                        output_fields=model.output_fields,
+                                        data_type="network_prediction",
+                                        architecture=model.architecture,
+                                        window_duration_seconds=model.window_duration_seconds,
+                                    )
+                                    if result:
+                                        _registered_models.add(model.model_id)
+                                        logger.info(f"Registered new ML model with policy: {model.name}")
+                        finally:
+                            db.close()
+
+                policy_heartbeat_task = asyncio.create_task(_model_registration_loop())
+                logger.info("Model registration loop started")
+            else:
+                logger.warning("Failed to register ML service with policy")
+
+        except ImportError:
+            logger.warning("Policy client SDK not available - policy integration disabled")
+        except Exception as e:
+            logger.error(f"Failed to initialize policy client: {e}")
     reconcile_task = None
     if settings.TRAIN_USE_KUBE:
         reconcile_task = asyncio.create_task(_kube_reconciliation_loop())
@@ -496,6 +591,18 @@ async def lifespan(app: FastAPI):
         monitor_task.cancel()
         logger.info("Auto-monitor task stopped")
 
+    # Stop policy heartbeat
+    if policy_client:
+        await policy_client.stop_heartbeat()
+        logger.info("Policy heartbeat stopped")
+
+    if policy_heartbeat_task:
+        policy_heartbeat_task.cancel()
+        try:
+            await policy_heartbeat_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Model registration loop stopped")
     if reconcile_task:
         reconcile_task.cancel()
         logger.info("Kube reconciliation task stopped")
