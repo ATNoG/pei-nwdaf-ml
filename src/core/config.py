@@ -61,5 +61,8 @@ class Settings(BaseSettings):
     TRAIN_KUBE_NAMESPACE: str = "default"
     TRAIN_KUBE_IMAGE: str = ""
 
+    # Encryption (DH key exchange + AES-256-GCM)
+    ENCRYPTION_ENABLED: bool = False
+
 
 settings = Settings()

@@ -40,6 +40,7 @@ class KubeTrainingService:
                 "DATA_STORAGE_CELL_ENDPOINT": settings.DATA_STORAGE_CELL_ENDPOINT,
                 "DATA_STORAGE_EXCLUDED_FIELDS": settings.DATA_STORAGE_EXCLUDED_FIELDS,
                 "LOG_LEVEL": settings.LOG_LEVEL,
+                "ENCRYPTION_ENABLED": str(settings.ENCRYPTION_ENABLED).lower(),
             },
             resources=resources or self._DEFAULT_RESOURCES,
         )

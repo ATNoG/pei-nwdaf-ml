@@ -48,6 +48,7 @@ services:
       - TRAIN_KUBE_CA_CERT=${TRAIN_KUBE_CA_CERT}
       - TRAIN_KUBE_NAMESPACE=${TRAIN_KUBE_NAMESPACE}
       - TRAIN_KUBE_IMAGE=${TRAIN_KUBE_IMAGE}
+      - ENCRYPTION_ENABLED=${ENCRYPTION_ENABLED:-false}
     networks:
       - nwdaf-ml
       - nwdaf-network
