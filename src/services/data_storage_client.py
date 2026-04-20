@@ -79,7 +79,7 @@ class DataStorageClient:
             headers["X-Component-ID"] = component_id
 
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=10.0, headers=self._auth_headers)
+            response = await client.get(url, timeout=10.0, headers={**self._auth_headers, **headers})
             response.raise_for_status()
 
             raw = self._decrypt_response(response)
@@ -135,11 +135,7 @@ class DataStorageClient:
             headers["X-Component-ID"] = component_id
 
         async with httpx.AsyncClient() as client:
-<<<<<<< HEAD
-            response = await client.get(url, timeout=30.0, headers=headers)
-=======
-            response = await client.get(url, timeout=30.0, headers=self._auth_headers)
->>>>>>> dev
+            response = await client.get(url, timeout=30.0, headers={**self._auth_headers, **headers})
             response.raise_for_status()
             return json.loads(self._decrypt_response(response))
 
@@ -178,16 +174,10 @@ class DataStorageClient:
                         "offset": 0,
                         "limit": 1,
                     }
-<<<<<<< HEAD
-                    headers = {}
+                    headers = {**self._auth_headers}
                     if component_id:
                         headers["X-Component-ID"] = component_id
                     response = await client.get(url, params=params, timeout=30.0, headers=headers)
-=======
-                    response = await client.get(
-                        url, params=params, timeout=30.0, headers=self._auth_headers
-                    )
->>>>>>> dev
                     if response.status_code == 200:
                         data = json.loads(self._decrypt_response(response))
                         if data and isinstance(data, list):
@@ -248,17 +238,11 @@ class DataStorageClient:
                 if ip_src is not None:
                     params["ip_src"] = ip_src
 
-<<<<<<< HEAD
-                headers = {}
+                headers = {**self._auth_headers}
                 if component_id:
                     headers["X-Component-ID"] = component_id
 
                 response = await client.get(url, params=params, timeout=60.0, headers=headers)
-=======
-                response = await client.get(
-                    url, params=params, timeout=60.0, headers=self._auth_headers
-                )
->>>>>>> dev
                 response.raise_for_status()
                 batch = json.loads(self._decrypt_response(response))
 
