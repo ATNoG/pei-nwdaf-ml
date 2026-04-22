@@ -19,11 +19,12 @@ class KubeTrainingService:
 
     _DEFAULT_RESOURCES = JobResources(cpu="2", memory="2Gi")
 
-    def to_kube(self, job_id: str, resources: JobResources | None, training_type: str):
+    def to_kube(self, model_id: str, job_id: str, resources: JobResources | None, training_type: str):
         spec = JobSpec(
-            name=f"ml-train-{job_id}",
+            name=f"ml-train-{model_id}",
             namespace=settings.TRAIN_KUBE_NAMESPACE,
             image=settings.TRAIN_KUBE_IMAGE,
+            labels={"app": "ml-train", "model-id": model_id},
             env={
                 "TRAINING_JOB_ID": job_id,
                 "TRAINING_TYPE": training_type,
@@ -39,17 +40,18 @@ class KubeTrainingService:
                 "DATA_STORAGE_CELL_ENDPOINT": settings.DATA_STORAGE_CELL_ENDPOINT,
                 "DATA_STORAGE_EXCLUDED_FIELDS": settings.DATA_STORAGE_EXCLUDED_FIELDS,
                 "LOG_LEVEL": settings.LOG_LEVEL,
+                "ENCRYPTION_ENABLED": str(settings.ENCRYPTION_ENABLED).lower(),
             },
             resources=resources or self._DEFAULT_RESOURCES,
         )
         self._kube_client.create_job(spec)
 
-    def cancel(self, job_id: str):
-        self._kube_client.delete_job(f"ml-train-{job_id}", settings.TRAIN_KUBE_NAMESPACE)
+    def cancel(self, model_id: str):
+        self._kube_client.delete_job(f"ml-train-{model_id}", settings.TRAIN_KUBE_NAMESPACE)
 
-    def is_job_dead(self, job_id: str) -> bool:
+    def is_job_dead(self, model_id: str) -> bool:
         """Returns True if the K8s job has failed or no longer exists."""
-        job = self._kube_client.get_job(f"ml-train-{job_id}", settings.TRAIN_KUBE_NAMESPACE)
+        job = self._kube_client.get_job(f"ml-train-{model_id}", settings.TRAIN_KUBE_NAMESPACE)
         if job is None:
             return True
         conditions = job.status.conditions or []

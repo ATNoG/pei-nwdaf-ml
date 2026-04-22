@@ -163,8 +163,10 @@ class TrainingService:
                 logger.info(f"Job {job_id}: Fetching data from {start_ts} to {end_ts}")
 
                 # Fetch data for all cells
+                # Derive component_id for policy enforcement
+                component_id = f"ml-{model_detail.name}" if model_detail.name else None
                 cell_data_dict = await self._fetch_all_cell_data(
-                    start_ts, end_ts, config.window_duration_seconds
+                    start_ts, end_ts, config.window_duration_seconds, component_id
                 )
 
                 if not cell_data_dict:
@@ -216,6 +218,10 @@ class TrainingService:
                 X_train = np.concatenate(all_X, axis=0)
                 y_train = np.concatenate(all_y, axis=0)
 
+                # One representative window per cell (last = most recent training window)
+                # Used as KernelSHAP background artifact - avoids live data fetches at explain time
+                X_background = np.stack([X[-1] for X in all_X], axis=0)
+
                 logger.info(
                     f"Job {job_id}: Combined training data - "
                     f"{len(X_train)} sequences from {successful_cells} cells "
@@ -230,6 +236,7 @@ class TrainingService:
                     architecture=config.architecture,
                     X_train=X_train,
                     y_train=y_train,
+                    X_background=X_background,
                     config_dict={
                         "hidden_size": config.hidden_size,
                         "lookback_steps": config.lookback_steps,
@@ -253,7 +260,7 @@ class TrainingService:
                 self._release_training_lock(job.model_id)
 
         except Exception as e:
-            # If job was cancelled, InterruptedError will be raised — don't overwrite status
+            # If job was cancelled, InterruptedError will be raised - don't overwrite status
             job = self.get_job(job_id)
             if job and job.status == TrainingJobStatus.CANCELLED:
                 logger.info(f"Job {job_id}: Training interrupted by cancellation")
@@ -280,10 +287,20 @@ class TrainingService:
         return query.all()
 
     def dispatch(self, job_id: str, resources) -> None:
+        from src.db.model_config import ModelConfigDB
+        from src.db.training_job import TrainingJobDB
+        from src.schemas.kube import JobResources
         from src.services.kube_training import get_kube_training_service
+
+        job = self.db.query(TrainingJobDB).filter(TrainingJobDB.job_id == job_id).first()
+        if resources is None and job:
+            cfg = self.db.query(ModelConfigDB).filter(ModelConfigDB.model_id == job.model_id).first()
+            if cfg and cfg.default_cpu and cfg.default_memory:
+                resources = JobResources(cpu=cfg.default_cpu, memory=cfg.default_memory)
+
         kube = get_kube_training_service()
         if kube:
-            kube.to_kube(job_id, resources, "forecast")
+            kube.to_kube(job.model_id, job_id, resources, "forecast")
         else:
             asyncio.get_running_loop().run_in_executor(_executor, _run_training_sync, job_id)
 
@@ -321,7 +338,7 @@ class TrainingService:
         kube = get_kube_training_service()
         if kube:
             try:
-                kube.cancel(job_id)
+                kube.cancel(job.model_id)
             except Exception as e:
                 logger.error(f"Failed to delete K8s job for {job_id}: {e}")
             finally:
@@ -380,6 +397,7 @@ class TrainingService:
         start_timestamp: int,
         end_timestamp: int,
         window_duration_seconds: int,
+        component_id: str | None = None,
     ) -> dict[int, list[dict]]:
         """
         Fetch data for all known cells.
@@ -388,12 +406,13 @@ class TrainingService:
             start_timestamp: Start time
             end_timestamp: End time
             window_duration_seconds: Window duration from model config
+            component_id: Optional component ID to pass for policy enforcement
 
         Returns:
             Dict mapping cell_index to list of data windows
         """
         # Get all known cells
-        cells = await self.data_storage_client.get_known_cells()
+        cells = await self.data_storage_client.get_known_cells(component_id=component_id)
         logger.info(f"Found {len(cells)} cells to fetch data from")
 
         # Fetch data for each cell
@@ -405,6 +424,7 @@ class TrainingService:
                     start_timestamp=start_timestamp,
                     end_timestamp=end_timestamp,
                     window_duration_seconds=window_duration_seconds,
+                    component_id=component_id,
                 )
                 if data:
                     # Sort by timestamp to ensure proper sequence order
@@ -446,6 +466,7 @@ class TrainingService:
         architecture: ArchitectureType,
         X_train: np.ndarray,
         y_train: np.ndarray,
+        X_background: np.ndarray,
         config_dict: dict,
     ) -> str:
         """
@@ -524,7 +545,16 @@ class TrainingService:
             version = self._register_or_update_model(model_id, model_uri)
             mlflow.set_tag("model_version", version)
 
-            logger.info(f"Model {model_id} v{version} logged successfully")
+            # Store KernelSHAP background - one representative window per training cell
+            import os, tempfile
+            with tempfile.TemporaryDirectory() as tmpdir:
+                bg_path = os.path.join(tmpdir, "background.npz")
+                np.savez(bg_path, X_background=X_background)
+                mlflow.log_artifact(bg_path, artifact_path="background")
+            logger.info(
+                f"Model {model_id} v{version} logged successfully - "
+                f"KernelSHAP background stored ({len(X_background)} cells)"
+            )
 
             return run_id
 

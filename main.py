@@ -86,7 +86,6 @@ def _trigger_field_retraining(field, model_configs, training_svc, loop):
     Returns a list of queued job_ids (configs that failed to queue are skipped).
     """
     from src.db.training_job import TrainingJobDB
-    from src.routers.v1.training_router import _run_training_sync, training_executor
 
     job_ids = []
     for cfg in model_configs:
@@ -102,9 +101,8 @@ def _trigger_field_retraining(field, model_configs, training_svc, loop):
         lookback = last_job.lookback_seconds if last_job else 86400
         try:
             job_info = training_svc.create_training_job(cfg.model_id, lookback)
-            loop.run_in_executor(
-                training_executor, _run_training_sync, job_info["job_id"]
-            )
+            # dispatch resolves default resources from model config automatically
+            training_svc.dispatch(job_info["job_id"], resources=None)
             job_ids.append(job_info["job_id"])
             logger.info(
                 "Auto-monitor: queued retraining job %s for model %s (field '%s')",
@@ -150,14 +148,14 @@ async def _monitoring_loop() -> None:
     monitored output field.
 
     Each field moves through a simple state machine:
-      MONITORING  — score the best model; on degradation trigger retraining
-      RETRAINING  — wait for all queued training jobs to finish
-      EVALUATING  — re-elect a best model via evaluate_field()
+      MONITORING  - score the best model; on degradation trigger retraining
+      RETRAINING  - wait for all queued training jobs to finish
+      EVALUATING  - re-elect a best model via evaluate_field()
 
     Controlled by MONITORING_TRIGGER_MODE:
-      "time"  — run on every interval regardless of new data
-      "data"  — run only when new data has arrived since last cycle
-      "both"  — run on interval only if new data has arrived
+      "time"  - run on every interval regardless of new data
+      "data"  - run only when new data has arrived since last cycle
+      "both"  - run on interval only if new data has arrived
     """
     from src.db.database import SessionLocal
     from src.services.data_storage_client import DataStorageClient
@@ -174,7 +172,7 @@ async def _monitoring_loop() -> None:
     while True:
         await asyncio.sleep(settings.MONITORING_INTERVAL_SECONDS)
 
-        # Data-income gate — skip cycle if no new windows have arrived
+        # Data-income gate - skip cycle if no new windows have arrived
         if settings.MONITORING_TRIGGER_MODE in ("data", "both"):
             data_client = DataStorageClient()
             if not await _has_new_data(data_client, last_check_ts):
@@ -211,7 +209,7 @@ async def _monitoring_loop() -> None:
 
                     if active:
                         logger.info(
-                            "----- [RETRAINING] '%s' — %d/%d job(s) still running.",
+                            "----- [RETRAINING] '%s' - %d/%d job(s) still running.",
                             field,
                             len(active),
                             len(jobs),
@@ -223,7 +221,7 @@ async def _monitoring_loop() -> None:
 
                     for j in failed:
                         logger.error(
-                            "----- [RETRAINING] '%s' — job %s FAILED: %s",
+                            "----- [RETRAINING] '%s' - job %s FAILED: %s",
                             field,
                             j.job_id,
                             j.error_message,
@@ -232,7 +230,7 @@ async def _monitoring_loop() -> None:
                     if completed:
                         set_field_state(field, "evaluating")
                         logger.info(
-                            "----- [RETRAINING] '%s' — all done (%d completed, %d failed) → moving to EVALUATING",
+                            "----- [RETRAINING] '%s' - all done (%d completed, %d failed) → moving to EVALUATING",
                             field,
                             len(completed),
                             len(failed),
@@ -245,7 +243,7 @@ async def _monitoring_loop() -> None:
                         )
                     else:
                         logger.error(
-                            "----- [RETRAINING] '%s' — all jobs failed → returning to MONITORING",
+                            "----- [RETRAINING] '%s' - all jobs failed → returning to MONITORING",
                             field,
                         )
                         await notification_center.notify(
@@ -258,7 +256,7 @@ async def _monitoring_loop() -> None:
                 # EVALUATING: re-elect a best model then return to monitoring
                 elif state == "evaluating":
                     logger.info(
-                        "----- [EVALUATING] '%s' — scoring all retrained models.", field
+                        "----- [EVALUATING] '%s' - scoring all retrained models.", field
                     )
                     try:
                         best = svc.get_best_model(field)
@@ -269,7 +267,7 @@ async def _monitoring_loop() -> None:
                         )
 
                         logger.info(
-                            "----- [EVALUATING] '%s' — new best: %s  %s=%.4f",
+                            "----- [EVALUATING] '%s' - new best: %s  %s=%.4f",
                             field,
                             result.best_model_id,
                             metric,
@@ -292,25 +290,25 @@ async def _monitoring_loop() -> None:
                             )
                     except Exception as e:
                         logger.error(
-                            "----- [EVALUATING] '%s' — evaluation FAILED: %s",
+                            "----- [EVALUATING] '%s' - evaluation FAILED: %s",
                             field,
                             e,
                         )
                     finally:
                         set_field_state(field, "monitoring")
                         clear_field_jobs(field)
-                        logger.info("----- [MONITORING] '%s' — resumed", field)
+                        logger.info("----- [MONITORING] '%s' - resumed", field)
 
                 # MONITORING: score the best model; trigger retraining on degradation
                 else:
-                    logger.info("----- [MONITORING] '%s' — scoring best model.", field)
+                    logger.info("----- [MONITORING] '%s' - scoring best model.", field)
                     try:
                         result = await svc.monitor_best_model(
                             field, trigger="auto_monitor"
                         )
                         if result.score is None:
                             logger.info(
-                                "----- [MONITORING] '%s' — no score (no data?), skipping",
+                                "----- [MONITORING] '%s' - no score (no data?), skipping",
                                 field,
                             )
                             continue
@@ -323,7 +321,7 @@ async def _monitoring_loop() -> None:
                             settings.MONITORING_DEGRADATION_FACTOR,
                         ):
                             logger.warning(
-                                "----- [MONITORING] '%s' — DEGRADED  %s=%.4f  baseline=%.4f  "
+                                "----- [MONITORING] '%s' - DEGRADED  %s=%.4f  baseline=%.4f  "
                                 "threshold=%.4f → triggering retraining",
                                 field,
                                 result.metric,
@@ -355,26 +353,26 @@ async def _monitoring_loop() -> None:
                                 set_field_state(field, "retraining")
                                 set_field_jobs(field, job_ids)
                                 logger.info(
-                                    "----- [RETRAINING] '%s' — %d job(s) queued",
+                                    "----- [RETRAINING] '%s' - %d job(s) queued",
                                     field,
                                     len(job_ids),
                                 )
                             else:
                                 logger.error(
-                                    "----- [MONITORING] '%s' — degradation detected but no jobs could be queued",
+                                    "----- [MONITORING] '%s' - degradation detected but no jobs could be queued",
                                     field,
                                 )
                         else:
                             set_last_checked(field, datetime.now(tz=timezone.utc))
                             logger.info(
-                                "----- [MONITORING] '%s' — OK  %s=%.4f  baseline=%.4f",
+                                "----- [MONITORING] '%s' - OK  %s=%.4f  baseline=%.4f",
                                 field,
                                 result.metric,
                                 result.score,
                                 baseline if baseline is not None else float("nan"),
                             )
                     except Exception as e:
-                        logger.error("----- [MONITORING] '%s' — error: %s", field, e)
+                        logger.error("----- [MONITORING] '%s' - error: %s", field, e)
         finally:
             db.close()
 
@@ -400,8 +398,10 @@ async def _kube_reconciliation_loop():
             continue
         db = SessionLocal()
         try:
-            for job in db.query(TrainingJobDB).filter(TrainingJobDB.status.in_(active)).all():
-                if kube.is_job_dead(job.job_id):
+            for job in (
+                db.query(TrainingJobDB).filter(TrainingJobDB.status.in_(active)).all()
+            ):
+                if kube.is_job_dead(job.model_id):
                     job.status = TrainingJobStatus.FAILED
                     job.error_message = "K8s job failed or not found"
                     job.completed_at = datetime.now()
@@ -410,10 +410,16 @@ async def _kube_reconciliation_loop():
                         .where(ModelConfigDB.model_id == job.model_id)
                         .values(is_training=False)
                     )
-                    logger.warning("Reconciliation: forecast job %s marked FAILED", job.job_id)
+                    logger.warning(
+                        "Reconciliation: forecast job %s marked FAILED", job.job_id
+                    )
 
-            for job in db.query(AnomalyTrainingJobDB).filter(AnomalyTrainingJobDB.status.in_(active)).all():
-                if kube.is_job_dead(job.job_id):
+            for job in (
+                db.query(AnomalyTrainingJobDB)
+                .filter(AnomalyTrainingJobDB.status.in_(active))
+                .all()
+            ):
+                if kube.is_job_dead(job.model_id):
                     job.status = TrainingJobStatus.FAILED
                     job.error_message = "K8s job failed or not found"
                     job.completed_at = datetime.now()
@@ -422,7 +428,9 @@ async def _kube_reconciliation_loop():
                         .where(AnomalyModelConfigDB.model_id == job.model_id)
                         .values(is_training=False)
                     )
-                    logger.warning("Reconciliation: anomaly job %s marked FAILED", job.job_id)
+                    logger.warning(
+                        "Reconciliation: anomaly job %s marked FAILED", job.job_id
+                    )
 
             db.commit()
         except Exception as e:
@@ -438,6 +446,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"MLflow tracking URI: {settings.MLFLOW_TRACKING_URI}")
     logger.info(f"Data Storage API: {settings.DATA_STORAGE_API_URL}")
     logger.info(f"Database URL: {settings.DATABASE_URL}")
+    logger.info(f"Policy Service: {settings.POLICY_SERVICE_URL} (enabled={settings.POLICY_ENABLED})")
 
     os.environ["MLFLOW_S3_ENDPOINT_URL"] = settings.MLFLOW_S3_ENDPOINT_URL
     os.environ["AWS_ACCESS_KEY_ID"] = settings.AWS_ACCESS_KEY_ID
@@ -477,6 +486,100 @@ async def lifespan(app: FastAPI):
         monitor_task = asyncio.create_task(_monitoring_loop())
         logger.info("Auto-monitor task started")
 
+    # Policy Service integration
+    policy_client = None
+    policy_heartbeat_task = None
+    if settings.POLICY_ENABLED:
+        try:
+            from src.services.config_service import MLConfigService
+            from policy_client import PolicyClient
+
+            policy_client = PolicyClient(
+                service_url=settings.POLICY_SERVICE_URL,
+                component_id=settings.POLICY_COMPONENT_ID,
+                enable_policy=True,
+                fail_open=settings.POLICY_FAILOPEN,
+            )
+
+            # Register ML service as a component
+            registered = await policy_client.register_component(
+                component_type="ml_agent",
+                role=settings.POLICY_ROLENAME,
+            )
+
+            if registered:
+                await policy_client.start_heartbeat()
+                logger.info(f"Policy client registered: {settings.POLICY_COMPONENT_ID}")
+
+                # Reuse mlflow client for model registration to avoid resource leaks
+                from mlflow import MlflowClient
+                mlflow_client_for_policy = MlflowClient()
+
+                # Register all existing ML models
+                db = SessionLocal()
+                try:
+                    config_service = MLConfigService(db)
+                    models = config_service.list_all()
+                    for model in models:
+                        result = await policy_client.register_ml_model(
+                            model_id=model.model_id,
+                            model_name=model.name,
+                            input_fields=model.input_fields,
+                            output_fields=model.output_fields,
+                            data_type="network_prediction",  # Default data type
+                            architecture=model.architecture,
+                            window_duration_seconds=model.window_duration_seconds,
+                        )
+                        if result:
+                            logger.info(f"Registered ML model with policy: {model.name}")
+                        else:
+                            logger.warning(f"Failed to register model {model.name} with policy (returned False)")
+                finally:
+                    db.close()
+
+                # Store on app state for dependency injection
+                app.state.policy_client = policy_client
+
+                # Track registered models to avoid re-registering
+                _registered_models = set()
+
+                # Start background task to register new models
+                async def _model_registration_loop():
+                    """Periodically check for new models and register them."""
+                    nonlocal _registered_models
+                    while True:
+                        await asyncio.sleep(60)  # Check every minute
+                        db = SessionLocal()
+                        try:
+                            config_service = MLConfigService(db)
+                            models = config_service.list_all()
+                            for model in models:
+                                # Only register models we haven't seen yet
+                                if model.model_id not in _registered_models:
+                                    result = await policy_client.register_ml_model(
+                                        model_id=model.model_id,
+                                        model_name=model.name,
+                                        input_fields=model.input_fields,
+                                        output_fields=model.output_fields,
+                                        data_type="network_prediction",
+                                        architecture=model.architecture,
+                                        window_duration_seconds=model.window_duration_seconds,
+                                    )
+                                    if result:
+                                        _registered_models.add(model.model_id)
+                                        logger.info(f"Registered new ML model with policy: {model.name}")
+                        finally:
+                            db.close()
+
+                policy_heartbeat_task = asyncio.create_task(_model_registration_loop())
+                logger.info("Model registration loop started")
+            else:
+                logger.warning("Failed to register ML service with policy")
+
+        except ImportError:
+            logger.warning("Policy client SDK not available - policy integration disabled")
+        except Exception as e:
+            logger.error(f"Failed to initialize policy client: {e}")
     reconcile_task = None
     if settings.TRAIN_USE_KUBE:
         reconcile_task = asyncio.create_task(_kube_reconciliation_loop())
@@ -488,6 +591,18 @@ async def lifespan(app: FastAPI):
         monitor_task.cancel()
         logger.info("Auto-monitor task stopped")
 
+    # Stop policy heartbeat
+    if policy_client:
+        await policy_client.stop_heartbeat()
+        logger.info("Policy heartbeat stopped")
+
+    if policy_heartbeat_task:
+        policy_heartbeat_task.cancel()
+        try:
+            await policy_heartbeat_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Model registration loop stopped")
     if reconcile_task:
         reconcile_task.cancel()
         logger.info("Kube reconciliation task stopped")

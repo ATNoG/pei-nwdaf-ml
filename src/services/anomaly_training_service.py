@@ -130,14 +130,14 @@ class AnomalyTrainingService:
                 if not cell_data_dict:
                     raise ValueError("No data available from any cell")
 
-                # Build flat feature vectors — each window is one sample
+                # Build flat feature vectors - each window is one sample
                 all_features = []
                 for cell_index, cell_data in cell_data_dict.items():
                     try:
                         inputs, _ = extract_fields(cell_data, config.input_fields, [])
                         all_features.extend(inputs)
                         logger.info(
-                            f"Anomaly job {job_id}: Cell {cell_index} — {len(inputs)} windows"
+                            f"Anomaly job {job_id}: Cell {cell_index} - {len(inputs)} windows"
                         )
                     except Exception as e:
                         logger.warning(
@@ -197,10 +197,20 @@ class AnomalyTrainingService:
         return query.all()
 
     def dispatch(self, job_id: str, resources) -> None:
+        from src.db.anomaly_model_config import AnomalyModelConfigDB
+        from src.db.anomaly_training_job import AnomalyTrainingJobDB
+        from src.schemas.kube import JobResources
         from src.services.kube_training import get_kube_training_service
+
+        job = self.db.query(AnomalyTrainingJobDB).filter(AnomalyTrainingJobDB.job_id == job_id).first()
+        if resources is None and job:
+            cfg = self.db.query(AnomalyModelConfigDB).filter(AnomalyModelConfigDB.model_id == job.model_id).first()
+            if cfg and cfg.default_cpu and cfg.default_memory:
+                resources = JobResources(cpu=cfg.default_cpu, memory=cfg.default_memory)
+
         kube = get_kube_training_service()
         if kube:
-            kube.to_kube(job_id, resources, "anomaly")
+            kube.to_kube(job.model_id, job_id, resources, "anomaly")
         else:
             asyncio.get_running_loop().run_in_executor(_executor, _run_anomaly_training_sync, job_id)
 
@@ -227,7 +237,7 @@ class AnomalyTrainingService:
         kube = get_kube_training_service()
         if kube:
             try:
-                kube.cancel(job_id)
+                kube.cancel(job.model_id)
             except Exception as e:
                 logger.error(f"Failed to delete K8s job for {job_id}: {e}")
             finally:
@@ -323,7 +333,7 @@ class AnomalyTrainingService:
             # (e.g., switching from aggregated to per-IP data).
             if kept == 0:
                 logger.warning(
-                    "Contamination filter would remove all samples — skipping filter. "
+                    "Contamination filter would remove all samples - skipping filter. "
                     "This may indicate a change in data distribution or granularity."
                 )
                 return X
@@ -398,7 +408,7 @@ class AnomalyTrainingService:
                 np.savez(scaler_path, mean=scaler_mean, std=scaler_std)
                 mlflow.log_artifact(scaler_path, artifact_path="scaler")
 
-            # Always train from scratch — scaler + threshold must match
+            # Always train from scratch - scaler + threshold must match
             ae = Autoencoder(input_size=num_features, hidden_size=config.hidden_size)
 
             def status_callback(epoch, max_epochs, loss):

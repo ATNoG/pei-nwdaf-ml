@@ -1,9 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Any, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from src.services.mlflow_service import MLflowService
 from src.services.data_storage_client import DataStorageClient
 from src.core.dependencies import get_mlflow_client
 from src.schemas.model import ModelConfig, ModelCreate, ModelDetail, ModelSummary, ModelSummaryDetail
 router = APIRouter()
+
+
+def _get_policy_client(request: Request) -> Optional[Any]:
+    """Get the policy client from app state if available."""
+    return getattr(request.app.state, "policy_client", None)
 
 @router.get("", response_model=list[ModelSummary] | list[ModelSummaryDetail])
 async def get_models(
@@ -14,7 +21,7 @@ async def get_models(
     """Get all registered models, optionally filtered by output field name.
 
     Pass include_details=true to receive enriched metadata (last_trained_at,
-    best_for_fields, score_per_field, is_training, etc.) at no extra cost —
+    best_for_fields, score_per_field, is_training, etc.) at no extra cost -
     uses a single MLflow search call regardless of model count.
     """
     if include_details:
@@ -36,8 +43,9 @@ async def get_models(
 @router.post("", response_model=ModelDetail, status_code=201)
 async def create_model(
     model_create: ModelCreate,
+    request: Request,
     mlflow_service: MLflowService = Depends(get_mlflow_client),
-    data_storage_client: DataStorageClient = Depends(DataStorageClient)
+    data_storage_client: DataStorageClient = Depends(DataStorageClient),
 ) -> ModelDetail:
     """Create a new model with field validation"""
     try:
@@ -58,6 +66,26 @@ async def create_model(
 
         # Create model
         model = mlflow_service.create_model(model_create.name, model_create.config)
+
+        # Register with policy service if enabled
+        policy_client = _get_policy_client(request)
+        if policy_client:
+            try:
+                data_type = mlflow_service.infer_data_type(model_create.config.output_fields)
+                await policy_client.register_ml_model(
+                    model_id=model.id,
+                    model_name=model.name,
+                    input_fields=model_create.config.input_fields,
+                    output_fields=model_create.config.output_fields,
+                    data_type=data_type,
+                    architecture=model_create.config.architecture,
+                    window_duration_seconds=model_create.config.window_duration_seconds,
+                )
+            except Exception as e:
+                # Non-blocking: log but don't fail model creation
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to register model with policy: {e}")
+
         return model
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -74,9 +102,33 @@ async def get_model(model_id: str, mlflow_service: MLflowService = Depends(get_m
 
 
 @router.delete("/{model_id}", status_code=204)
-async def delete_model(model_id: str, mlflow_service: MLflowService = Depends(get_mlflow_client)) -> None:
+async def delete_model(
+    model_id: str,
+    request: Request,
+    mlflow_service: MLflowService = Depends(get_mlflow_client),
+) -> None:
     """Delete model by ID"""
     try:
+        # Get model name before deletion for policy unregistration
+        policy_client = _get_policy_client(request)
+        model_name = None
+        if policy_client:
+            try:
+                model = mlflow_service.get_model(model_id)
+                model_name = model.name
+            except Exception:
+                pass  # Model might not exist, continue with deletion
+
         mlflow_service.delete_model(model_id)
+
+        # Unregister from policy service if enabled
+        if policy_client and model_name:
+            try:
+                await policy_client.unregister_ml_model(model_name)
+            except Exception as e:
+                # Non-blocking: log but don't fail model deletion
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to unregister model from policy: {e}")
+
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
