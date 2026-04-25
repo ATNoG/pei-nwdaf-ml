@@ -120,25 +120,18 @@ def _trigger_field_retraining(field, model_configs, training_svc, loop):
 
 
 async def _has_new_data(data_storage_client, last_ts: int) -> bool:
-    """
-    Return True if any data windows have arrived since last_ts.
-
-    Checks a small sample of cells to avoid a full scan on every cycle.
-    """
+    """Return True if any data windows have arrived since last_ts."""
     try:
-        cells = await data_storage_client.get_known_cells()
+        now = int(time.time())
+        data = await data_storage_client.fetch_data(
+            start_timestamp=last_ts,
+            end_timestamp=now,
+            window_duration_seconds=60,
+        )
+        return bool(data)
     except Exception as e:
-        logger.warning("Auto-monitor: failed to fetch known cells: %s", e)
+        logger.warning("Auto-monitor: failed to check for new data: %s", e)
         return False
-
-    now = int(time.time())
-    for cell in cells[:3]:
-        try:
-            data = await data_storage_client.fetch_cell_data(cell, last_ts, now, 60)
-            if data:
-                return True
-        except Exception:
-            continue
     return False
 
 
@@ -197,13 +190,13 @@ async def _monitoring_loop() -> None:
 
             for field in fields:
                 event_type, field_name = field.split(":", 1)
-                state = get_field_state(field_name)
+                state = get_field_state(field)
 
                 # RETRAINING: wait for all queued jobs to reach a terminal state
                 if state == "retraining":
                     from src.db.training_job import TrainingJobDB
 
-                    jobs = [db.get(TrainingJobDB, jid) for jid in get_field_jobs(field_name)]
+                    jobs = [db.get(TrainingJobDB, jid) for jid in get_field_jobs(field)]
                     active = [
                         j for j in jobs if j and j.status in ("queued", "running")
                     ]
@@ -229,7 +222,7 @@ async def _monitoring_loop() -> None:
                         )
 
                     if completed:
-                        set_field_state(field_name, "evaluating")
+                        set_field_state(field, "evaluating")
                         logger.info(
                             "----- [RETRAINING] '%s' - all done (%d completed, %d failed) → moving to EVALUATING",
                             field_name,
@@ -251,8 +244,8 @@ async def _monitoring_loop() -> None:
                             f"Retraining failed for '{field_name}': all jobs failed.",
                             AlertLevel.WARNING,
                         )
-                        set_field_state(field_name, "monitoring")
-                        clear_field_jobs(field_name)
+                        set_field_state(field, "monitoring")
+                        clear_field_jobs(field)
 
                 # EVALUATING: re-elect a best model then return to monitoring
                 elif state == "evaluating":
@@ -296,8 +289,8 @@ async def _monitoring_loop() -> None:
                             e,
                         )
                     finally:
-                        set_field_state(field_name, "monitoring")
-                        clear_field_jobs(field_name)
+                        set_field_state(field, "monitoring")
+                        clear_field_jobs(field)
                         logger.info("----- [MONITORING] '%s' - resumed", field_name)
 
                 # MONITORING: score the best model; trigger retraining on degradation
@@ -351,8 +344,8 @@ async def _monitoring_loop() -> None:
                             )
 
                             if job_ids:
-                                set_field_state(field_name, "retraining")
-                                set_field_jobs(field_name, job_ids)
+                                set_field_state(field, "retraining")
+                                set_field_jobs(field, job_ids)
                                 logger.info(
                                     "----- [RETRAINING] '%s' - %d job(s) queued",
                                     field_name,
@@ -364,7 +357,7 @@ async def _monitoring_loop() -> None:
                                     field_name,
                                 )
                         else:
-                            set_last_checked(field_name, datetime.now(tz=timezone.utc))
+                            set_last_checked(field, datetime.now(tz=timezone.utc))
                             logger.info(
                                 "----- [MONITORING] '%s' - OK  %s=%.4f  baseline=%.4f",
                                 field_name,

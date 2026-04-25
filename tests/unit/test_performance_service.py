@@ -286,12 +286,12 @@ class TestSortByScoreR2:
 class TestGetRegisteredModelTags:
     def test_returns_tag_dict(self, service):
         mock_rm = MagicMock()
-        mock_rm.tags = {"best_for:latency_mean": "true", "score_for:latency_mean": "0.05"}
+        mock_rm.tags = {"best_for:PERF_DATA:latency_mean": "true", "score_for:latency_mean": "0.05"}
         service.client.get_registered_model.return_value = mock_rm
 
         result = service._get_registered_model_tags("some-model-id")
 
-        assert result == {"best_for:latency_mean": "true", "score_for:latency_mean": "0.05"}
+        assert result == {"best_for:PERF_DATA:latency_mean": "true", "score_for:latency_mean": "0.05"}
 
     def test_returns_empty_dict_when_tags_none(self, service):
         mock_rm = MagicMock()
@@ -352,7 +352,7 @@ class TestWriteHistoryRow:
 class TestUpdateTags:
     def test_sets_score_and_eval_at_on_all_scored(self, service):
         scored = [("model-a", 0.1), ("model-b", 0.3)]
-        service._update_tags("latency_mean", scored, "model-a", "2024-01-01T00:00:00", "rmse")
+        service._update_tags("PERF_DATA", "latency_mean", scored, "model-a", "2024-01-01T00:00:00", "rmse")
 
         set_calls = service.client.set_registered_model_tag.call_args_list
         set_tag_keys = [(c.args[0], c.args[1]) for c in set_calls]
@@ -364,26 +364,26 @@ class TestUpdateTags:
 
     def test_sets_best_tags_only_on_winner(self, service):
         scored = [("model-a", 0.1), ("model-b", 0.3)]
-        service._update_tags("latency_mean", scored, "model-a", "2024-01-01T00:00:00", "rmse")
+        service._update_tags("PERF_DATA", "latency_mean", scored, "model-a", "2024-01-01T00:00:00", "rmse")
 
         set_calls = service.client.set_registered_model_tag.call_args_list
         set_tag_keys = [(c.args[0], c.args[1]) for c in set_calls]
 
         # Winner gets best_for, eval_metric, baseline_score
-        assert ("model-a", "best_for:latency_mean") in set_tag_keys
+        assert ("model-a", "best_for:PERF_DATA:latency_mean") in set_tag_keys
         assert ("model-a", "eval_metric:latency_mean") in set_tag_keys
         assert ("model-a", "baseline_score:latency_mean") in set_tag_keys
 
         # Loser does NOT get best_for set
-        assert ("model-b", "best_for:latency_mean") not in set_tag_keys
+        assert ("model-b", "best_for:PERF_DATA:latency_mean") not in set_tag_keys
         assert ("model-b", "eval_metric:latency_mean") not in set_tag_keys
 
     def test_deletes_best_for_on_non_winner(self, service):
         scored = [("model-a", 0.1), ("model-b", 0.3)]
-        service._update_tags("latency_mean", scored, "model-a", "2024-01-01T00:00:00", "rmse")
+        service._update_tags("PERF_DATA", "latency_mean", scored, "model-a", "2024-01-01T00:00:00", "rmse")
 
         service.client.delete_registered_model_tag.assert_called_once_with(
-            "model-b", "best_for:latency_mean"
+            "model-b", "best_for:PERF_DATA:latency_mean"
         )
 
     def test_delete_exception_silenced(self, service):
@@ -391,17 +391,17 @@ class TestUpdateTags:
         scored = [("model-a", 0.1), ("model-b", 0.3)]
 
         # Should not raise
-        service._update_tags("latency_mean", scored, "model-a", "2024-01-01T00:00:00", "rmse")
+        service._update_tags("PERF_DATA", "latency_mean", scored, "model-a", "2024-01-01T00:00:00", "rmse")
 
     def test_no_delete_when_only_one_model(self, service):
         scored = [("model-a", 0.1)]
-        service._update_tags("latency_mean", scored, "model-a", "2024-01-01T00:00:00", "rmse")
+        service._update_tags("PERF_DATA", "latency_mean", scored, "model-a", "2024-01-01T00:00:00", "rmse")
 
         service.client.delete_registered_model_tag.assert_not_called()
 
     def test_baseline_score_value_is_winner_score(self, service):
         scored = [("model-a", 0.07)]
-        service._update_tags("latency_mean", scored, "model-a", "2024-01-01T00:00:00", "rmse")
+        service._update_tags("PERF_DATA", "latency_mean", scored, "model-a", "2024-01-01T00:00:00", "rmse")
 
         set_calls = {c.args[1]: c.args[2] for c in service.client.set_registered_model_tag.call_args_list}
         assert set_calls["baseline_score:latency_mean"] == "0.07"
@@ -421,16 +421,16 @@ class TestGetMonitoredFields:
         mock_ml_config_service.list_all.return_value = [cfg_a, cfg_b]
 
         rm_a = MagicMock()
-        rm_a.tags = {"best_for:latency_mean": "true", "score_for:latency_mean": "0.05"}
+        rm_a.tags = {"best_for:PERF_DATA:latency_mean": "true", "score_for:latency_mean": "0.05"}
         rm_b = MagicMock()
-        rm_b.tags = {"best_for:jitter": "true"}
+        rm_b.tags = {"best_for:UE_MOBILITY:jitter": "true"}
         service.client.get_registered_model.side_effect = lambda mid: (
             rm_a if mid == "model-a" else rm_b
         )
 
         result = service.get_monitored_fields()
 
-        assert set(result) == {"latency_mean", "jitter"}
+        assert set(result) == {"PERF_DATA:latency_mean", "UE_MOBILITY:jitter"}
 
     def test_deduplicates_fields(self, service, mock_ml_config_service):
         cfg_a = MagicMock()
@@ -441,12 +441,12 @@ class TestGetMonitoredFields:
 
         # Both models tagged as best for the same field
         rm = MagicMock()
-        rm.tags = {"best_for:latency_mean": "true"}
+        rm.tags = {"best_for:PERF_DATA:latency_mean": "true"}
         service.client.get_registered_model.return_value = rm
 
         result = service.get_monitored_fields()
 
-        assert result.count("latency_mean") == 1
+        assert result.count("PERF_DATA:latency_mean") == 1
 
     def test_returns_empty_when_no_best_for_tags(self, service, mock_ml_config_service):
         cfg = MagicMock()
@@ -480,6 +480,7 @@ class TestGetBaselineScore:
         cfg.name = "model_a"
         cfg.architecture = "lstm"
         cfg.output_fields = ["latency_mean"]
+        cfg.event_type = "PERF_DATA"
         mock_ml_config_service.list_all.return_value = [cfg]
 
         # get_best_model reads best_for tag → model detail
@@ -491,7 +492,7 @@ class TestGetBaselineScore:
 
         rm = MagicMock()
         rm.tags = {
-            "best_for:latency_mean": "true",
+            "best_for:PERF_DATA:latency_mean": "true",
             "score_for:latency_mean": "0.05",
             "baseline_score:latency_mean": "0.04",
             "eval_metric:latency_mean": "rmse",
@@ -519,7 +520,7 @@ class TestGetBaselineScore:
 
         rm = MagicMock()
         rm.tags = {
-            "best_for:latency_mean": "true",
+            "best_for:PERF_DATA:latency_mean": "true",
             "score_for:latency_mean": "0.05",
             # baseline_score tag intentionally absent
         }

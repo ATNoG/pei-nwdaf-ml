@@ -15,6 +15,7 @@ from src.schemas.inference import (
     ForecastStepPrediction,
     InferenceResult,
 )
+from src.schemas.tags import Tags
 
 
 class TestModelConfig:
@@ -204,6 +205,7 @@ class TestModelSummary:
             id="uuid-123",
             name="my_model",
             architecture=ArchitectureType.LSTM,
+            event_type="PERF_DATA",
             created_at=datetime(2024, 1, 1),
             latest_version=1,
         )
@@ -218,7 +220,8 @@ class TestModelSummary:
         summary = ModelSummary(
             id="uuid-123",
             name="my_model",
-            architecture=ArchitectureType.ANN
+            architecture=ArchitectureType.ANN,
+            event_type="PERF_DATA",
         )
 
         assert summary.created_at is None
@@ -236,6 +239,7 @@ class TestModelDetail:
             id="uuid-123",
             name="my_model",
             config=sample_model_config,
+            event_type="PERF_DATA",
             created_at=datetime(2024, 1, 1),
             latest_version=2,
             last_trained_at=datetime(2024, 1, 15),
@@ -254,7 +258,9 @@ class TestModelDetail:
         detail = ModelDetail(
             id="uuid-123",
             name="my_model",
-            config=sample_model_config        )
+            config=sample_model_config,
+            event_type="PERF_DATA",
+        )
 
         assert detail.created_at is None
         assert detail.latest_version is None
@@ -263,42 +269,34 @@ class TestModelDetail:
         assert detail.training_loss is None
 
 
+_TAGS = Tags(snssai_sst="1", snssai_sd="000001", dnn="internet", event="PERF_DATA")
+
+
 class TestInferenceRequest:
     """Tests for InferenceRequest schema."""
 
     def test_valid_request(self):
         """Test creating a valid inference request with all fields."""
-        req = InferenceRequest(output_field="latency_mean", model_id="uuid-123", cell_id=5)
+        req = InferenceRequest(output_field="latency_mean", model_id="uuid-123", tags=_TAGS)
 
         assert req.output_field == "latency_mean"
         assert req.model_id == "uuid-123"
-        assert req.cell_id == 5
-
-    def test_cell_id_zero_valid(self):
-        """Test that cell_id=0 is valid (boundary)."""
-        req = InferenceRequest(output_field="latency_mean", model_id="uuid-123", cell_id=0)
-
-        assert req.cell_id == 0
+        assert req.tags.snssai_sst == "1"
 
     def test_model_id_optional(self):
         """Test that model_id is optional (defaults to None - uses best model)."""
-        req = InferenceRequest(output_field="latency_mean", cell_id=5)
+        req = InferenceRequest(output_field="latency_mean", tags=_TAGS)
 
         assert req.model_id is None
-        assert req.cell_id == 5
-
-    def test_negative_cell_id_invalid(self):
-        """Test that negative cell_id is rejected."""
-        with pytest.raises(ValidationError):
-            InferenceRequest(output_field="latency_mean", model_id="uuid-123", cell_id=-1)
+        assert req.tags.dnn == "internet"
 
     def test_missing_output_field_invalid(self):
         """Test that output_field is required."""
         with pytest.raises(ValidationError):
-            InferenceRequest(cell_id=5)
+            InferenceRequest(tags=_TAGS)
 
-    def test_missing_cell_id_invalid(self):
-        """Test that cell_id is required."""
+    def test_missing_tags_invalid(self):
+        """Test that tags is required."""
         with pytest.raises(ValidationError):
             InferenceRequest(output_field="latency_mean", model_id="uuid-123")
 
@@ -373,7 +371,7 @@ class TestInferenceResult:
             model_name="test_model",
             model_version=2,
             architecture=ArchitectureType.LSTM,
-            cell_id=5,
+            tags=_TAGS,
             lookback_steps=30,
             forecast_steps=5,
             window_duration_seconds=60,
@@ -411,7 +409,7 @@ class TestInferenceResult:
             model_name="test_ann",
             model_version=1,
             architecture=ArchitectureType.ANN,
-            cell_id=0,
+            tags=_TAGS,
             lookback_steps=10,
             forecast_steps=3,
             window_duration_seconds=60,

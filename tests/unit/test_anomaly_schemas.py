@@ -15,9 +15,9 @@ from src.schemas.anomaly import (
     AnomalyTrainingJobSummary,
     AnomalyDetectionRequest,
     WindowScore,
-    IPAnomalyResult,
     AnomalyDetectionResult,
 )
+from src.schemas.tags import Tags
 
 
 class TestAnomalyModelConfig:
@@ -132,13 +132,13 @@ class TestAnomalyModelSummary:
 
     def test_creation(self):
         s = AnomalyModelSummary(
-            id="uuid-1", name="m1", created_at=datetime(2024, 1, 1), latest_version=2
+            id="uuid-1", name="m1", event_type="PERF_DATA", created_at=datetime(2024, 1, 1), latest_version=2
         )
         assert s.id == "uuid-1"
         assert s.latest_version == 2
 
     def test_optional_fields(self):
-        s = AnomalyModelSummary(id="uuid-1", name="m1")
+        s = AnomalyModelSummary(id="uuid-1", name="m1", event_type="PERF_DATA")
         assert s.created_at is None
         assert s.latest_version is None
 
@@ -150,6 +150,7 @@ class TestAnomalyModelDetail:
         d = AnomalyModelDetail(
             id="uuid-1",
             name="m1",
+            event_type="PERF_DATA",
             config=AnomalyModelConfig(
                 input_fields=["f1"], window_duration_seconds=60
             ),
@@ -167,6 +168,7 @@ class TestAnomalyModelDetail:
         d = AnomalyModelDetail(
             id="uuid-1",
             name="m1",
+            event_type="PERF_DATA",
             config=AnomalyModelConfig(
                 input_fields=["f1"], window_duration_seconds=60
             ),
@@ -221,31 +223,30 @@ class TestAnomalyTrainingSchemas:
         assert s.started_at is None
 
 
+_TAGS = Tags(snssai_sst="1", snssai_sd="000001", dnn="internet", event="PERF_DATA")
+
+
 class TestAnomalyDetectionSchemas:
     """Tests for anomaly detection schemas."""
 
     def test_detection_request(self):
-        r = AnomalyDetectionRequest(cell_id=5, model_id="uuid-1")
-        assert r.cell_id == 5
+        r = AnomalyDetectionRequest(tags=_TAGS, model_id="uuid-1")
+        assert r.tags.snssai_sst == "1"
         assert r.model_id == "uuid-1"
         assert r.lookback_seconds == 1800
 
     def test_detection_request_defaults(self):
-        r = AnomalyDetectionRequest(cell_id=5)
+        r = AnomalyDetectionRequest(tags=_TAGS)
         assert r.model_id is None
         assert r.lookback_seconds == 1800
 
     def test_detection_request_custom_lookback(self):
-        r = AnomalyDetectionRequest(cell_id=0, lookback_seconds=7200)
+        r = AnomalyDetectionRequest(tags=_TAGS, lookback_seconds=7200)
         assert r.lookback_seconds == 7200
-
-    def test_detection_request_negative_cell_invalid(self):
-        with pytest.raises(ValidationError):
-            AnomalyDetectionRequest(cell_id=-1, model_id="uuid-1")
 
     def test_detection_request_zero_lookback_invalid(self):
         with pytest.raises(ValidationError):
-            AnomalyDetectionRequest(cell_id=0, lookback_seconds=0)
+            AnomalyDetectionRequest(tags=_TAGS, lookback_seconds=0)
 
     def test_window_score(self):
         ws = WindowScore(
@@ -254,32 +255,14 @@ class TestAnomalyDetectionSchemas:
         assert ws.window_start_time == 1000
         assert not ws.is_anomaly
 
-    def test_ip_anomaly_result(self):
-        r = IPAnomalyResult(
-            ip_src="192.168.1.1",
-            num_windows=10,
-            num_anomalies=2,
-            scores=[
-                WindowScore(
-                    window_start_time=1000, reconstruction_error=0.01, is_anomaly=False
-                ),
-                WindowScore(
-                    window_start_time=1060, reconstruction_error=0.99, is_anomaly=True
-                ),
-            ],
-        )
-        assert r.ip_src == "192.168.1.1"
-        assert r.num_anomalies == 2
-
     def test_detection_result(self):
         r = AnomalyDetectionResult(
             model_id="uuid-1",
             model_name="test",
-            cell_id=0,
+            tags=_TAGS,
             threshold_value=0.5,
             window_duration_seconds=60,
             input_fields=["f1"],
-            results=[],
         )
         assert r.model_id == "uuid-1"
-        assert r.results == []
+        assert r.tags.snssai_sst == "1"

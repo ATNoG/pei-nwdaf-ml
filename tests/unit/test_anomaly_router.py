@@ -46,6 +46,7 @@ def mock_data_storage_client():
     mock = MagicMock()
     mock.validate_fields = AsyncMock(return_value=(True, []))
     mock.get_available_fields = AsyncMock(return_value=["latency_mean", "rsrp_mean"])
+    mock.get_fields_with_events = AsyncMock(return_value={"latency_mean": ["PERF_DATA"], "rsrp_mean": ["PERF_DATA"]})
     return mock
 
 
@@ -295,31 +296,35 @@ class TestAnomalyDetectionEndpoint:
         """Test POST /v1/anomaly/detect."""
         from main import app
         from src.routers.v1.anomaly_router import get_anomaly_detection_service
-        from src.schemas.anomaly import AnomalyDetectionResult
+        from src.schemas.anomaly import AnomalyDetectionResult, AnomalyDetectionSummary, AnomalyModelMeta
+        from src.schemas.tags import Tags
 
-        mock_anomaly_detection_service.detect.return_value = AnomalyDetectionResult(
-            model_id="model-1",
-            model_name="test",
-            cell_id=5,
-            threshold_value=0.5,
-            window_duration_seconds=60,
-            input_fields=["latency_mean"],
-            results=[],
+        _tags = Tags(snssai_sst="1", snssai_sd="000001", dnn="internet", event="PERF_DATA")
+        mock_anomaly_detection_service.detect_for_tags = AsyncMock(
+            return_value=AnomalyDetectionResult(
+                model_id="model-1",
+                model_name="test",
+                tags=_tags,
+                threshold_value=0.5,
+                window_duration_seconds=60,
+                input_fields=["latency_mean"],
+            )
         )
+        mock_anomaly_detection_service.anomaly_config_service.list_all.return_value = [
+            MagicMock(model_id="model-1", threshold_value=0.5, event_type="PERF_DATA", name="test")
+        ]
 
         app.dependency_overrides[get_anomaly_detection_service] = (
             lambda: mock_anomaly_detection_service
         )
 
         try:
-            payload = {"cell_id": 5, "model_id": "model-1"}
+            payload = {"tags": {"snssai_sst": "1", "snssai_sd": "000001", "dnn": "internet", "event": "PERF_DATA"}, "model_id": "model-1"}
             response = client.post("/v1/anomaly/detect", json=payload)
 
             assert response.status_code == 200
             data = response.json()
-            assert data["model_id"] == "model-1"
-            assert data["cell_id"] == 5
-            assert data["results"] == []
+            assert "model-1" in data["anomaly_counts"]
         finally:
             app.dependency_overrides.clear()
 
@@ -328,14 +333,14 @@ class TestAnomalyDetectionEndpoint:
         from main import app
         from src.routers.v1.anomaly_router import get_anomaly_detection_service
 
-        mock_anomaly_detection_service.detect.side_effect = ValueError("not found")
+        mock_anomaly_detection_service.anomaly_config_service.list_all.return_value = []
 
         app.dependency_overrides[get_anomaly_detection_service] = (
             lambda: mock_anomaly_detection_service
         )
 
         try:
-            payload = {"cell_id": 5, "model_id": "nonexistent"}
+            payload = {"tags": {"snssai_sst": "1", "dnn": "internet", "event": "PERF_DATA"}, "model_id": "nonexistent"}
             response = client.post("/v1/anomaly/detect", json=payload)
 
             assert response.status_code == 404

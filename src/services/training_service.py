@@ -204,7 +204,7 @@ class TrainingService:
 
                 X_train = np.concatenate(all_X, axis=0)
                 y_train = np.concatenate(all_y, axis=0)
-                X_background = X_train[-1:]
+                X_background = X_train[-min(50, len(X_train)):]
 
                 logger.info(f"Job {job_id}: {len(X_train)} total sequences from {len(all_X)} slices")
 

@@ -92,6 +92,7 @@ class TestMLflowServiceGet:
         mock_model_config.model_id = "test-model-uuid"
         mock_model_config.name = "my_test_model"
         mock_model_config.architecture = "lstm"
+        mock_model_config.event_type = "PERF_DATA"
         mock_model_config.input_fields = ["latency_mean", "rsrp_mean", "sinr_mean"]
         mock_model_config.output_fields = ["latency_mean"]
         mock_model_config.window_duration_seconds = 60
@@ -157,6 +158,7 @@ class TestMLflowServiceGet:
         mock_model_config = MagicMock(spec=ModelConfigDB)
         mock_model_config.model_id = "test-model-uuid"
         mock_model_config.name = "my_test_model"
+        mock_model_config.event_type = "PERF_DATA"
         mock_model_config.created_at = datetime(2024, 2, 1, 0, 0, 0)
 
         mock_config_service.get_config.return_value = mock_model_config
@@ -214,12 +216,14 @@ class TestMLflowServiceList:
         mock_config1.model_id = "uuid-1"
         mock_config1.name = "model_one"
         mock_config1.architecture = "ann"
+        mock_config1.event_type = "PERF_DATA"
         mock_config1.created_at = datetime(2024, 2, 1, 0, 0, 0)
 
         mock_config2 = MagicMock(spec=ModelConfigDB)
         mock_config2.model_id = "uuid-2"
         mock_config2.name = "model_two"
         mock_config2.architecture = "lstm"
+        mock_config2.event_type = "PERF_DATA"
         mock_config2.created_at = datetime(2024, 2, 2, 0, 0, 0)
 
         mock_config_service.list_all.return_value = [mock_config1, mock_config2]
