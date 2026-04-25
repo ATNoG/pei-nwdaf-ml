@@ -162,71 +162,51 @@ class TrainingService:
                 start_ts, end_ts = self._calculate_timestamps(job.lookback_seconds)
                 logger.info(f"Job {job_id}: Fetching data from {start_ts} to {end_ts}")
 
-                # Fetch data for all cells
-                # Derive component_id for policy enforcement
+                # Fetch all data for this model's event_type, group by slice context
+                event_type = getattr(model_detail, "event_type", None)
                 component_id = f"ml-{model_detail.name}" if model_detail.name else None
-                cell_data_dict = await self._fetch_all_cell_data(
-                    start_ts, end_ts, config.window_duration_seconds, component_id
+                training_data = await self._fetch_training_data(
+                    start_ts, end_ts, config.window_duration_seconds,
+                    event_type=event_type, component_id=component_id,
                 )
 
-                if not cell_data_dict:
-                    raise ValueError("No data available from any cell")
+                if not training_data:
+                    raise ValueError("No data available for training")
 
-                # Prepare sequences from each cell
+                slice_groups = self._group_by_slice(training_data)
+                logger.info(f"Job {job_id}: {len(training_data)} windows across {len(slice_groups)} slices")
+
                 all_X = []
                 all_y = []
-                successful_cells = 0
-                failed_cells = 0
-
-                for cell_index, cell_data in cell_data_dict.items():
+                for slice_key, slice_data in slice_groups.items():
                     try:
-                        X, y = self._prepare_sequences_per_cell(
-                            cell_data,
+                        X, y = self._prepare_sequences(
+                            slice_data,
                             config.input_fields,
                             config.output_fields,
                             config.lookback_steps,
                             config.forecast_steps,
                         )
-
                         if len(X) == 0:
-                            raise ValueError(
-                                f"Insufficient data: got {len(cell_data)} windows, "
-                                f"need at least {config.lookback_steps + config.forecast_steps}"
-                            )
-
+                            continue
                         all_X.append(X)
                         all_y.append(y)
-                        successful_cells += 1
-                        logger.info(f"Job {job_id}: Cell {cell_index} - created {len(X)} sequences")
-
+                        logger.info(f"Job {job_id}: Slice {slice_key} - {len(X)} sequences")
                     except Exception as e:
-                        failed_cells += 1
-                        logger.warning(
-                            f"Job {job_id}: Failed to prepare data for cell {cell_index}: {str(e)}"
-                        )
-                        continue
+                        logger.warning(f"Job {job_id}: Slice {slice_key} failed: {e}")
 
-                # Check if we have any successful cells
-                if successful_cells == 0:
+                if not all_X:
                     raise ValueError(
-                        f"No cells had sufficient data. "
-                        f"Failed cells: {failed_cells}. "
+                        f"Insufficient data across all slices. "
+                        f"Need at least {config.lookback_steps + config.forecast_steps} windows per slice. "
                         f"Try increasing lookback_seconds."
                     )
 
-                # Combine sequences from all successful cells
                 X_train = np.concatenate(all_X, axis=0)
                 y_train = np.concatenate(all_y, axis=0)
+                X_background = X_train[-1:]
 
-                # One representative window per cell (last = most recent training window)
-                # Used as KernelSHAP background artifact - avoids live data fetches at explain time
-                X_background = np.stack([X[-1] for X in all_X], axis=0)
-
-                logger.info(
-                    f"Job {job_id}: Combined training data - "
-                    f"{len(X_train)} sequences from {successful_cells} cells "
-                    f"({failed_cells} cells failed)"
-                )
+                logger.info(f"Job {job_id}: {len(X_train)} total sequences from {len(all_X)} slices")
 
                 # Train model and log to MLflow
                 # Note: mlflow_run_id is set inside _train_and_log immediately after run starts
@@ -392,50 +372,32 @@ class TrainingService:
         """Calculate start and end timestamps from lookback duration."""
         return calculate_timestamps(lookback_seconds)
 
-    async def _fetch_all_cell_data(
+    async def _fetch_training_data(
         self,
         start_timestamp: int,
         end_timestamp: int,
         window_duration_seconds: int,
+        event_type: str | None = None,
         component_id: str | None = None,
-    ) -> dict[int, list[dict]]:
-        """
-        Fetch data for all known cells.
+    ) -> list[dict]:
+        """Fetch all data for training filtered by event type."""
+        data = await self.data_storage_client.fetch_data(
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+            window_duration_seconds=window_duration_seconds,
+            event=event_type,
+        )
+        data.sort(key=lambda x: x.get("window_start_time", 0))
+        logger.info(f"Fetched {len(data)} windows for event_type={event_type}")
+        return data
 
-        Args:
-            start_timestamp: Start time
-            end_timestamp: End time
-            window_duration_seconds: Window duration from model config
-            component_id: Optional component ID to pass for policy enforcement
-
-        Returns:
-            Dict mapping cell_index to list of data windows
-        """
-        # Get all known cells
-        cells = await self.data_storage_client.get_known_cells(component_id=component_id)
-        logger.info(f"Found {len(cells)} cells to fetch data from")
-
-        # Fetch data for each cell
-        cell_data = {}
-        for cell_index in cells:
-            try:
-                data = await self.data_storage_client.fetch_cell_data(
-                    cell_index=cell_index,
-                    start_timestamp=start_timestamp,
-                    end_timestamp=end_timestamp,
-                    window_duration_seconds=window_duration_seconds,
-                    component_id=component_id,
-                )
-                if data:
-                    # Sort by timestamp to ensure proper sequence order
-                    data.sort(key=lambda x: x.get("window_start_time", 0))
-                    cell_data[cell_index] = data
-                    logger.info(f"Fetched {len(data)} windows for cell {cell_index}")
-            except Exception as e:
-                logger.error(f"Failed to fetch data for cell {cell_index}: {str(e)}")
-                # Continue with other cells even if one fails
-
-        return cell_data
+    def _group_by_slice(self, data: list[dict]) -> dict[tuple, list[dict]]:
+        """Group windows by (snssai_sst, snssai_sd, dnn) slice context."""
+        groups: dict[tuple, list[dict]] = {}
+        for w in data:
+            key = (w.get("snssai_sst", ""), w.get("snssai_sd", ""), w.get("dnn", ""))
+            groups.setdefault(key, []).append(w)
+        return groups
 
     def _extract_fields(
         self,
@@ -446,7 +408,7 @@ class TrainingService:
         """Extract input and output field values from data windows."""
         return extract_fields(data, input_fields, output_fields)
 
-    def _prepare_sequences_per_cell(
+    def _prepare_sequences(
         self,
         cell_data: list[dict],
         input_fields: list[str],

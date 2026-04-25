@@ -110,12 +110,22 @@ class DataStorageClient:
         Returns:
             Tuple of (all_valid: bool, invalid_fields: list[str])
         """
-        available_fields = await self.get_available_fields()
-        available_set = set(available_fields)
+        field_event_map = await self.get_fields_with_events()
+        available_set = set(field_event_map.keys())
 
         invalid_fields = [field for field in fields if field not in available_set]
 
         return (len(invalid_fields) == 0, invalid_fields)
+
+    async def get_fields_with_events(self) -> dict[str, list[str]]:
+        """Get field names with their associated event types from the data-storage fields endpoint."""
+        self._ensure_handshake()
+        url = f"{self.base_url}{settings.DATA_STORAGE_FIELDS_ENDPOINT}"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=10.0, headers=self._auth_headers)
+            response.raise_for_status()
+            raw = self._decrypt_response(response)
+            return json.loads(raw)
 
     async def get_known_cells(self, component_id: str | None = None) -> list[int]:
         """
@@ -140,7 +150,7 @@ class DataStorageClient:
             return json.loads(self._decrypt_response(response))
 
     async def probe_data_timestamp(
-        self, cells: list[int], window_duration_seconds: int, component_id: str | None = None
+        self, window_duration_seconds: int, event_type: str | None = None
     ) -> int | None:
         """
         Discover any available data by issuing a single-record request over the
@@ -161,35 +171,24 @@ class DataStorageClient:
 
         self._ensure_handshake()
         far_future = int(time.time()) + 10 * 365 * 24 * 3600
-        url = f"{self.base_url}{self.data_endpoint}"
 
-        async with httpx.AsyncClient() as client:
-            for cell in cells[:5]:
-                try:
-                    params = {
-                        "cell_index": cell,
-                        "start_time": 0,
-                        "end_time": far_future,
-                        "window_duration_seconds": window_duration_seconds,
-                        "offset": 0,
-                        "limit": 1,
-                    }
-                    headers = {**self._auth_headers}
-                    if component_id:
-                        headers["X-Component-ID"] = component_id
-                    response = await client.get(url, params=params, timeout=30.0, headers=headers)
-                    if response.status_code == 200:
-                        data = json.loads(self._decrypt_response(response))
-                        if data and isinstance(data, list):
-                            raw = data[0].get("window_start_time", 0)
-                            if isinstance(raw, str):
-                                ts = int(datetime.fromisoformat(raw).replace(tzinfo=timezone.utc).timestamp())
-                            else:
-                                ts = int(raw)
-                            if ts > 0:
-                                return ts
-                except Exception:
-                    continue
+        try:
+            data = await self.fetch_data(
+                start_timestamp=0,
+                end_timestamp=far_future,
+                window_duration_seconds=window_duration_seconds,
+                event=event_type,
+            )
+            if data:
+                raw = data[0].get("window_start_time", 0)
+                if isinstance(raw, str):
+                    ts = int(datetime.fromisoformat(raw).replace(tzinfo=timezone.utc).timestamp())
+                else:
+                    ts = int(raw)
+                if ts > 0:
+                    return ts
+        except Exception:
+            pass
         return None
 
     async def fetch_cell_data(
@@ -260,3 +259,88 @@ class DataStorageClient:
                 offset += limit
 
         return all_data
+
+    async def fetch_data(
+        self,
+        start_timestamp: int,
+        end_timestamp: int,
+        window_duration_seconds: int,
+        snssai_sst: str | None = None,
+        dnn: str | None = None,
+        snssai_sd: str | None = None,
+        event: str | None = None,
+    ) -> list[dict]:
+        """Fetch processed data with optional tag filters (no cell_index)."""
+        self._ensure_handshake()
+        url = f"{self.base_url}{self.data_endpoint}"
+        all_data = []
+        offset = 0
+        limit = 1000
+
+        async with httpx.AsyncClient() as client:
+            while True:
+                params: dict[str, int | str] = {
+                    "start_time": start_timestamp,
+                    "end_time": end_timestamp,
+                    "window_duration_seconds": window_duration_seconds,
+                    "offset": offset,
+                    "limit": limit,
+                }
+                if snssai_sst is not None:
+                    params["snssai_sst"] = snssai_sst
+                if dnn is not None:
+                    params["dnn"] = dnn
+                if snssai_sd is not None:
+                    params["snssai_sd"] = snssai_sd
+                if event is not None:
+                    params["event"] = event
+
+                response = await client.get(url, params=params, timeout=60.0, headers=self._auth_headers)
+                response.raise_for_status()
+                batch = json.loads(self._decrypt_response(response))
+
+                if not batch:
+                    break
+                all_data.extend(batch)
+                if len(batch) < limit:
+                    break
+                offset += limit
+
+        return all_data
+
+
+async def derive_event_type(
+    fields: list[str],
+    requested_event: str | None,
+    data_storage_client: DataStorageClient,
+) -> str:
+    """Derive and validate the event type for a set of model fields.
+
+    Fetches field→event mappings from data-storage, computes the intersection
+    of events across all fields, and returns the resolved event type.
+    """
+    from fastapi import HTTPException
+
+    field_event_map = await data_storage_client.get_fields_with_events()
+    event_sets = [set(field_event_map.get(f, [])) for f in fields]
+    intersection = event_sets[0].intersection(*event_sets[1:]) if event_sets else set()
+
+    if not intersection:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Fields do not share a common event",
+                "field_events": {f: field_event_map.get(f, []) for f in fields},
+            },
+        )
+
+    if requested_event is not None and requested_event not in intersection:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": f"Event '{requested_event}' is not valid for the provided fields",
+                "valid_events": sorted(intersection),
+            },
+        )
+
+    return requested_event if requested_event is not None else sorted(intersection)[0]

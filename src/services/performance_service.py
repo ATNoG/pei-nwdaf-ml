@@ -39,8 +39,8 @@ def _eval_at_key(field_name: str) -> str:
     return f"eval_at:{field_name}"
 
 
-def _best_key(field_name: str) -> str:
-    return f"best_for:{field_name}"
+def _best_key(event_type: str, field_name: str) -> str:
+    return f"best_for:{event_type}:{field_name}"
 
 
 def _metric_key(field_name: str) -> str:
@@ -143,21 +143,21 @@ class PerformanceService:
                 last_evaluated_at=None,
             )
 
-        cells = await self.data_storage_client.get_known_cells()
+        event_type = model_configs[0].event_type if model_configs else ""
+
         logger.info(
             f"Evaluating {len(model_configs)} models for field '{field_name}' "
-            f"using metric '{metric}' and up to {settings.MAX_EVAL_CELLS} reference cells "
-            f"(from {len(cells)} known)"
+            f"using metric '{metric}' and event_type '{event_type}'"
         )
 
-        # Probe once for a fallback timestamp in case the current-time window is empty
-        fallback_start_ts = await self.data_storage_client.probe_data_timestamp(cells, model_configs[0].window_duration_seconds if model_configs else 60)
+        fallback_start_ts = await self.data_storage_client.probe_data_timestamp(
+            model_configs[0].window_duration_seconds if model_configs else 60,
+            event_type=event_type or None,
+        )
         if fallback_start_ts is not None:
-            logger.info(
-                "Evaluation fallback anchor: window_start_time=%d (data found in storage)",
-                fallback_start_ts,)
+            logger.info("Evaluation fallback anchor: window_start_time=%d", fallback_start_ts)
         else:
-            logger.warning("Evaluation: no data found in storage for any time range - scores will be None")
+            logger.warning("Evaluation: no data found in storage - scores will be None")
 
         evaluated_at = datetime.now(tz=timezone.utc)
         evaluated_at_str = evaluated_at.isoformat()
@@ -191,7 +191,7 @@ class PerformanceService:
             try:
                 model = self._load_model(model_config.model_id, model_detail.latest_version, config)
                 loaded_models[model_config.model_id] = model
-                score = await self._compute_score_for_model(model, config, field_name, cells, metric, fallback_start_ts)
+                score = await self._compute_score_for_model(model, config, field_name, event_type, metric, fallback_start_ts)
             except Exception as e:
                 logger.warning(
                     f"Failed to evaluate model {model_config.model_id} for field '{field_name}': {e}"
@@ -216,6 +216,7 @@ class PerformanceService:
 
         # Persist tags + baseline on winner
         self._update_tags(
+            event_type=event_type,
             field_name=field_name,
             scored_models=scored,
             best_model_id=best_model_id,
@@ -229,7 +230,7 @@ class PerformanceService:
                     model=loaded_models[best_model_id],
                     config=detail_map[best_model_id].config,
                     field_name=field_name,
-                    cells=cells,
+                    event_type=event_type,
                     metric=metric,
                     fallback_start_ts=fallback_start_ts,
                 )
@@ -281,7 +282,7 @@ class PerformanceService:
 
             score_str = tags.get(_score_key(field_name))
             eval_at_str = tags.get(_eval_at_key(field_name))
-            is_best_str = tags.get(_best_key(field_name))
+            is_best_str = tags.get(_best_key(model_config.event_type, field_name))
             metric_str = tags.get(_metric_key(field_name))
 
             score = float(score_str) if score_str else None
@@ -334,7 +335,7 @@ class PerformanceService:
 
         for model_config in model_configs:
             tags = self._get_registered_model_tags(model_config.model_id)
-            if tags.get(_best_key(field_name)) == "true":
+            if tags.get(_best_key(model_config.event_type, field_name)) == "true":
                 model_detail = self.mlflow_service.get_model(model_config.model_id)
                 score_str = tags.get(_score_key(field_name))
                 eval_at_str = tags.get(_eval_at_key(field_name))
@@ -373,15 +374,17 @@ class PerformanceService:
         if field_name not in config.output_fields:
             raise ValueError(f"Model ID '{model_id}' does not predict field '{field_name}'.")
 
+        event_type = config.event_type
+
         # Remove best tag from current best
         current_best = self.get_best_model(field_name)
         if current_best and current_best.model_id != model_id:
             try:
-                self.client.delete_registered_model_tag(current_best.model_id, _best_key(field_name))
+                self.client.delete_registered_model_tag(current_best.model_id, _best_key(event_type, field_name))
             except MlflowException:
                 pass
 
-        self.client.set_registered_model_tag(model_id, _best_key(field_name), "true")
+        self.client.set_registered_model_tag(model_id, _best_key(event_type, field_name), "true")
 
         return self.get_best_model(field_name)
 
@@ -422,12 +425,14 @@ class PerformanceService:
             )
 
         config = model_detail.config
-        cells = await self.data_storage_client.get_known_cells()
+        model_event_type = getattr(model_detail, "event_type", "")
 
-        fallback_start_ts = await self.data_storage_client.probe_data_timestamp(cells, config.window_duration_seconds)
+        fallback_start_ts = await self.data_storage_client.probe_data_timestamp(
+            config.window_duration_seconds, event_type=model_event_type or None
+        )
 
         model = self._load_model(best.model_id, model_detail.latest_version, config)
-        score = await self._compute_score_for_model(model, config, field_name, cells, metric, fallback_start_ts)
+        score = await self._compute_score_for_model(model, config, field_name, model_event_type, metric, fallback_start_ts)
 
         evaluated_at = datetime.now(tz=timezone.utc)
         evaluated_at_str = evaluated_at.isoformat()
@@ -462,13 +467,14 @@ class PerformanceService:
         )
 
     def get_monitored_fields(self) -> list[str]:
-        """Return all output fields that have a best_for:{field} tag set."""
+        """Return all output fields that have a best_for:{event}:{field} tag set."""
         fields: set[str] = set()
         for config in self.ml_config_service.list_all():
             tags = self._get_registered_model_tags(config.model_id)
             for key in tags:
                 if key.startswith("best_for:"):
-                    fields.add(key.removeprefix("best_for:"))
+                    suffix = key.removeprefix("best_for:")  # e.g. "PERF_DATA:thrputUl_mbps_mean"
+                    fields.add(suffix)
         return list(fields)
 
     def get_baseline_score(self, field_name: str) -> float | None:
@@ -588,21 +594,11 @@ class PerformanceService:
         model,
         config: ModelConfig,
         field_name: str,
-        cells: list[int],
+        event_type: str,
         metric: str,
         fallback_start_ts: int | None = None,
     ) -> float | None:
-        """
-        Collect raw predictions and ground-truth values across reference cells,
-        then compute the requested metric in one shot.
-
-        Raw values (not pre-squared) are accumulated so any metric can be
-        applied at the end via _compute_score().
-
-        If the current-time window has no data, the method retries each cell using fallback_start_ts
-        as the window anchor.  fallback_start_ts is discovered once per evaluation
-        call by probing the data storage with a wide time range.
-        """
+        """Compute score by evaluating each slice (snssai+dnn) independently."""
         min_windows = config.lookback_steps + config.forecast_steps
         min_secs = min_windows * config.window_duration_seconds
         fetch_secs = max(min_secs, 86400)
@@ -612,57 +608,41 @@ class PerformanceService:
         num_out = len(config.output_fields)
         all_pred_vals: list[float] = []
         all_truth_vals: list[float] = []
-        valid_cells = 0
 
-        for cell_index in cells:
-            if valid_cells >= settings.MAX_EVAL_CELLS:
-                break
+        # Fetch all data for this event_type
+        data = await self.data_storage_client.fetch_data(
+            start_timestamp=start_ts,
+            end_timestamp=end_ts,
+            window_duration_seconds=config.window_duration_seconds,
+            event=event_type or None,
+        )
 
-            # Primary fetch: window anchored to now
-            data: list[dict] | None = None
-            try:
-                data = await self.data_storage_client.fetch_cell_data(
-                    cell_index=cell_index,
-                    start_timestamp=start_ts,
-                    end_timestamp=end_ts,
-                    window_duration_seconds=config.window_duration_seconds,
-                )
-            except Exception as e:
-                logger.warning("Failed to fetch data for cell %d: %s", cell_index, e)
+        # Fallback to probed timestamp if no current data
+        if (not data or len(data) < min_windows) and fallback_start_ts is not None:
+            alt_end = fallback_start_ts + fetch_secs
+            data = await self.data_storage_client.fetch_data(
+                start_timestamp=fallback_start_ts,
+                end_timestamp=alt_end,
+                window_duration_seconds=config.window_duration_seconds,
+                event=event_type or None,
+            )
 
-            # Fallback: retry anchored to probed data timestamp
-            if (not data or len(data) < min_windows) and fallback_start_ts is not None:
-                alt_start = fallback_start_ts
-                alt_end = fallback_start_ts + fetch_secs
-                logger.debug(
-                    "Cell %d: no current data, retrying with probed window [%d, %d]",
-                    cell_index,
-                    alt_start,
-                    alt_end,
-                )
-                try:
-                    data = await self.data_storage_client.fetch_cell_data(
-                        cell_index=cell_index,
-                        start_timestamp=alt_start,
-                        end_timestamp=alt_end,
-                        window_duration_seconds=config.window_duration_seconds,
-                    )
-                except Exception as e:
-                    logger.warning("Fallback fetch failed for cell %d: %s", cell_index, e)
-                    data = None
+        if not data:
+            logger.warning("No data for score computation on field '%s' (metric=%s)", field_name, metric)
+            return None
 
-            if not data or len(data) < min_windows:
-                logger.debug(
-                    "Cell %d: insufficient data (%d windows, need %d)",
-                    cell_index,
-                    len(data) if data else 0,
-                    min_windows,
-                )
+        # Group by slice context and score each independently
+        slice_groups: dict[tuple, list[dict]] = {}
+        for w in data:
+            key = (w.get("snssai_sst", ""), w.get("snssai_sd", ""), w.get("dnn", ""))
+            slice_groups.setdefault(key, []).append(w)
+
+        for slice_key, slice_data in slice_groups.items():
+            slice_data.sort(key=lambda x: x.get("window_start_time", 0))
+            if len(slice_data) < min_windows:
                 continue
 
-            data.sort(key=lambda x: x.get("window_start_time", 0))
-
-            eval_data = data[-min_windows:]
+            eval_data = slice_data[-min_windows:]
             x_windows = eval_data[: config.lookback_steps]
             truth_windows = eval_data[config.lookback_steps :]
 
@@ -671,20 +651,14 @@ class PerformanceService:
             try:
                 pred = model.predict(X)[0]
             except Exception as e:
-                logger.warning(f"Prediction failed for cell {cell_index}: {e}")
+                logger.warning("Prediction failed for slice %s: %s", slice_key, e)
                 continue
 
-            pred_vals = pred[field_idx::num_out].tolist()
-            truth_vals = [float(w.get(field_name) or 0.0) for w in truth_windows]
-
-            all_pred_vals.extend(pred_vals)
-            all_truth_vals.extend(truth_vals)
-            valid_cells += 1
+            all_pred_vals.extend(pred[field_idx::num_out].tolist())
+            all_truth_vals.extend([float(w.get(field_name) or 0.0) for w in truth_windows])
 
         if not all_pred_vals:
-            logger.warning(
-                f"No valid cells for score computation on field '{field_name}' (metric={metric})"
-            )
+            logger.warning("No valid slices for score computation on field '%s' (metric=%s)", field_name, metric)
             return None
 
         return self._compute_score(all_pred_vals, all_truth_vals, metric)
@@ -718,17 +692,12 @@ class PerformanceService:
         model,
         config: ModelConfig,
         field_name: str,
-        cells: list[int],
+        event_type: str,
         metric: str,
         fallback_start_ts: int | None,
         n_repeats: int = 5,
     ) -> dict[str, float] | None:
-        """
-        Compute permutation importance for all input fields via alibi's PermutationImportance.
-
-        importance[i] = baseline_score - permuted_score (positive = feature is important).
-        Works for both error metrics (negated for alibi convention) and r2.
-        """
+        """Compute permutation importance grouped by slice context."""
         from alibi.explainers import PermutationImportance
 
         min_windows = config.lookback_steps + config.forecast_steps
@@ -740,40 +709,37 @@ class PerformanceService:
         X_list: list[np.ndarray] = []
         y_list: list[list[float]] = []
 
-        for cell_index in cells:
-            if len(X_list) >= settings.MAX_EVAL_CELLS:
-                break
-            data = None
-            try:
-                data = await self.data_storage_client.fetch_cell_data(
-                    cell_index=cell_index,
-                    start_timestamp=start_ts,
-                    end_timestamp=end_ts,
-                    window_duration_seconds=config.window_duration_seconds,
-                )
-            except Exception:
-                pass
-            if (not data or len(data) < min_windows) and fallback_start_ts is not None:
-                try:
-                    data = await self.data_storage_client.fetch_cell_data(
-                        cell_index=cell_index,
-                        start_timestamp=fallback_start_ts,
-                        end_timestamp=fallback_start_ts + fetch_secs,
-                        window_duration_seconds=config.window_duration_seconds,
-                    )
-                except Exception:
-                    data = None
-            if not data or len(data) < min_windows:
-                continue
+        data = await self.data_storage_client.fetch_data(
+            start_timestamp=start_ts,
+            end_timestamp=end_ts,
+            window_duration_seconds=config.window_duration_seconds,
+            event=event_type or None,
+        )
+        if (not data or len(data) < min_windows) and fallback_start_ts is not None:
+            data = await self.data_storage_client.fetch_data(
+                start_timestamp=fallback_start_ts,
+                end_timestamp=fallback_start_ts + fetch_secs,
+                window_duration_seconds=config.window_duration_seconds,
+                event=event_type or None,
+            )
 
-            data.sort(key=lambda x: x.get("window_start_time", 0))
-            eval_data = data[-min_windows:]
-            X = prepare_last_sequence(eval_data[: config.lookback_steps], config.input_fields, config.lookback_steps)
-            X_list.append(X[0])  # strip batch dim -> (lookback_steps, num_input_fields)
-            y_list.append([float(w.get(field_name) or 0.0) for w in eval_data[config.lookback_steps :]])
+        if data:
+            slice_groups: dict[tuple, list[dict]] = {}
+            for w in data:
+                key = (w.get("snssai_sst", ""), w.get("snssai_sd", ""), w.get("dnn", ""))
+                slice_groups.setdefault(key, []).append(w)
+
+            for slice_data in slice_groups.values():
+                if len(slice_data) < min_windows:
+                    continue
+                slice_data.sort(key=lambda x: x.get("window_start_time", 0))
+                eval_data = slice_data[-min_windows:]
+                X = prepare_last_sequence(eval_data[: config.lookback_steps], config.input_fields, config.lookback_steps)
+                X_list.append(X[0])
+                y_list.append([float(w.get(field_name) or 0.0) for w in eval_data[config.lookback_steps:]])
 
         if not X_list:
-            logger.warning("Permutation importance: no usable cells for '%s'", field_name)
+            logger.warning("Permutation importance: no usable slices for '%s'", field_name)
             return None
 
         bridge = _SequenceIndexBridge(np.stack(X_list, axis=0))
@@ -836,7 +802,7 @@ class PerformanceService:
         )
 
     async def trigger_feature_importance(
-        self, field_name: str, model_id: str, cells: list[int]
+        self, field_name: str, model_id: str
     ) -> FeatureImportanceResponse:
         """Load model, compute permutation importance on demand, store as MLflow tags."""
         model_detail = self.mlflow_service.get_model(model_id)
@@ -844,7 +810,10 @@ class PerformanceService:
             raise ValueError(f"Model '{model_id}' has no trained version")
         config = model_detail.config
         model = self._load_model(model_id, model_detail.latest_version, config)
-        fallback_start_ts = await self.data_storage_client.probe_data_timestamp(cells, config.window_duration_seconds)
+        event_type = getattr(model_detail, "event_type", "")
+        fallback_start_ts = await self.data_storage_client.probe_data_timestamp(
+            config.window_duration_seconds, event_type=event_type or None
+        )
         tags = self._get_registered_model_tags(model_id)
 
         metric = tags.get(_metric_key(field_name), "rmse")
@@ -852,7 +821,7 @@ class PerformanceService:
             model=model,
             config=config,
             field_name=field_name,
-            cells=cells,
+            event_type=event_type,
             metric=metric,
             fallback_start_ts=fallback_start_ts,
         )
@@ -873,6 +842,7 @@ class PerformanceService:
 
     def _update_tags(
         self,
+        event_type: str,
         field_name: str,
         scored_models: list[tuple[str, float]],
         best_model_id: str | None,
@@ -883,9 +853,9 @@ class PerformanceService:
         Persist scores and best designation as MLflow registered model tags.
 
         For every scored model: sets score_for:{field} and eval_at:{field}.
-        For the winner only: sets best_for:{field}, eval_metric:{field},
+        For the winner only: sets best_for:{event}:{field}, eval_metric:{field},
         and baseline_score:{field} (baseline is never overwritten by monitoring).
-        For non-winners: removes best_for:{field} if previously set.
+        For non-winners: removes best_for:{event}:{field} if previously set.
         """
         for model_id, score in scored_models:
             self.client.set_registered_model_tag(model_id, _score_key(field_name), str(score))
@@ -894,14 +864,14 @@ class PerformanceService:
             )
 
             if model_id == best_model_id:
-                self.client.set_registered_model_tag(model_id, _best_key(field_name), "true")
+                self.client.set_registered_model_tag(model_id, _best_key(event_type, field_name), "true")
                 self.client.set_registered_model_tag(model_id, _metric_key(field_name), metric)
                 self.client.set_registered_model_tag(
                     model_id, _baseline_key(field_name), str(score)
                 )
             else:
                 try:
-                    self.client.delete_registered_model_tag(model_id, _best_key(field_name))
+                    self.client.delete_registered_model_tag(model_id, _best_key(event_type, field_name))
                 except MlflowException:
                     pass
 

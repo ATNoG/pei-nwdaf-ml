@@ -1,7 +1,6 @@
 """Service for running anomaly detection."""
 
 import logging
-from collections import defaultdict
 from datetime import datetime
 
 import mlflow
@@ -11,7 +10,6 @@ from mlflow.tracking import MlflowClient
 from src.models.autoencoder import Autoencoder
 from src.schemas.anomaly import (
     AnomalyDetectionResult,
-    IPAnomalyResult,
     WindowScore,
 )
 from src.services.anomaly_config_service import AnomalyConfigService
@@ -75,11 +73,9 @@ class AnomalyDetectionService:
             start_timestamp=start_ts,
             end_timestamp=end_ts,
             window_duration_seconds=config.window_duration_seconds,
-            ip_src="*",
         )
 
         if not raw_data:
-            # Return empty result
             return AnomalyDetectionResult(
                 model_id=model_id,
                 model_name=config_db.name,
@@ -87,61 +83,55 @@ class AnomalyDetectionService:
                 threshold_value=config_db.threshold_value,
                 window_duration_seconds=config.window_duration_seconds,
                 input_fields=config.input_fields,
-                results=[],
+                num_windows=0,
+                num_anomalies=0,
+                scores=[],
             )
 
-        # Group by ip_src
-        ip_groups: dict[str, list[dict]] = defaultdict(list)
-        for record in raw_data:
-            ip = record.get("ip_src", "unknown")
-            ip_groups[ip].append(record)
+        # Sort all windows by time
+        raw_data.sort(key=lambda w: w.get("window_start_time", 0))
 
-        # Score each IP
-        ip_results: list[IPAnomalyResult] = []
-        for ip_src, windows in ip_groups.items():
-            windows.sort(key=lambda w: w.get("window_start_time", 0))
-
-            # Extract features
-            features = []
-            timestamps = []
-            for w in windows:
-                try:
-                    row = [float(w.get(f, 0.0)) for f in config.input_fields]
-                    features.append(row)
-                    raw_ts = w.get("window_start_time", 0)
-                    if isinstance(raw_ts, str):
-                        raw_ts = int(datetime.fromisoformat(raw_ts).timestamp())
-                    timestamps.append(int(raw_ts))
-                except (ValueError, TypeError):
-                    continue
-
-            if not features:
+        features = []
+        timestamps = []
+        for w in raw_data:
+            try:
+                row = [float(w.get(f, 0.0)) for f in config.input_fields]
+                features.append(row)
+                raw_ts = w.get("window_start_time", 0)
+                if isinstance(raw_ts, str):
+                    raw_ts = int(datetime.fromisoformat(raw_ts).timestamp())
+                timestamps.append(int(raw_ts))
+            except (ValueError, TypeError):
                 continue
 
-            X = np.nan_to_num(np.array(features, dtype=np.float32))
-            X_scaled = ((X - scaler_mean) / scaler_std).astype(np.float32)
-            errors = ae.score(X_scaled)
+        if not features:
+            return AnomalyDetectionResult(
+                model_id=model_id,
+                model_name=config_db.name,
+                cell_id=cell_id,
+                threshold_value=config_db.threshold_value,
+                window_duration_seconds=config.window_duration_seconds,
+                input_fields=config.input_fields,
+                num_windows=0,
+                num_anomalies=0,
+                scores=[],
+            )
 
-            scores = []
-            num_anomalies = 0
-            for i, (ts, err) in enumerate(zip(timestamps, errors)):
-                is_anomaly = float(err) > config_db.threshold_value
-                if is_anomaly:
-                    num_anomalies += 1
-                scores.append(
-                    WindowScore(
-                        window_start_time=ts,
-                        reconstruction_error=float(err),
-                        is_anomaly=is_anomaly,
-                    )
-                )
+        X = np.nan_to_num(np.array(features, dtype=np.float32))
+        X_scaled = ((X - scaler_mean) / scaler_std).astype(np.float32)
+        errors = ae.score(X_scaled)
 
-            ip_results.append(
-                IPAnomalyResult(
-                    ip_src=ip_src,
-                    num_windows=len(scores),
-                    num_anomalies=num_anomalies,
-                    scores=scores,
+        scores = []
+        num_anomalies = 0
+        for ts, err in zip(timestamps, errors):
+            is_anomaly = float(err) > config_db.threshold_value
+            if is_anomaly:
+                num_anomalies += 1
+            scores.append(
+                WindowScore(
+                    window_start_time=ts,
+                    reconstruction_error=float(err),
+                    is_anomaly=is_anomaly,
                 )
             )
 
@@ -152,7 +142,112 @@ class AnomalyDetectionService:
             threshold_value=config_db.threshold_value,
             window_duration_seconds=config.window_duration_seconds,
             input_fields=config.input_fields,
-            results=ip_results,
+            num_windows=len(scores),
+            num_anomalies=num_anomalies,
+            scores=scores,
+        )
+
+    async def detect_for_tags(
+        self, tags, model_id: str, lookback_seconds: int = 1800
+    ) -> AnomalyDetectionResult:
+        """Run anomaly detection using tag filters. tags can be Tags schema or plain dict."""
+        import time
+
+        tags_dict = tags.to_filter_dict() if hasattr(tags, "to_filter_dict") else tags
+
+        if model_id is None:
+            event_type = tags_dict.get("event")
+            trained = [
+                c for c in self.anomaly_config_service.list_all()
+                if c.threshold_value is not None and (event_type is None or c.event_type == event_type)
+            ]
+            if not trained:
+                raise ValueError(f"No trained anomaly models for event_type '{event_type}'")
+            model_id = trained[0].model_id
+
+        config_db = self.anomaly_config_service.get_config(model_id)
+        if not config_db:
+            raise ValueError(f"Anomaly model '{model_id}' not found")
+        if config_db.threshold_value is None:
+            raise ValueError(f"Anomaly model '{model_id}' has not been trained yet (no threshold)")
+
+        config = self.anomaly_config_service.config_from_db(config_db)
+        ae, scaler_mean, scaler_std = self._load_model_and_scaler(
+            model_id, len(config.input_fields), config.hidden_size
+        )
+
+        end_ts = int(time.time())
+        start_ts = end_ts - lookback_seconds
+
+        raw_data = await self.data_storage_client.fetch_data(
+            start_timestamp=start_ts,
+            end_timestamp=end_ts,
+            window_duration_seconds=config.window_duration_seconds,
+            snssai_sst=tags_dict.get("snssai_sst"),
+            dnn=tags_dict.get("dnn"),
+            snssai_sd=tags_dict.get("snssai_sd"),
+            event=tags_dict.get("event"),
+        )
+
+        empty = AnomalyDetectionResult(
+            model_id=model_id,
+            model_name=config_db.name,
+            tags=tags_dict,
+            threshold_value=config_db.threshold_value,
+            window_duration_seconds=config.window_duration_seconds,
+            input_fields=config.input_fields,
+            num_windows=0,
+            num_anomalies=0,
+            scores=[],
+        )
+
+        if not raw_data:
+            return empty
+
+        raw_data.sort(key=lambda w: w.get("window_start_time", 0))
+
+        features = []
+        timestamps = []
+        for w in raw_data:
+            try:
+                row = [float(w.get(f, 0.0)) for f in config.input_fields]
+                features.append(row)
+                raw_ts = w.get("window_start_time", 0)
+                if isinstance(raw_ts, str):
+                    raw_ts = int(datetime.fromisoformat(raw_ts).timestamp())
+                timestamps.append(int(raw_ts))
+            except (ValueError, TypeError):
+                continue
+
+        if not features:
+            return empty
+
+        X = np.nan_to_num(np.array(features, dtype=np.float32))
+        X_scaled = ((X - scaler_mean) / scaler_std).astype(np.float32)
+        errors = ae.score(X_scaled)
+
+        scores = []
+        num_anomalies = 0
+        for ts, err in zip(timestamps, errors):
+            is_anomaly = float(err) > config_db.threshold_value
+            if is_anomaly:
+                num_anomalies += 1
+            scores.append(WindowScore(
+                window_start_time=ts,
+                reconstruction_error=float(err),
+                is_anomaly=is_anomaly,
+            ))
+
+        return AnomalyDetectionResult(
+            model_id=model_id,
+            model_name=config_db.name,
+            tags=tags_dict,
+            threshold_value=config_db.threshold_value,
+            window_duration_seconds=config.window_duration_seconds,
+            input_fields=config.input_fields,
+            num_windows=len(scores),
+            num_anomalies=num_anomalies,
+            scores=scores,
         )
 
     async def _select_best_model(self, cell_id: int, lookback_seconds: int) -> str:
@@ -176,7 +271,6 @@ class AnomalyDetectionService:
             start_timestamp=start_ts,
             end_timestamp=end_ts,
             window_duration_seconds=trained[0].window_duration_seconds,
-            ip_src="*",
         )
         if not sample:
             raise ValueError(f"No data available for cell {cell_id}")

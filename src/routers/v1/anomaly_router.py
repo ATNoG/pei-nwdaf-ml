@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 from src.core.dependencies import get_db
 from src.schemas.anomaly import (
     AnomalyDetectionRequest,
-    AnomalyDetectionResult,
     AnomalyDetectionSummary,
     AnomalyModelCreate,
     AnomalyModelDetail,
@@ -22,7 +21,7 @@ from src.schemas.anomaly import (
 from src.services.anomaly_config_service import AnomalyConfigService
 from src.services.anomaly_detection_service import AnomalyDetectionService
 from src.services.anomaly_training_service import AnomalyTrainingService
-from src.services.data_storage_client import DataStorageClient
+from src.services.data_storage_client import DataStorageClient, derive_event_type
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -67,15 +66,17 @@ async def create_anomaly_model(
             body.config.input_fields
         )
         if not is_valid:
-            available = await data_storage_client.get_available_fields()
+            available = sorted((await data_storage_client.get_fields_with_events()).keys())
             raise HTTPException(
                 status_code=400,
                 detail={
                     "message": "Invalid field names provided",
                     "invalid_fields": sorted(invalid_fields),
-                    "available_fields": sorted(available),
+                    "available_fields": available,
                 },
             )
+
+        event_type = await derive_event_type(body.config.input_fields, body.config.event, data_storage_client)
 
         from datetime import datetime
         from uuid import uuid4
@@ -102,6 +103,7 @@ async def create_anomaly_model(
             threshold_percentile=body.config.threshold_percentile,
             threshold_value=None,
             created_at=created_at,
+            event_type=event_type,
         )
         config_service.create(config_db)
 
@@ -115,6 +117,7 @@ async def create_anomaly_model(
             last_trained_at=None,
             mlflow_run_id=None,
             training_loss=None,
+            event_type=event_type,
         )
     except HTTPException:
         raise
@@ -150,6 +153,7 @@ async def list_anomaly_models(
                 name=cfg.name,
                 created_at=cfg.created_at,
                 latest_version=latest_version,
+                event_type=cfg.event_type,
             )
         )
     return summaries
@@ -206,6 +210,7 @@ async def get_anomaly_model(
         last_trained_at=last_trained_at,
         mlflow_run_id=mlflow_run_id,
         training_loss=training_loss,
+        event_type=cfg.event_type,
     )
 
 
@@ -335,46 +340,37 @@ async def cancel_anomaly_training_job(
 # ── Detection ────────────────────────────────────────────────────────
 
 
-@router.post("/detect", response_model=AnomalyDetectionResult)
+@router.post("/detect", response_model=AnomalyDetectionSummary)
 async def run_anomaly_detection(
     request: AnomalyDetectionRequest,
     detection_service: AnomalyDetectionService = Depends(get_anomaly_detection_service),
-) -> AnomalyDetectionResult:
-    """Run anomaly detection for all IPs in a cell using a single model."""
-    try:
-        return await detection_service.detect(
-            request.cell_id, request.model_id, request.lookback_seconds
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Anomaly detection failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/detect/all", response_model=AnomalyDetectionSummary)
-async def run_all_anomaly_detection(
-    request: AnomalyDetectionRequest,
-    detection_service: AnomalyDetectionService = Depends(get_anomaly_detection_service),
 ) -> AnomalyDetectionSummary:
-    """Run anomaly detection for all IPs in a cell using all trained models."""
-    trained_models = [
-        cfg
-        for cfg in detection_service.anomaly_config_service.list_all()
-        if cfg.threshold_value is not None
-    ]
-    if not trained_models:
-        raise HTTPException(
-            status_code=404, detail="No trained anomaly models available"
-        )
+    """Run anomaly detection for all trained models matching the event_type in tags.
+    If model_id is provided, only that model is used."""
+    tags_dict = request.tags.to_filter_dict()
+    event_type = tags_dict.get("event")
+
+    if request.model_id:
+        candidates = [
+            cfg for cfg in detection_service.anomaly_config_service.list_all()
+            if cfg.model_id == request.model_id and cfg.threshold_value is not None
+        ]
+    else:
+        candidates = [
+            cfg for cfg in detection_service.anomaly_config_service.list_all()
+            if cfg.threshold_value is not None and (event_type is None or cfg.event_type == event_type)
+        ]
+
+    if not candidates:
+        raise HTTPException(status_code=404, detail=f"No trained anomaly models for event_type '{event_type}'")
 
     models_meta: dict[str, AnomalyModelMeta] = {}
-    ip_anomalies: dict[str, dict[str, str]] = {}
+    anomaly_counts: dict[str, str] = {}
 
-    for model_cfg in trained_models:
+    for model_cfg in candidates:
         try:
-            result = await detection_service.detect(
-                request.cell_id, model_cfg.model_id, request.lookback_seconds
+            result = await detection_service.detect_for_tags(
+                request.tags, model_cfg.model_id, request.lookback_seconds
             )
             models_meta[result.model_id] = AnomalyModelMeta(
                 name=result.model_name,
@@ -382,16 +378,12 @@ async def run_all_anomaly_detection(
                 threshold=result.threshold_value,
                 window_duration_seconds=result.window_duration_seconds,
             )
-            for ip_result in result.results:
-                ip = ip_result.ip_src
-                ip_anomalies.setdefault(ip, {})[
-                    result.model_id
-                ] = f"{ip_result.num_anomalies}/{ip_result.num_windows}"
+            anomaly_counts[result.model_id] = f"{result.num_anomalies}/{result.num_windows}"
         except Exception as e:
             logger.warning(f"Model {model_cfg.name} skipped: {e}")
 
     return AnomalyDetectionSummary(
-        cell_id=request.cell_id,
+        tags=request.tags,
         models=models_meta,
-        ip_anomalies=ip_anomalies,
+        anomaly_counts=anomaly_counts,
     )

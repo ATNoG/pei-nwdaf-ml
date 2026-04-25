@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from src.schemas.kube import JobResources
+from src.schemas.tags import Tags
 
 # ── Model configuration ──────────────────────────────────────────────
 
@@ -29,6 +30,10 @@ class AnomalyModelConfig(BaseModel):
         le=100.0,
         description="Percentile of training reconstruction errors used as anomaly threshold",
     )
+    event: str | None = Field(
+        default=None,
+        description="Optional 5G event type (e.g. 'PERF_DATA'). Auto-derived from fields if omitted.",
+    )
 
 
 class AnomalyModelCreate(BaseModel):
@@ -49,6 +54,7 @@ class AnomalyModelSummary(BaseModel):
 
     id: str = Field(..., description="Model ID")
     name: str = Field(..., description="Model name")
+    event_type: str = Field(..., description="5G event type this model belongs to")
     created_at: datetime | None = Field(None, description="Creation timestamp")
     latest_version: int | None = Field(
         None, description="Latest registered model version number"
@@ -60,6 +66,7 @@ class AnomalyModelDetail(BaseModel):
 
     id: str = Field(..., description="Model ID")
     name: str = Field(..., description="Model name")
+    event_type: str = Field(..., description="5G event type this model belongs to")
     config: AnomalyModelConfig = Field(..., description="Full model configuration")
     threshold_value: float | None = Field(
         None, description="Computed anomaly threshold (set after training)"
@@ -137,7 +144,7 @@ class AnomalyTrainingJobSummary(BaseModel):
 class AnomalyDetectionRequest(BaseModel):
     """Request schema for running anomaly detection."""
 
-    cell_id: int = Field(..., ge=0, description="Cell index to analyse")
+    tags: Tags = Field(..., description="Tag filters for fetching data")
     model_id: str | None = Field(
         None,
         description="UUID of the trained anomaly model to use. "
@@ -160,27 +167,18 @@ class WindowScore(BaseModel):
     is_anomaly: bool = Field(..., description="Whether error exceeds the threshold")
 
 
-class IPAnomalyResult(BaseModel):
-    """Anomaly detection results for a single IP address."""
-
-    ip_src: str = Field(..., description="Source IP address")
-    num_windows: int = Field(..., description="Number of windows scored")
-    num_anomalies: int = Field(..., description="Number of anomalous windows")
-    scores: list[WindowScore] = Field(..., description="Per-window scores")
-
-
 class AnomalyDetectionResult(BaseModel):
     """Full anomaly detection response for a cell."""
 
     model_id: str = Field(..., description="Model ID used for detection")
     model_name: str = Field(..., description="Human-readable model name")
-    cell_id: int = Field(..., description="Cell index analysed")
+    tags: Tags | None = Field(None, description="Tag filters used for detection")
     threshold_value: float = Field(..., description="Anomaly threshold used")
     window_duration_seconds: int = Field(..., description="Window duration in seconds")
     input_fields: list[str] = Field(..., description="Input fields used")
-    results: list[IPAnomalyResult] = Field(
-        ..., description="Per-IP anomaly detection results"
-    )
+    num_windows: int = Field(default=0, description="Total number of windows scored")
+    num_anomalies: int = Field(default=0, description="Number of anomalous windows")
+    scores: list[WindowScore] = Field(default_factory=list, description="Per-window anomaly scores")
 
 
 class AnomalyModelMeta(BaseModel):
@@ -193,13 +191,13 @@ class AnomalyModelMeta(BaseModel):
 
 
 class AnomalyDetectionSummary(BaseModel):
-    """Compact multi-model anomaly detection summary for a cell."""
+    """Compact multi-model anomaly detection summary."""
 
-    cell_id: int
+    tags: Tags
     models: dict[str, AnomalyModelMeta] = Field(
         ..., description="Model metadata keyed by model name"
     )
-    ip_anomalies: dict[str, dict[str, str]] = Field(
-        ...,
-        description="Per-IP anomaly counts keyed by IP then model name (e.g. '3/10')",
+    anomaly_counts: dict[str, str] = Field(
+        default_factory=dict,
+        description="Anomaly counts per model ID (e.g. '3/10' = 3 anomalies out of 10 windows)",
     )
