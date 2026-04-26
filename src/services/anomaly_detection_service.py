@@ -360,24 +360,26 @@ class AnomalyDetectionService:
         )
 
     async def compute_permutation_importance(
-        self, model_id: str, n_repeats: int = 5
+        self, model_id: str, n_repeats: int = 2
     ) -> AnomalyFeatureImportanceResponse:
         """Compute permutation importance using training-time background artifact."""
+        import asyncio
         from alibi.explainers import PermutationImportance
 
         config_db = self.anomaly_config_service.get_config(model_id)
         if config_db is None or config_db.threshold_value is None:
             raise ValueError(f"Model '{model_id}' not found or not trained")
 
-        ae, _, _ = self._load_model_and_scaler(
+        ae, _, _ = await asyncio.to_thread(
+            self._load_model_and_scaler,
             model_id, len(config_db.input_fields), config_db.hidden_size
         )
-        X_background = self._load_background(model_id)
+        X_background = await asyncio.to_thread(self._load_background, model_id)
 
         def predict_fn(X: np.ndarray) -> np.ndarray:
             return ae.score(X)
 
-        # alibi: higher = better -> negate reconstruction error so that
+        # alibi: higher = better → negate reconstruction error so that
         # importance = baseline_score - permuted_score > 0 when feature is important
         def scorer(y_true, y_pred):
             return -float(np.mean(y_pred))
@@ -385,20 +387,24 @@ class AnomalyDetectionService:
         scorer.__name__ = "reconstruction_error"
         y_dummy = np.zeros(len(X_background))
 
-        explainer = PermutationImportance(
-            predictor=predict_fn,
-            score_fns=scorer,
-            feature_names=config_db.input_fields,
-        )
-        explanation = explainer.explain(X_background, y_dummy, n_repeats=n_repeats)
-
-        importances_data = explanation.data["importances"]["reconstruction_error"]
-        importances = {
-            name: AnomalyFeatureImportanceValue(
-                mean=round(float(importances_data["mean"][i]), 6),
-                std=round(float(importances_data["std"][i]), 6),
+        def _run_importance() -> object:
+            explainer = PermutationImportance(
+                predictor=predict_fn,
+                score_fns=scorer,
+                feature_names=config_db.input_fields,
             )
-            for i, name in enumerate(config_db.input_fields)
+            return explainer.explain(X_background, y_dummy, n_repeats=n_repeats, kind="difference")
+
+        explanation = await asyncio.to_thread(_run_importance)
+
+        f_names = explanation.data["feature_names"]
+        f_importance = explanation.data["feature_importance"][0]
+        importances = {
+            f_names[i]: AnomalyFeatureImportanceValue(
+                mean=round(float(f_importance[i]["mean"]), 6),
+                std=round(float(f_importance[i]["std"]), 6),
+            )
+            for i in range(len(f_names))
         }
 
         ranked = sorted(importances.items(), key=lambda x: x[1].mean, reverse=True)
