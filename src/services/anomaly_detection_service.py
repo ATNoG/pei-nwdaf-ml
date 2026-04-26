@@ -141,7 +141,7 @@ class AnomalyDetectionService:
                 if is_anomaly:
                     num_anomalies += 1
                 expl = None
-                if is_anomaly and explain and X_background is not None:
+                if explain and X_background is not None:
                     try:
                         expl = await self._explain_kernelshap(
                             ae=ae,
