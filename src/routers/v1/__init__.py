@@ -4,6 +4,7 @@ from .training_router import router as training_router
 from .inference_router import router as inference_router
 from .performance_router import router as performance_router
 from .anomaly_router import router as anomaly_router
+from .resources_router import router as resources_router
 from fastapi import APIRouter
 
 router = APIRouter()
@@ -13,3 +14,4 @@ router.include_router(training_router, prefix="/training")
 router.include_router(inference_router, prefix="/inference", tags=["Inference"])
 router.include_router(performance_router, prefix="/performance", tags=["Performance"])
 router.include_router(anomaly_router, prefix="/anomaly", tags=["Anomaly Detection"])
+router.include_router(resources_router, prefix="/resources", tags=["Resources"])

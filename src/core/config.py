@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     KAFKA_ENABLED: bool = True
     KAFKA_DEBOUNCE_SECONDS: int = 30
 
+    # Policy Service integration
+    POLICY_SERVICE_URL: str = "http://policy-service:8788"
+    POLICY_COMPONENT_ID: str = "ml-service"
+    POLICY_ENABLED: bool = False
+    POLICY_FAILOPEN: bool = True
+    POLICY_ROLENAME: str = "ML"
+
     # Kubernetes training
     TRAIN_USE_KUBE: bool = False
     TRAIN_KUBE_HOST: str = ""
@@ -53,6 +60,9 @@ class Settings(BaseSettings):
     TRAIN_KUBE_CA_CERT: str = ""  # base64-encoded PEM CA certificate
     TRAIN_KUBE_NAMESPACE: str = "default"
     TRAIN_KUBE_IMAGE: str = ""
+
+    # Encryption (DH key exchange + AES-256-GCM)
+    ENCRYPTION_ENABLED: bool = False
 
 
 settings = Settings()

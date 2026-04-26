@@ -1,8 +1,9 @@
 """FastAPI dependency injection for shared resources."""
 
-from typing import Generator
+from typing import Any, Generator, Optional
 
 import mlflow
+from fastapi import Request
 from mlflow import MlflowClient
 
 from src.core.config import settings
@@ -29,3 +30,12 @@ def get_mlflow_client() -> Generator[MLflowService, None, None]:
         yield MLflowService(client, config_service)
     finally:
         db.close()
+
+
+async def get_policy_client(request: Request) -> Optional[Any]:
+    """
+    Get the app-level PolicyClient if policy is enabled.
+
+    Returns None if policy is disabled or not initialized.
+    """
+    return getattr(request.app.state, "policy_client", None)
