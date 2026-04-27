@@ -1,6 +1,5 @@
 """Service for evaluating and monitoring model performance per output field."""
 
-import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -787,12 +786,8 @@ class PerformanceService:
             return preds[:, field_idx::num_out].mean(axis=1)
 
         scorer = _make_alibi_scorer(metric, self._compute_score)
-
-        def _run_importance() -> object:
-            explainer = PermutationImportance(predictor=predict_fn, score_fns=scorer, feature_names=config.input_fields)
-            return explainer.explain(X_2d, y_1d, n_repeats=n_repeats, kind="difference")
-
-        explanation = await asyncio.to_thread(_run_importance)
+        explainer = PermutationImportance(predictor=predict_fn, score_fns=scorer, feature_names=config.input_fields)
+        explanation = explainer.explain(X_2d, y_1d, n_repeats=n_repeats, kind="difference")
 
         f_names = explanation.data["feature_names"]
         f_importance = explanation.data["feature_importance"][0]
