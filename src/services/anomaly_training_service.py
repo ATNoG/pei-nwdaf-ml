@@ -437,6 +437,13 @@ class AnomalyTrainingService:
             # Store threshold in DB
             self.anomaly_config_service.update_threshold(model_id, threshold_value)
 
+            # Store scaled training data for explainability (KernelSHAP background + PI)
+            with tempfile.TemporaryDirectory() as tmpdir:
+                bg_path = os.path.join(tmpdir, "background.npz")
+                np.savez(bg_path, X_background=X_scaled)
+                mlflow.log_artifact(bg_path, artifact_path="background")
+            logger.info(f"Stored anomaly background ({len(X_scaled)} samples) as MLflow artifact")
+
             # Log model to MLflow
             mlflow.pytorch.log_model(
                 pytorch_model=ae.model,

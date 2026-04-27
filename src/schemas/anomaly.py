@@ -148,6 +148,53 @@ class AnomalyDetectionRequest(BaseModel):
         gt=0,
         description="How far back to fetch data (seconds, default 30min)",
     )
+    explain: bool = Field(
+        False,
+        description="If true, compute KernelSHAP local attributions for each anomalous window. "
+                    "Significantly slower (~200 model calls per anomalous window). "
+                    "Requires the model to have been retrained after explainability support was added.",
+    )
+
+
+class AnomalyLocalExplanation(BaseModel):
+    """KernelSHAP local explanation for a single anomalous window."""
+
+    model_id: str
+    method: str = Field("kernelshap", description="Explainer used")
+    cell_id: int
+    ip_src: str
+    window_start_time: int
+    reconstruction_error: float
+    attributions: dict[str, float] = Field(
+        ...,
+        description="Per-feature SHAP contribution to reconstruction error. "
+                    "Positive = feature drove error up (anomaly driver). "
+                    "Negative = feature drove error down. "
+                    "Sum of attributions ≈ reconstruction_error - baseline.",
+    )
+    baseline: float = Field(
+        ..., description="E[f(X)] — expected reconstruction error over training background"
+    )
+    computed_at: datetime
+
+
+class AnomalyFeatureImportanceValue(BaseModel):
+    """Mean and std of permutation importance across repeats."""
+
+    mean: float = Field(..., description="Mean reconstruction error degradation across n_repeats shuffles")
+    std: float = Field(..., description="Std deviation across repeats — high std = noisy estimate")
+
+
+class AnomalyFeatureImportanceResponse(BaseModel):
+    """Permutation importance result for an anomaly model."""
+
+    model_id: str
+    importances: dict[str, AnomalyFeatureImportanceValue] = Field(
+        ...,
+        description="Per-feature importance. Positive mean = shuffling this feature "
+                    "worsened reconstruction: feature is important to the model.",
+    )
+    computed_at: datetime | None
 
 
 class WindowScore(BaseModel):
@@ -158,6 +205,10 @@ class WindowScore(BaseModel):
         ..., description="Reconstruction error for this window"
     )
     is_anomaly: bool = Field(..., description="Whether error exceeds the threshold")
+    explanation: AnomalyLocalExplanation | None = Field(
+        None,
+        description="KernelSHAP local explanation. Only populated for anomalous windows when explain=True.",
+    )
 
 
 class IPAnomalyResult(BaseModel):

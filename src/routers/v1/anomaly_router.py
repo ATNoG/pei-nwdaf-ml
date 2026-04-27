@@ -10,6 +10,7 @@ from src.schemas.anomaly import (
     AnomalyDetectionRequest,
     AnomalyDetectionResult,
     AnomalyDetectionSummary,
+    AnomalyFeatureImportanceResponse,
     AnomalyModelCreate,
     AnomalyModelDetail,
     AnomalyModelMeta,
@@ -209,6 +210,42 @@ async def get_anomaly_model(
     )
 
 
+@router.get("/models/{model_id}/importance", response_model=AnomalyFeatureImportanceResponse)
+async def get_anomaly_importance(
+    model_id: str,
+    detection_service: AnomalyDetectionService = Depends(get_anomaly_detection_service),
+) -> AnomalyFeatureImportanceResponse:
+    """Return cached permutation importance for an anomaly model."""
+    result = detection_service.get_cached_importance(model_id)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No importance data for '{model_id}'. Run POST /anomaly/models/{model_id}/importance first.",
+        )
+    return result
+
+
+@router.post("/models/{model_id}/importance", response_model=AnomalyFeatureImportanceResponse)
+async def trigger_anomaly_importance(
+    model_id: str,
+    detection_service: AnomalyDetectionService = Depends(get_anomaly_detection_service),
+) -> AnomalyFeatureImportanceResponse:
+    """
+    Compute and cache permutation importance for an anomaly model.
+
+    Loads the scaled training background from the MLflow artifact stored at training time,
+    runs alibi PermutationImportance (n_repeats=20), and caches the result as MLflow tags.
+    The model must have been retrained after explainability support was added.
+    """
+    try:
+        return await detection_service.compute_permutation_importance(model_id)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        logger.error(f"Importance computation failed for anomaly model '{model_id}': {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/models/{model_id}", status_code=204)
 async def delete_anomaly_model(
     model_id: str,
@@ -343,7 +380,7 @@ async def run_anomaly_detection(
     """Run anomaly detection for all IPs in a cell using a single model."""
     try:
         return await detection_service.detect(
-            request.cell_id, request.model_id, request.lookback_seconds
+            request.cell_id, request.model_id, request.lookback_seconds, request.explain
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
