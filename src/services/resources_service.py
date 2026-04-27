@@ -97,13 +97,13 @@ def get_pod_metrics(namespace: str) -> dict[str, tuple[str | None, str | None]]:
 
 
 def get_job_alloc(
-    kube, model_id: str, namespace: str
+    kube, model_id: str, job_id: str, namespace: str
 ) -> tuple[str | None, str | None, str | None, str | None]:
     """Return (cpu_request, memory_request, cpu_limit, memory_limit) from K8s job spec."""
     if not kube:
         return None, None, None, None
     try:
-        k8s_job = kube._kube_client.get_job(f"ml-train-{model_id}", namespace)
+        k8s_job = kube._kube_client.get_job(f"ml-train-{model_id}-{job_id[:8]}", namespace)
         if not k8s_job:
             return None, None, None, None
         res = k8s_job.spec.template.spec.containers[0].resources
@@ -145,7 +145,7 @@ def list_active_job_usage(db: Session) -> list[ResourceUsageEntry]:
     entries: list[ResourceUsageEntry] = []
 
     for job in db.query(TrainingJobDB).filter(TrainingJobDB.status.in_(active)).all():
-        cpu_req, mem_req, cpu_lim, mem_lim = get_job_alloc(kube, job.model_id, namespace)
+        cpu_req, mem_req, cpu_lim, mem_lim = get_job_alloc(kube, job.model_id, job.job_id, namespace)
         cpu_use, mem_use = get_job_usage(job.model_id, pod_metrics)
         entries.append(ResourceUsageEntry(
             job_id=job.job_id, model_id=job.model_id, job_type="forecast",
@@ -160,7 +160,7 @@ def list_active_job_usage(db: Session) -> list[ResourceUsageEntry]:
         .filter(AnomalyTrainingJobDB.status.in_(active))
         .all()
     ):
-        cpu_req, mem_req, cpu_lim, mem_lim = get_job_alloc(kube, job.model_id, namespace)
+        cpu_req, mem_req, cpu_lim, mem_lim = get_job_alloc(kube, job.model_id, job.job_id, namespace)
         cpu_use, mem_use = get_job_usage(job.model_id, pod_metrics)
         entries.append(ResourceUsageEntry(
             job_id=job.job_id, model_id=job.model_id, job_type="anomaly",

@@ -318,7 +318,7 @@ class TrainingService:
         kube = get_kube_training_service()
         if kube:
             try:
-                kube.cancel(job.model_id)
+                kube.cancel(job.model_id, job_id)
             except Exception as e:
                 logger.error(f"Failed to delete K8s job for {job_id}: {e}")
             finally:
