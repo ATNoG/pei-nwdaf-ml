@@ -1,7 +1,9 @@
 """Service for running anomaly detection."""
 
+import asyncio
+import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 import mlflow
 import numpy as np
@@ -10,6 +12,9 @@ from mlflow.tracking import MlflowClient
 from src.models.autoencoder import Autoencoder
 from src.schemas.anomaly import (
     AnomalyDetectionResult,
+    AnomalyFeatureImportanceResponse,
+    AnomalyFeatureImportanceValue,
+    AnomalyLocalExplanation,
     WindowScore,
 )
 from src.services.anomaly_config_service import AnomalyConfigService
@@ -17,9 +22,11 @@ from src.services.data_storage_client import DataStorageClient
 
 logger = logging.getLogger(__name__)
 
+_background_cache: dict[tuple, np.ndarray] = {}
+
 
 class AnomalyDetectionService:
-    """Service for running per-IP anomaly detection on a cell."""
+    """Service for running anomaly detection on tag-filtered data."""
 
     def __init__(
         self,
@@ -30,7 +37,7 @@ class AnomalyDetectionService:
         self.anomaly_config_service = anomaly_config_service
 
     async def detect_for_tags(
-        self, tags, model_id: str, lookback_seconds: int = 1800
+        self, tags, model_id: str, lookback_seconds: int = 1800, explain: bool = False
     ) -> AnomalyDetectionResult:
         """Run anomaly detection using tag filters. tags can be Tags schema or plain dict."""
         import time
@@ -56,9 +63,16 @@ class AnomalyDetectionService:
             raise ValueError(f"Anomaly model '{model_id}' has not been trained yet (no threshold)")
 
         config = self.anomaly_config_service.config_from_db(config_db)
-        ae, scaler_mean, scaler_std = self._load_model_and_scaler(
-            model_id, len(config.input_fields), config.hidden_size
+        ae, scaler_mean, scaler_std = await asyncio.to_thread(
+            self._load_model_and_scaler, model_id, len(config.input_fields), config.hidden_size
         )
+
+        X_background = None
+        if explain:
+            try:
+                X_background = await asyncio.to_thread(self._load_background, model_id)
+            except Exception as e:
+                logger.warning("Could not load KernelSHAP background for model %s: %s", model_id, e)
 
         end_ts = int(time.time())
         start_ts = end_ts - lookback_seconds
@@ -112,15 +126,32 @@ class AnomalyDetectionService:
 
         scores = []
         num_anomalies = 0
-        for ts, err in zip(timestamps, errors):
+        anomalous_indices = []
+        for i, (ts, err) in enumerate(zip(timestamps, errors)):
             is_anomaly = float(err) > config_db.threshold_value
             if is_anomaly:
                 num_anomalies += 1
+                anomalous_indices.append(i)
             scores.append(WindowScore(
                 window_start_time=ts,
                 reconstruction_error=float(err),
                 is_anomaly=is_anomaly,
             ))
+
+        if explain and X_background is not None and anomalous_indices:
+            try:
+                explanations = await asyncio.to_thread(
+                    self._run_shap_batch,
+                    ae, X_background,
+                    X_scaled[anomalous_indices],
+                    [timestamps[i] for i in anomalous_indices],
+                    [float(errors[i]) for i in anomalous_indices],
+                    config.input_fields, model_id,
+                )
+                for idx, expl in zip(anomalous_indices, explanations):
+                    scores[idx] = scores[idx].model_copy(update={"explanation": expl})
+            except Exception as e:
+                logger.warning("KernelSHAP batch failed for model %s: %s", model_id, e)
 
         return AnomalyDetectionResult(
             model_id=model_id,
@@ -150,7 +181,6 @@ class AnomalyDetectionService:
         ae = Autoencoder(input_size=num_features, hidden_size=hidden_size)
         ae.model = loaded_net
 
-        # Load scaler
         scaler_path = mlflow.artifacts.download_artifacts(
             run_id=latest.run_id, artifact_path="scaler/scaler.npz"
         )
@@ -160,3 +190,145 @@ class AnomalyDetectionService:
 
         logger.info(f"Loaded anomaly model {model_id} v{latest.version} with scaler")
         return ae, scaler_mean, scaler_std
+
+    def _load_background(self, model_id: str) -> np.ndarray:
+        """Load KernelSHAP background from MLflow artifact, with in-memory cache."""
+        client = MlflowClient()
+        versions = client.get_latest_versions(model_id, stages=["None"])
+        if not versions:
+            raise ValueError(f"No trained version found for anomaly model '{model_id}'")
+        latest = max(versions, key=lambda v: int(v.version))
+        cache_key = (model_id, latest.run_id)
+        if cache_key in _background_cache:
+            return _background_cache[cache_key]
+        bg_path = mlflow.artifacts.download_artifacts(
+            run_id=latest.run_id, artifact_path="background/background.npz"
+        )
+        X_background = np.load(bg_path)["X_background"].astype(np.float32)
+        _background_cache[cache_key] = X_background
+        logger.info("Loaded KernelSHAP background for model %s - %d samples", model_id, len(X_background))
+        return X_background
+
+    def _run_shap_batch(
+        self,
+        ae: Autoencoder,
+        X_background: np.ndarray,
+        X_anomalous: np.ndarray,
+        timestamps: list[int],
+        errors: list[float],
+        input_fields: list[str],
+        model_id: str,
+        n_samples: int = 200,
+    ) -> list[AnomalyLocalExplanation]:
+        """Fit KernelSHAP once, explain all anomalous windows. Runs synchronously in thread pool."""
+        from alibi.explainers import KernelShap
+
+        def predict_fn(X: np.ndarray) -> np.ndarray:
+            return ae.score(X)
+
+        explainer = KernelShap(predict_fn, feature_names=input_fields)
+        explainer.fit(X_background)
+
+        results = []
+        for x, ts, err in zip(X_anomalous, timestamps, errors):
+            explanation = explainer.explain(x[np.newaxis], nsamples=n_samples)
+            shap_values = explanation.data["shap_values"][0][0]
+            expected_value = float(explanation.data["expected_value"][0])
+            attributions = {
+                name: round(float(v), 6)
+                for name, v in zip(input_fields, shap_values)
+            }
+            logger.info(
+                "KernelSHAP anomaly model=%s ts=%d baseline=%.4f attributions=%s",
+                model_id, ts, expected_value,
+                {k: v for k, v in sorted(attributions.items(), key=lambda x: abs(x[1]), reverse=True)},
+            )
+            results.append(AnomalyLocalExplanation(
+                model_id=model_id,
+                window_start_time=ts,
+                reconstruction_error=err,
+                attributions=attributions,
+                baseline=round(expected_value, 6),
+                computed_at=datetime.now(timezone.utc),
+            ))
+        return results
+
+    async def compute_permutation_importance(
+        self, model_id: str, n_repeats: int = 2
+    ) -> AnomalyFeatureImportanceResponse:
+        """Compute permutation importance using training-time background artifact."""
+        from alibi.explainers import PermutationImportance
+
+        config_db = self.anomaly_config_service.get_config(model_id)
+        if config_db is None or config_db.threshold_value is None:
+            raise ValueError(f"Model '{model_id}' not found or not trained")
+
+        ae, _, _ = await asyncio.to_thread(
+            self._load_model_and_scaler,
+            model_id, len(config_db.input_fields), config_db.hidden_size
+        )
+        X_background = await asyncio.to_thread(self._load_background, model_id)
+
+        def predict_fn(X: np.ndarray) -> np.ndarray:
+            return ae.score(X)
+
+        def scorer(y_true, y_pred):
+            return -float(np.mean(y_pred))
+
+        scorer.__name__ = "reconstruction_error"
+        y_dummy = np.zeros(len(X_background))
+
+        def _run_importance() -> object:
+            explainer = PermutationImportance(
+                predictor=predict_fn,
+                score_fns=scorer,
+                feature_names=config_db.input_fields,
+            )
+            return explainer.explain(X_background, y_dummy, n_repeats=n_repeats, kind="difference")
+
+        explanation = await asyncio.to_thread(_run_importance)
+
+        f_names = explanation.data["feature_names"]
+        f_importance = explanation.data["feature_importance"][0]
+        importances = {
+            f_names[i]: AnomalyFeatureImportanceValue(
+                mean=round(float(f_importance[i]["mean"]), 6),
+                std=round(float(f_importance[i]["std"]), 6),
+            )
+            for i in range(len(f_names))
+        }
+
+        ranked = sorted(importances.items(), key=lambda x: x[1].mean, reverse=True)
+        logger.info("Permutation importance for anomaly model '%s' (n_repeats=%d):", model_id, n_repeats)
+        for name, val in ranked:
+            logger.info("  %-30s mean=%+.6f  std=%.6f", name, val.mean, val.std)
+
+        computed_at = datetime.now(timezone.utc)
+        client = MlflowClient()
+        client.set_registered_model_tag(
+            model_id, "anomaly_importance",
+            json.dumps({k: {"mean": v.mean, "std": v.std} for k, v in importances.items()})
+        )
+        client.set_registered_model_tag(model_id, "anomaly_importance_at", computed_at.isoformat())
+
+        return AnomalyFeatureImportanceResponse(
+            model_id=model_id, importances=importances, computed_at=computed_at
+        )
+
+    def get_cached_importance(self, model_id: str) -> AnomalyFeatureImportanceResponse | None:
+        """Read cached permutation importance from MLflow tags."""
+        try:
+            client = MlflowClient()
+            rm = client.get_registered_model(model_id)
+            raw = rm.tags.get("anomaly_importance")
+            at_str = rm.tags.get("anomaly_importance_at")
+            if not raw:
+                return None
+            return AnomalyFeatureImportanceResponse(
+                model_id=model_id,
+                importances=json.loads(raw),
+                computed_at=datetime.fromisoformat(at_str) if at_str else None,
+            )
+        except Exception as e:
+            logger.warning("Failed to read cached importance for model %s: %s", model_id, e)
+            return None

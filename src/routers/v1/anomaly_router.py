@@ -9,6 +9,7 @@ from src.core.dependencies import get_db
 from src.schemas.anomaly import (
     AnomalyDetectionRequest,
     AnomalyDetectionSummary,
+    AnomalyFeatureImportanceResponse,
     AnomalyModelCreate,
     AnomalyModelDetail,
     AnomalyModelMeta,
@@ -366,11 +367,12 @@ async def run_anomaly_detection(
 
     models_meta: dict[str, AnomalyModelMeta] = {}
     anomaly_counts: dict[str, str] = {}
+    full_results = []
 
     for model_cfg in candidates:
         try:
             result = await detection_service.detect_for_tags(
-                request.tags, model_cfg.model_id, request.lookback_seconds
+                request.tags, model_cfg.model_id, request.lookback_seconds, request.explain
             )
             models_meta[result.model_id] = AnomalyModelMeta(
                 name=result.model_name,
@@ -379,6 +381,8 @@ async def run_anomaly_detection(
                 window_duration_seconds=result.window_duration_seconds,
             )
             anomaly_counts[result.model_id] = f"{result.num_anomalies}/{result.num_windows}"
+            if request.explain:
+                full_results.append(result)
         except Exception as e:
             logger.warning(f"Model {model_cfg.name} skipped: {e}")
 
@@ -386,4 +390,35 @@ async def run_anomaly_detection(
         tags=request.tags,
         models=models_meta,
         anomaly_counts=anomaly_counts,
+        results=full_results,
     )
+
+
+# ── Explainability ────────────────────────────────────────────────────
+
+
+@router.post("/models/{model_id}/importance", response_model=AnomalyFeatureImportanceResponse)
+async def compute_anomaly_importance(
+    model_id: str,
+    detection_service: AnomalyDetectionService = Depends(get_anomaly_detection_service),
+) -> AnomalyFeatureImportanceResponse:
+    """Compute and cache permutation importance for an anomaly model."""
+    try:
+        return await detection_service.compute_permutation_importance(model_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Permutation importance failed for {model_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/models/{model_id}/importance", response_model=AnomalyFeatureImportanceResponse)
+async def get_anomaly_importance(
+    model_id: str,
+    detection_service: AnomalyDetectionService = Depends(get_anomaly_detection_service),
+) -> AnomalyFeatureImportanceResponse:
+    """Get cached permutation importance for an anomaly model."""
+    result = detection_service.get_cached_importance(model_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No cached importance for model '{model_id}'. Run POST first.")
+    return result

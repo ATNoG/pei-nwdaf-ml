@@ -450,7 +450,12 @@ class AnomalyTrainingService:
             result = mlflow.register_model(model_uri, model_id)
             mlflow.set_tag("model_version", result.version)
 
-            logger.info(f"Anomaly model {model_id} v{result.version} logged")
+            # Store KernelSHAP background for explainability
+            with tempfile.TemporaryDirectory() as tmpdir:
+                bg_path = os.path.join(tmpdir, "background.npz")
+                np.savez(bg_path, X_background=X_scaled)
+                mlflow.log_artifact(bg_path, artifact_path="background")
+            logger.info(f"Anomaly model {model_id} v{result.version} logged - background stored ({len(X_scaled)} samples)")
             return run_id
 
     @staticmethod
