@@ -1,120 +1,71 @@
-# NWDAF ML Service
+# pei-nwdaf-ml
 
-FastAPI service for ML model lifecycle management and performance monitoring on 5G network data.
+ML service for training, inference, and anomaly detection on 5G network data.
 
-## Technologies
+## How it works
 
-- **Python** 3.12
-- **FastAPI** - REST API framework
-- **PyTorch** - model training
-- **MLflow** - model registry and experiment tracking
-- **PostgreSQL** / **MinIO** - persistence and artifact storage
-
-## How It Works
-
-1. Models are registered with a configuration (architecture, input/output fields, window size, lookback/forecast steps)
-2. Training jobs fetch historical windows from the Data Storage API, build sliding sequences and train a PyTorch model, logging results to MLflow
-3. Inference fetches the latest cell data from ClickHouse and runs the elected best model for that field
-4. A background monitoring loop re-scores the best model per output field on a configurable interval; if performance degrades past a threshold, all models for that field are retrained and re-evaluated automatically
-
-## Databases & Integrations
-
-| Service | Role |
-|---|---|
-| **MLflow** | Model registry, experiment tracking, per-field performance tags |
-| **PostgreSQL** | Model configs, training job log, score history |
-| **MinIO** | S3-compatible artifact store for trained model weights |
-| **Data Storage API** | Source of processed ClickHouse windows for training, evaluation, and inference |
-
-## API
-
-Base path: `/v1`
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/fields` | List available output fields. `?include_model_status=true` adds `has_models` flag per field |
-| `GET` | `/models` | List all models. `?include_details=true` adds scores, best-for fields, training status |
-| `POST` | `/models` | Create a new model config |
-| `GET` | `/models/{model_id}` | Get model detail |
-| `DELETE` | `/models/{model_id}` | Delete model from registry and config store |
-| `POST` | `/training/train` | Queue a training job (202 Accepted) |
-| `GET` | `/training/jobs` | List training jobs. `?model_id=` / `?status=` filters |
-| `GET` | `/training/jobs/{job_id}` | Get job detail (status, timestamps, error) |
-| `DELETE` | `/training/jobs/{job_id}` | Cancel a job |
-| `POST` | `/inference` | Run inference for a cell. Omit `model_id` to use the best model |
-| `POST` | `/performance/{field}/evaluate` | Score all models for a field, elect best. `?metric=rmse\|mae\|mape\|r2` |
-| `GET` | `/performance/{field}` | Cached evaluation result (no live scoring) |
-| `GET` | `/performance/{field}/best` | Current best model with baseline score and degradation threshold |
-| `POST` | `/performance/{field}/set-best/{model_id}` | Override best model without re-evaluating |
-| `POST` | `/performance/{field}/monitor` | Re-score best model only; does not change best designation |
-| `GET` | `/performance/{field}/status` | State machine status: state, active jobs, next check time, thresholds |
-| `GET` | `/performance/{field}/history` | Full score measurement history. `?model_id=` filter |
-
-### Model Config Parameters
-
-| Parameter | Type | Description |
-|---|---|---|
-| `architecture` | `ann` \| `lstm` | Model type |
-| `input_fields` | `list[str]` | Fields used as input features |
-| `output_fields` | `list[str]` | Fields to predict |
-| `window_duration_seconds` | int | Time bucket size in seconds (e.g. 60, 300) |
-| `lookback_steps` | int | Number of past windows fed as input |
-| `forecast_steps` | int | Number of future windows predicted |
-| `hidden_size` | int | Hidden layer width (default: 32) |
-
-### Training Job Statuses
-
-`queued -> running -> completed | failed | cancelled`
-
-### Performance MLflow Tags
-
-| Tag | Description |
-|---|---|
-| `best_for:{field}` | `"true"` on the elected best model |
-| `baseline_score:{field}` | Score at election time - degradation reference |
-| `score_for:{field}` | Latest score |
-| `eval_metric:{field}` | Metric used (`rmse` / `mae` / `mape` / `r2`) |
-| `eval_at:{field}` | ISO timestamp of last evaluation |
-
-## Auto-Monitoring Loop
-
-Runs as a background task on startup when `MONITORING_ENABLED=true`. Per-field state machine:
-
-```
-MONITORING --(degraded?)--> RETRAINING --(all jobs done)--> EVALUATING --> MONITORING
-```
-
-- **MONITORING** - re-scores the best model every `MONITORING_INTERVAL_SECONDS`. Triggers retraining if `score > baseline x MONITORING_DEGRADATION_FACTOR`
-- **RETRAINING** - waits for all training jobs to reach a terminal state
-- **EVALUATING** - re-ranks all models and elects a new best
-
-On startup, stale `is_training` locks from crashed runs are automatically cleared.
-
-## Configuration
-
-| Variable | Description |
-|---|---|
-| `MLFLOW_TRACKING_URI` | MLflow server URL |
-| `DATABASE_URL` | PostgreSQL connection string |
-| `DATA_STORAGE_API_URL` | Data Storage service base URL |
-| `DATA_STORAGE_DATA_ENDPOINT` | Processed data endpoint (e.g. `/api/v1/processed`) |
-| `DATA_STORAGE_EXAMPLE_ENDPOINT` | Example schema endpoint |
-| `DATA_STORAGE_CELL_ENDPOINT` | Cell list endpoint |
-| `DATA_STORAGE_EXCLUDED_FIELDS` | Comma-separated metadata fields to exclude from field discovery |
-| `AWS_ACCESS_KEY_ID` | MinIO access key |
-| `AWS_SECRET_ACCESS_KEY` | MinIO secret key |
-| `AWS_S3_ENDPOINT_URL` | MinIO endpoint URL |
-| `MONITORING_ENABLED` | Enable background monitoring loop (default: `true`) |
-| `MONITORING_INTERVAL_SECONDS` | Seconds between monitor checks (default: `300`) |
-| `MONITORING_DEGRADATION_FACTOR` | Score multiplier that triggers retraining (default: `1.5`) |
-| `API_HOST` | Bind address (default: `0.0.0.0`) |
-| `API_PORT` | Port (default: `8060`) |
-| `ML_PORT` | Port (default: `8060`) |
-| `LOG_LEVEL` | Log verbosity (default: `INFO`) |
+- **Forecast models**: ANN/LSTM models trained on windowed ClickHouse data, predict future metric values
+- **Anomaly models**: Autoencoder-based models detect anomalous windows via reconstruction error
+- Training jobs run as Kubernetes Jobs; model weights and scalers stored in MLflow/MinIO
+- A background monitoring loop re-evaluates and retrains forecast models when performance degrades
 
 ## Running
 
 ```bash
 cp .env.example .env
-docker compose up
+docker compose up -d
 ```
+
+Port: `8060`
+
+## API
+
+Base path: `/v1`
+
+### Forecast
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/fields` | List available metric fields |
+| `POST` | `/models` | Create model config |
+| `GET` | `/models` | List models |
+| `GET` | `/models/{id}` | Model detail |
+| `DELETE` | `/models/{id}` | Delete model |
+| `POST` | `/training/train` | Queue training job |
+| `GET` | `/training/jobs` | List jobs |
+| `GET` | `/training/jobs/{id}` | Job detail |
+| `DELETE` | `/training/jobs/{id}` | Cancel job |
+| `POST` | `/inference` | Run inference |
+| `POST` | `/performance/{field}/evaluate` | Score and elect best model |
+| `GET` | `/performance/{field}/best` | Current best model |
+| `GET` | `/performance/{field}/status` | Monitoring state machine status |
+
+### Anomaly
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/anomaly/models` | Create anomaly model config |
+| `GET` | `/anomaly/models` | List anomaly models |
+| `GET` | `/anomaly/models/{id}` | Model detail |
+| `DELETE` | `/anomaly/models/{id}` | Delete model |
+| `POST` | `/anomaly/training/train` | Queue training job |
+| `GET` | `/anomaly/training/jobs` | List jobs |
+| `POST` | `/anomaly/detect` | Run anomaly detection (`explain=true` for SHAP attributions) |
+| `POST` | `/anomaly/models/{id}/importance` | Compute permutation feature importance |
+| `GET` | `/anomaly/models/{id}/importance` | Get cached importance |
+
+## Environment
+
+| Variable | Description |
+|---|---|
+| `MLFLOW_TRACKING_URI` | MLflow server URL |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `DATA_STORAGE_API_URL` | Data Storage base URL |
+| `TRAIN_USE_KUBE` | Run training jobs on Kubernetes (`true`/`false`) |
+| `TRAIN_KUBE_HOST` | Kubernetes API server URL |
+| `TRAIN_KUBE_TOKEN` | Service account token |
+| `TRAIN_KUBE_NAMESPACE` | Kubernetes namespace |
+| `TRAIN_KUBE_IMAGE` | Training worker container image |
+| `MONITORING_ENABLED` | Enable background monitoring loop (default: `true`) |
+| `MONITORING_INTERVAL_SECONDS` | Monitor check interval (default: `300`) |
+| `API_PORT` | Port (default: `8060`) |

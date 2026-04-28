@@ -26,6 +26,9 @@ def mock_inference_service():
     return mock
 
 
+_TAGS = {"snssai_sst": "1", "snssai_sd": "000001", "dnn": "internet", "event": "PERF_DATA"}
+
+
 def _make_success_result():
     """Helper to create a valid inference result dict."""
     return {
@@ -33,7 +36,7 @@ def _make_success_result():
         "model_name": "test_model",
         "model_version": 2,
         "architecture": ArchitectureType.LSTM,
-        "cell_id": 5,
+        "tags": _TAGS,
         "lookback_steps": 30,
         "forecast_steps": 3,
         "window_duration_seconds": 60,
@@ -81,7 +84,7 @@ class TestInferenceRouter:
         try:
             response = client.post(
                 "/v1/inference",
-                json={"output_field": "latency_mean", "model_id": "test-uuid", "cell_id": 5},
+                json={"output_field": "latency_mean", "model_id": "test-uuid", "tags": _TAGS},
             )
 
             assert response.status_code == 200
@@ -90,12 +93,12 @@ class TestInferenceRouter:
             assert data["model_name"] == "test_model"
             assert data["model_version"] == 2
             assert data["architecture"] == "lstm"
-            assert data["cell_id"] == 5
+            assert data["tags"]["snssai_sst"] == "1"
             assert len(data["predictions"]) == 3
             assert data["predictions"][0]["step"] == 1
             assert data["predictions"][0]["values"]["latency_mean"] == 10.0
             mock_inference_service.predict.assert_called_once_with(
-                output_field="latency_mean", cell_id=5, model_id="test-uuid", explain=False
+                output_field="latency_mean", tags=_TAGS, model_id="test-uuid", explain=False
             )
         finally:
             app.dependency_overrides.clear()
@@ -114,7 +117,7 @@ class TestInferenceRouter:
         try:
             response = client.post(
                 "/v1/inference",
-                json={"output_field": "latency_mean", "model_id": "bad-uuid", "cell_id": 0},
+                json={"output_field": "latency_mean", "model_id": "bad-uuid", "tags": _TAGS},
             )
 
             assert response.status_code == 422
@@ -138,7 +141,7 @@ class TestInferenceRouter:
         try:
             response = client.post(
                 "/v1/inference",
-                json={"output_field": "latency_mean", "model_id": "test-uuid", "cell_id": 0},
+                json={"output_field": "latency_mean", "model_id": "test-uuid", "tags": _TAGS},
             )
 
             assert response.status_code == 422
@@ -162,7 +165,7 @@ class TestInferenceRouter:
         try:
             response = client.post(
                 "/v1/inference",
-                json={"output_field": "latency_mean", "model_id": "test-uuid", "cell_id": 5},
+                json={"output_field": "latency_mean", "model_id": "test-uuid", "tags": _TAGS},
             )
 
             assert response.status_code == 500
@@ -184,7 +187,7 @@ class TestInferenceRouter:
         try:
             response = client.post(
                 "/v1/inference",
-                json={"output_field": "latency_mean", "model_id": "test-uuid", "cell_id": 5},
+                json={"output_field": "latency_mean", "model_id": "test-uuid", "tags": _TAGS},
             )
 
             assert response.status_code == 500
@@ -204,30 +207,30 @@ class TestInferenceRouter:
         try:
             response = client.post(
                 "/v1/inference",
-                json={"output_field": "latency_mean", "cell_id": 5},
+                json={"output_field": "latency_mean", "tags": _TAGS},
             )
 
             assert response.status_code == 200
             mock_inference_service.predict.assert_called_once_with(
-                output_field="latency_mean", cell_id=5, model_id=None, explain=False
+                output_field="latency_mean", tags=_TAGS, model_id=None, explain=False
             )
         finally:
             app.dependency_overrides.clear()
 
-    def test_negative_cell_id_422(self, client):
-        """Test that negative cell_id fails FastAPI validation."""
+    def test_missing_tags_422(self, client):
+        """Test that missing tags fails FastAPI validation."""
         response = client.post(
             "/v1/inference",
-            json={"output_field": "latency_mean", "model_id": "test-uuid", "cell_id": -1},
+            json={"output_field": "latency_mean", "model_id": "test-uuid"},
         )
 
         assert response.status_code == 422
 
-    def test_missing_cell_id_422(self, client):
-        """Test that missing cell_id fails FastAPI validation."""
+    def test_missing_required_tag_field_422(self, client):
+        """Test that tags missing required fields (snssai_sst/dnn) fails validation."""
         response = client.post(
             "/v1/inference",
-            json={"output_field": "latency_mean", "model_id": "test-uuid"},
+            json={"output_field": "latency_mean", "tags": {"event": "PERF_DATA"}},
         )
 
         assert response.status_code == 422

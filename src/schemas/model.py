@@ -54,6 +54,10 @@ class ModelConfig(BaseModel):
         ge=4,
         description="Neural network hidden layer size",
     )
+    event: str | None = Field(
+        default=None,
+        description="Optional 5G event type (e.g. 'PERF_DATA'). Auto-derived from fields if omitted.",
+    )
 
 
 class ModelCreate(BaseModel):
@@ -75,6 +79,7 @@ class ModelSummary(BaseModel):
     id: str = Field(..., description="Model ID ")
     name: str = Field(..., description="Model name")
     architecture: ArchitectureType = Field(..., description="Model architecture")
+    event_type: str = Field(..., description="5G event type this model belongs to")
     created_at: datetime|None = Field(
         None, description="Model creation timestamp"
     )
@@ -89,6 +94,7 @@ class ModelSummaryDetail(BaseModel):
     id: str = Field(..., description="Model ID")
     name: str = Field(..., description="Model name")
     architecture: ArchitectureType = Field(..., description="Model architecture")
+    event_type: str = Field(..., description="5G event type this model belongs to")
     created_at: datetime | None = Field(None, description="Model creation timestamp")
     latest_version: int | None = Field(None, description="Latest registered model version number")
     last_trained_at: datetime | None = Field(None, description="When the latest version was registered")
@@ -105,6 +111,7 @@ class ModelDetail(BaseModel):
 
     id: str = Field(..., description="Model ID")
     name: str = Field(..., description="Model name")
+    event_type: str = Field(..., description="5G event type this model belongs to")
     config: ModelConfig = Field(..., description="Full model configuration")
     created_at: datetime|None = Field(None, description="Creation timestamp")
     latest_version: int|None = Field(None, description="Latest version number")

@@ -15,6 +15,7 @@ class AnomalyModelConfigDB(Base):
 
     model_id: Mapped[str] = mapped_column(String, primary_key=True)
     name: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String, nullable=False)
     input_fields: Mapped[list] = mapped_column(JSON, nullable=False)
     window_duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     hidden_size: Mapped[int] = mapped_column(Integer, nullable=False)
