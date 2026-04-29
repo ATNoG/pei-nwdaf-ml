@@ -1,5 +1,6 @@
 """Service for running anomaly detection."""
 
+import asyncio
 import logging
 from collections import defaultdict
 from datetime import datetime
@@ -8,6 +9,7 @@ import mlflow
 import numpy as np
 from mlflow.tracking import MlflowClient
 
+from src.core.config import settings
 from src.models.autoencoder import Autoencoder
 from src.schemas.anomaly import (
     AnomalyDetectionResult,
@@ -18,6 +20,65 @@ from src.services.anomaly_config_service import AnomalyConfigService
 from src.services.data_storage_client import DataStorageClient
 
 logger = logging.getLogger(__name__)
+
+try:
+    from dlt_client import analytics_from_env, inference_from_env as _dlt_inference_from_env
+    _DLT_AVAILABLE = True
+except ImportError:
+    _DLT_AVAILABLE = False
+    logger.debug("dlt-client not installed; anomaly traceability disabled")
+
+_dlt_analytics = None
+_dlt_inference = None
+
+
+def _get_dlt_clients():
+    global _dlt_analytics, _dlt_inference
+    if not _DLT_AVAILABLE or not settings.DLT_ENABLED:
+        return None, None
+    if _dlt_analytics is None:
+        try:
+            _dlt_analytics = analytics_from_env()
+            _dlt_inference = _dlt_inference_from_env()
+        except Exception as exc:
+            logger.warning("DLT client init failed (non-fatal): %s", exc)
+            return None, None
+    return _dlt_analytics, _dlt_inference
+
+
+async def _dlt_trace_anomaly(
+    model_run_id, model_name, model_version,
+    query_params, data_payload, anomaly_score, decision,
+    time_range_start, time_range_end,
+):
+    analytics, inference = _get_dlt_clients()
+    if analytics is None:
+        return
+    data_fetch_ref = ""
+    try:
+        data_fetch_ref = await analytics.record_data_fetch(
+            mlflow_run_id=model_run_id or "",
+            model_name=model_name,
+            model_version=str(model_version),
+            query_params=query_params,
+            data_payload=data_payload,
+            time_range_start=time_range_start,
+            time_range_end=time_range_end,
+        )
+    except Exception as exc:
+        logger.warning("DLT record_data_fetch failed (non-fatal): %s", exc)
+    try:
+        await inference.record_inference(
+            mlflow_run_id=model_run_id or "",
+            model_name=model_name,
+            model_version=str(model_version),
+            data_fetch_ref=data_fetch_ref,
+            input_data=data_payload,
+            anomaly_score=anomaly_score,
+            decision=decision,
+        )
+    except Exception as exc:
+        logger.warning("DLT record_inference failed (non-fatal): %s", exc)
 
 
 class AnomalyDetectionService:
@@ -60,7 +121,7 @@ class AnomalyDetectionService:
         config = self.anomaly_config_service.config_from_db(config_db)
 
         # Load trained model and scaler from MLflow
-        ae, scaler_mean, scaler_std = self._load_model_and_scaler(
+        ae, scaler_mean, scaler_std, mlflow_run_id, model_version = self._load_model_and_scaler(
             model_id, len(config.input_fields), config.hidden_size
         )
 
@@ -145,7 +206,7 @@ class AnomalyDetectionService:
                 )
             )
 
-        return AnomalyDetectionResult(
+        result = AnomalyDetectionResult(
             model_id=model_id,
             model_name=config_db.name,
             cell_id=cell_id,
@@ -154,6 +215,26 @@ class AnomalyDetectionService:
             input_fields=config.input_fields,
             results=ip_results,
         )
+
+        if raw_data:
+            max_score = max(
+                (s.reconstruction_error for r in ip_results for s in r.scores),
+                default=0.0,
+            )
+            any_anomaly = any(s.is_anomaly for r in ip_results for s in r.scores)
+            asyncio.create_task(_dlt_trace_anomaly(
+                model_run_id=mlflow_run_id,
+                model_name=config_db.name,
+                model_version=model_version,
+                query_params={"cell_id": cell_id, "lookback_seconds": lookback_seconds},
+                data_payload=raw_data,
+                anomaly_score=max_score,
+                decision="ANOMALY" if any_anomaly else "NORMAL",
+                time_range_start=str(start_ts),
+                time_range_end=str(end_ts),
+            ))
+
+        return result
 
     async def _select_best_model(self, cell_id: int, lookback_seconds: int) -> str:
         """Select the trained model with lowest training loss whose input_fields are available."""
@@ -245,8 +326,11 @@ class AnomalyDetectionService:
 
     def _load_model_and_scaler(
         self, model_id: str, num_features: int, hidden_size: int
-    ) -> tuple[Autoencoder, np.ndarray, np.ndarray]:
-        """Load a trained autoencoder and its scaler from MLflow."""
+    ) -> tuple[Autoencoder, np.ndarray, np.ndarray, str, str]:
+        """Load a trained autoencoder and its scaler from MLflow.
+
+        Returns (ae, scaler_mean, scaler_std, run_id, version).
+        """
         client = MlflowClient()
         versions = client.get_latest_versions(model_id, stages=["None"])
         if not versions:
@@ -268,4 +352,4 @@ class AnomalyDetectionService:
         scaler_std = scaler_data["std"].astype(np.float32)
 
         logger.info(f"Loaded anomaly model {model_id} v{latest.version} with scaler")
-        return ae, scaler_mean, scaler_std
+        return ae, scaler_mean, scaler_std, latest.run_id or "", str(latest.version)
