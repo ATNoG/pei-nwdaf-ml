@@ -185,7 +185,7 @@ class InferenceService:
             model_run_id=model_detail.mlflow_run_id or "",
             model_name=model_detail.name or model_id,
             model_version=model_detail.latest_version,
-            query_params={"cell_id": cell_id, "output_field": output_field, "lookback_seconds": lookback_seconds},
+            query_params={**tags, "output_field": output_field, "lookback_seconds": lookback_seconds},
             data_payload=cell_data,
             anomaly_score=0.0,
             decision="NORMAL",
