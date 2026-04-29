@@ -25,6 +25,7 @@ dependencies = [
     "shap>=0.41.0,<=0.44.1",
     "pei-nwdaf-encryptor @ git+https://github.com/ATNoG/pei-nwdaf-encryptor.git",
     "tenseal>=0.3.14",
+    "dlt-client @ git+https://github.com/ATNoG/pei-nwdaf-comms.git#subdirectory=dlt/dlt-package",
 ]
 
 [project.optional-dependencies]
@@ -32,9 +33,6 @@ dev = [
     "pytest>=9.0.1",
     "pytest-asyncio>=0.24.0",
     "testcontainers>=4.0.0",
-]
-dlt = [
-    "dlt-client @ git+https://github.com/ATNoG/pei-nwdaf-comms.git#subdirectory=dlt/dlt-package",
 ]
 
 [tool.uv]
