@@ -49,6 +49,9 @@ services:
       - TRAIN_KUBE_NAMESPACE=${TRAIN_KUBE_NAMESPACE}
       - TRAIN_KUBE_IMAGE=${TRAIN_KUBE_IMAGE}
       - ENCRYPTION_ENABLED=${ENCRYPTION_ENABLED:-false}
+      - DLT_ENABLED=${DLT_ENABLED:-false}
+      - DLT_SIDECAR_URL=${DLT_SIDECAR_URL:-http://fabric-client-sidecar:8080}
+      - DLT_TIMEOUT=${DLT_TIMEOUT:-10.0}
     networks:
       - nwdaf-ml
       - nwdaf-network

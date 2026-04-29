@@ -21,7 +21,7 @@ class KubeTrainingService:
 
     def to_kube(self, model_id: str, job_id: str, resources: JobResources | None, training_type: str):
         spec = JobSpec(
-            name=f"ml-train-{model_id}",
+            name=f"ml-train-{model_id}-{job_id[:8]}",
             namespace=settings.TRAIN_KUBE_NAMESPACE,
             image=settings.TRAIN_KUBE_IMAGE,
             labels={"app": "ml-train", "model-id": model_id},
@@ -46,12 +46,12 @@ class KubeTrainingService:
         )
         self._kube_client.create_job(spec)
 
-    def cancel(self, model_id: str):
-        self._kube_client.delete_job(f"ml-train-{model_id}", settings.TRAIN_KUBE_NAMESPACE)
+    def cancel(self, model_id: str, job_id: str):
+        self._kube_client.delete_job(f"ml-train-{model_id}-{job_id[:8]}", settings.TRAIN_KUBE_NAMESPACE)
 
-    def is_job_dead(self, model_id: str) -> bool:
+    def is_job_dead(self, model_id: str, job_id: str) -> bool:
         """Returns True if the K8s job has failed or no longer exists."""
-        job = self._kube_client.get_job(f"ml-train-{model_id}", settings.TRAIN_KUBE_NAMESPACE)
+        job = self._kube_client.get_job(f"ml-train-{model_id}-{job_id[:8]}", settings.TRAIN_KUBE_NAMESPACE)
         if job is None:
             return True
         conditions = job.status.conditions or []

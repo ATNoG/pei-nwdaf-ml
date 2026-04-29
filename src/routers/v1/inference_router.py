@@ -46,7 +46,7 @@ async def run_inference(
     try:
         result = await inference_service.predict(
             output_field=request.output_field,
-            cell_id=request.cell_id,
+            tags=request.tags.to_filter_dict(),
             model_id=request.model_id,
             explain=request.explain,
         )

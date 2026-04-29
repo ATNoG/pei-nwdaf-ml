@@ -29,6 +29,7 @@ def sample_model_detail(sample_model_config):
         id="test-uuid",
         name="test_model",
         config=sample_model_config,
+        event_type="PERF_DATA",
         created_at=None,
         latest_version=2,
         last_trained_at=None,
@@ -61,7 +62,7 @@ def mock_mlflow_service():
     mock.ml_config_service.list_all.return_value = [mock_config]
     # Tag the model as best for "latency_mean"
     mock_rm = MagicMock()
-    mock_rm.tags = {"best_for:latency_mean": "true"}
+    mock_rm.tags = {"best_for:PERF_DATA:latency_mean": "true"}
     mock.client.get_registered_model.return_value = mock_rm
     return mock
 
@@ -69,7 +70,7 @@ def mock_mlflow_service():
 @pytest.fixture
 def mock_data_storage_client():
     mock = MagicMock()
-    mock.fetch_cell_data = AsyncMock(return_value=[])
+    mock.fetch_data = AsyncMock(return_value=[])
     return mock
 
 
@@ -98,7 +99,7 @@ class TestInferenceServicePredict:
         forecast_steps = config.forecast_steps
 
         mock_mlflow_service.get_model.return_value = sample_model_detail
-        mock_data_storage_client.fetch_cell_data = AsyncMock(
+        mock_data_storage_client.fetch_data = AsyncMock(
             return_value=sample_cell_data
         )
 
@@ -118,14 +119,16 @@ class TestInferenceServicePredict:
             mock_load.return_value = MagicMock()
 
             result = await inference_service.predict(
-                output_field="latency_mean", cell_id=5, model_id="test-uuid"
+                output_field="latency_mean",
+                tags={"snssai_sst": "1", "dnn": "internet", "event": "PERF_DATA"},
+                model_id="test-uuid",
             )
 
         assert result["model_id"] == "test-uuid"
         assert result["model_name"] == "test_model"
         assert result["model_version"] == 2
         assert result["architecture"] == ArchitectureType.LSTM
-        assert result["cell_id"] == 5
+        assert result["tags"]["snssai_sst"] == "1"
         assert result["lookback_steps"] == config.lookback_steps
         assert result["forecast_steps"] == forecast_steps
         assert len(result["predictions"]) == forecast_steps
@@ -136,7 +139,7 @@ class TestInferenceServicePredict:
         """Test that passing an unknown model_id raises ValueError."""
         with pytest.raises(ValueError, match="does not predict field"):
             await inference_service.predict(
-                output_field="latency_mean", cell_id=0, model_id="bad-uuid"
+                output_field="latency_mean", tags={"snssai_sst": "1", "dnn": "internet", "event": "PERF_DATA"}, model_id="bad-uuid"
             )
 
     async def test_predict_model_not_trained(
@@ -148,7 +151,7 @@ class TestInferenceServicePredict:
 
         with pytest.raises(ValueError, match="no trained versions"):
             await inference_service.predict(
-                output_field="latency_mean", cell_id=0, model_id="test-uuid"
+                output_field="latency_mean", tags={"snssai_sst": "1", "dnn": "internet", "event": "PERF_DATA"}, model_id="test-uuid"
             )
 
     async def test_predict_no_data(
@@ -160,7 +163,7 @@ class TestInferenceServicePredict:
     ):
         """Test that empty cell data raises ValueError."""
         mock_mlflow_service.get_model.return_value = sample_model_detail
-        mock_data_storage_client.fetch_cell_data = AsyncMock(return_value=[])
+        mock_data_storage_client.fetch_data = AsyncMock(return_value=[])
 
         mock_model = MagicMock()
         with patch(
@@ -168,9 +171,9 @@ class TestInferenceServicePredict:
         ), patch("src.services.inference_service.MODEL_REGISTRY") as mock_registry:
             mock_registry.get.return_value = MagicMock(return_value=mock_model)
 
-            with pytest.raises(ValueError, match="No data available"):
+            with pytest.raises(ValueError, match="No data for tags"):
                 await inference_service.predict(
-                    output_field="latency_mean", cell_id=99, model_id="test-uuid"
+                    output_field="latency_mean", tags={"snssai_sst": "1", "dnn": "internet", "event": "PERF_DATA"}, model_id="test-uuid"
                 )
 
     async def test_predict_insufficient_data(
@@ -187,7 +190,7 @@ class TestInferenceServicePredict:
             {"window_start_time": 1000 + i * 60, "rsrp_mean": 1.0}
             for i in range(3)
         ]
-        mock_data_storage_client.fetch_cell_data = AsyncMock(
+        mock_data_storage_client.fetch_data = AsyncMock(
             return_value=sparse_data
         )
 
@@ -199,7 +202,7 @@ class TestInferenceServicePredict:
 
             with pytest.raises(ValueError, match="Insufficient data"):
                 await inference_service.predict(
-                    output_field="latency_mean", cell_id=5, model_id="test-uuid"
+                    output_field="latency_mean", tags={"snssai_sst": "1", "dnn": "internet", "event": "PERF_DATA"}, model_id="test-uuid"
                 )
 
     async def test_predict_model_failure(
@@ -212,7 +215,7 @@ class TestInferenceServicePredict:
     ):
         """Test that model.predict() failure raises RuntimeError."""
         mock_mlflow_service.get_model.return_value = sample_model_detail
-        mock_data_storage_client.fetch_cell_data = AsyncMock(
+        mock_data_storage_client.fetch_data = AsyncMock(
             return_value=sample_cell_data
         )
 
@@ -226,7 +229,7 @@ class TestInferenceServicePredict:
 
             with pytest.raises(RuntimeError, match="Prediction failed"):
                 await inference_service.predict(
-                    output_field="latency_mean", cell_id=5, model_id="test-uuid"
+                    output_field="latency_mean", tags={"snssai_sst": "1", "dnn": "internet", "event": "PERF_DATA"}, model_id="test-uuid"
                 )
 
     async def test_predict_correct_timestamp_calculation(
@@ -240,7 +243,7 @@ class TestInferenceServicePredict:
         """Test that timestamps include the buffer window."""
         config = sample_model_detail.config
         mock_mlflow_service.get_model.return_value = sample_model_detail
-        mock_data_storage_client.fetch_cell_data = AsyncMock(
+        mock_data_storage_client.fetch_data = AsyncMock(
             return_value=sample_cell_data
         )
 
@@ -261,7 +264,7 @@ class TestInferenceServicePredict:
             mock_registry.get.return_value = MagicMock(return_value=mock_model)
 
             await inference_service.predict(
-                output_field="latency_mean", cell_id=5, model_id="test-uuid"
+                output_field="latency_mean", tags={"snssai_sst": "1", "dnn": "internet", "event": "PERF_DATA"}, model_id="test-uuid"
             )
 
             expected_seconds = (

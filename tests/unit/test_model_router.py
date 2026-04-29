@@ -33,6 +33,7 @@ def mock_data_storage_client():
     # By default, validation passes (all fields valid) - use AsyncMock for async methods
     mock.validate_fields = AsyncMock(return_value=(True, []))
     mock.get_available_fields = AsyncMock(return_value=["latency_mean", "rsrp_mean"])
+    mock.get_fields_with_events = AsyncMock(return_value={"latency_mean": ["PERF_DATA"], "rsrp_mean": ["PERF_DATA"]})
     return mock
 
 
@@ -47,6 +48,7 @@ class TestModelRouterEndpoints:
                 id="uuid-1",
                 name="model_one",
                 architecture=ArchitectureType.LSTM,
+                event_type="PERF_DATA",
                 created_at=datetime(2024, 2, 1),
                 latest_version=1,
             )
@@ -81,6 +83,7 @@ class TestModelRouterEndpoints:
         mock_mlflow_service.create_model.return_value = ModelDetail(
             id="uuid-123",
             name="test_model",
+            event_type="PERF_DATA",
             config=ModelConfig(
                 architecture=ArchitectureType.LSTM,
                 input_fields=["latency_mean"],
@@ -227,6 +230,7 @@ class TestModelRouterEndpoints:
         mock_mlflow_service.get_model.return_value = ModelDetail(
             id="uuid-123",
             name="test_model",
+            event_type="PERF_DATA",
             config=ModelConfig(
                 architecture=ArchitectureType.LSTM,
                 input_fields=["latency_mean"],

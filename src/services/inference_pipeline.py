@@ -1,7 +1,7 @@
 """Kafka-driven inference pipeline.
 
-Subscribes to processed network data and runs anomaly detection
-for every cell that receives new data.
+Subscribes to processed network data and runs anomaly detection + forecasting
+for every unique tag combination (snssai/dnn/event) that receives new data.
 """
 
 import asyncio
@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timezone
 
 from src.core.config import settings
-from src.schemas.anomaly import AnomalyDetectionResult, AnomalyDetectionSummary, AnomalyModelMeta
+from src.schemas.anomaly import AnomalyModelMeta
 from src.services.anomaly_detection_service import AnomalyDetectionService
 from src.services.inference_service import InferenceService
 
@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 
 class InferencePipeline:
-    # Max concurrent inference calls to data-storage
     _MAX_CONCURRENT = 2
 
     def __init__(
@@ -31,46 +30,51 @@ class InferencePipeline:
         self.bridge = bridge
         self.anomaly_detection_service = anomaly_detection_service
         self.inference_service = inference_service
-        self._last_run: dict[int, float] = {}
+        self._last_run: dict[tuple, float] = {}
         self._semaphore = asyncio.Semaphore(self._MAX_CONCURRENT)
 
     def on_message(self, data: dict) -> dict:
-        """Kafka bind callback - schedules async processing."""
+        """Kafka bind callback — schedules async processing per tag combo."""
         try:
             content = json.loads(data["content"])
         except (KeyError, json.JSONDecodeError) as e:
             logger.warning("Inference pipeline: bad message: %s", e)
             return data
 
-        cell_id = content.get("cell_index") or content.get("cell_id")
-        if cell_id is None:
+        tags = content.get("tags")
+        if not tags:
             return data
 
-        cell_id = int(cell_id)
+        tag_key = tuple(sorted(tags.items()))
         now = time.monotonic()
-        if now - self._last_run.get(cell_id, 0) < settings.KAFKA_DEBOUNCE_SECONDS:
+        if now - self._last_run.get(tag_key, 0) < settings.KAFKA_DEBOUNCE_SECONDS:
             return data
-        self._last_run[cell_id] = now
+        self._last_run[tag_key] = now
 
         loop = asyncio.get_event_loop()
-        loop.create_task(self._process(cell_id))
+        task = loop.create_task(self._process(tags))
+        task.add_done_callback(
+            lambda t: logger.error("_process failed: %s", t.exception()) if t.exception() else None
+        )
         return data
 
-    async def _process(self, cell_id: int):
+    async def _process(self, tags: dict):
         async with self._semaphore:
             results: list[dict] = []
-            all_used_windows: dict[str, dict] = {}
+            event_type = tags.get("event", "")
 
+            # Anomaly: all trained models matching this event_type
             trained_models = [
-                cfg for cfg in self.anomaly_detection_service.anomaly_config_service.list_all()
-                if cfg.threshold_value is not None
+                cfg
+                for cfg in self.anomaly_detection_service.anomaly_config_service.list_all()
+                if cfg.threshold_value is not None and cfg.event_type == event_type
             ]
             models_meta: dict[str, AnomalyModelMeta] = {}
-            ip_anomalies: dict[str, dict[str, str]] = {}
+            anomaly_counts: dict[str, str] = {}
             for model_cfg in trained_models:
                 try:
-                    anomaly = await self.anomaly_detection_service.detect(
-                        cell_id, model_id=model_cfg.model_id
+                    anomaly = await self.anomaly_detection_service.detect_for_tags(
+                        tags=tags, model_id=model_cfg.model_id
                     )
                     models_meta[anomaly.model_id] = AnomalyModelMeta(
                         name=anomaly.model_name,
@@ -78,111 +82,65 @@ class InferencePipeline:
                         threshold=anomaly.threshold_value,
                         window_duration_seconds=anomaly.window_duration_seconds,
                     )
-                    for ip_result in anomaly.results:
-                        ip = ip_result.ip_src
-                        ip_anomalies.setdefault(ip, {})[anomaly.model_id] = (
-                            f"{ip_result.num_anomalies}/{ip_result.num_windows}"
-                        )
+                    anomaly_counts[anomaly.model_id] = f"{anomaly.num_anomalies}/{anomaly.num_windows}"
                 except Exception as e:
-                    logger.warning(
-                        "Anomaly detection skipped for cell %s model %s: %s",
-                        cell_id, model_cfg.name, e
-                    )
+                    logger.warning("Anomaly skipped for model %s: %s", model_cfg.name, e)
+
             if models_meta:
-                summary = AnomalyDetectionSummary(
-                    cell_id=cell_id,
-                    models=models_meta,
-                    ip_anomalies=ip_anomalies,
-                )
-                results.append({"type": "anomaly", "result": summary.model_dump()})
+                results.append({"type": "anomaly", "result": {
+                    "models": {mid: m.model_dump() for mid, m in models_meta.items()},
+                    "anomaly_counts": anomaly_counts,
+                }})
 
-            for output_field in self._get_forecastable_fields():
+            # Forecast: best model per (event_type, output_field)
+            for model_id, field_name in self._get_forecastable_fields(event_type):
                 try:
-                    forecast = await self.inference_service.predict(
-                        output_field=output_field, cell_id=cell_id
+                    forecast = await self.inference_service.predict_for_tags(
+                        output_field=field_name, tags=tags, model_id=model_id
                     )
-
-                    for window in forecast.pop("used_data", []):
-                        ts = str(window.get("window_start_time"))
-                        if ts not in all_used_windows:
-                            all_used_windows[ts] = window
-
-                    results.append(
-                        {"type": "forecast", "result": _serialize_forecast(forecast)}
-                    )
+                    results.append({"type": "forecast", "result": forecast})
                 except Exception as e:
-                    logger.debug(
-                        "Forecast %s skipped for cell %s: %s", output_field, cell_id, e
-                    )
+                    logger.warning("Forecast %s skipped [%s]: %s", field_name, type(e).__name__, e)
 
             if results:
-                used_data = sorted(
-                    all_used_windows.values(),
-                    key=lambda w: w.get("window_start_time", ""),
-                )
+                self._publish(tags, results)
 
-                self._publish(cell_id, results, used_data if used_data else None)
-
-    def _get_forecastable_fields(self) -> list[str]:
-        """Get output_fields that have a best model designated in MLflow."""
-        fields: list[str] = []
+    def _get_forecastable_fields(self, event_type: str) -> list[tuple[str, str]]:
+        """Return (model_id, field_name) pairs designated best for event_type:field."""
+        result: list[tuple[str, str]] = []
+        prefix = f"best_for:{event_type}:"
         try:
-            for (
-                config
-            ) in self.inference_service.mlflow_service.ml_config_service.list_all():
+            for config in self.inference_service.mlflow_service.ml_config_service.list_all():
                 rm = self.inference_service.mlflow_service.client.get_registered_model(
                     config.model_id
                 )
                 for tag_key, tag_val in rm.tags.items():
-                    if tag_key.startswith("best_for:") and tag_val == "true":
-                        field = tag_key.removeprefix("best_for:")
-                        if field not in fields:
-                            fields.append(field)
+                    if tag_key.startswith(prefix) and tag_val == "true":
+                        field = tag_key.removeprefix(prefix)
+                        if (config.model_id, field) not in result:
+                            result.append((config.model_id, field))
         except Exception as e:
             logger.warning("Failed to discover forecastable fields: %s", e)
-        return fields
+        return result
 
-    def _publish(self, cell_id: int, results: list[dict], used_data: list[dict] | None):
-
+    def _publish(self, tags: dict, results: list[dict]):
         tmp = {
-            "cell_id": cell_id,
+            "tags": tags,
             "results": results,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        if used_data is not None:
-            tmp["used_data"] = used_data
         msg = json.dumps(tmp)
         self.bridge.produce(settings.KAFKA_OUTPUT_TOPIC, msg)
         logger.info(
-            "Published %d result(s) for cell %s to %s",
+            "Published %d result(s) for tags %s to %s",
             len(results),
-            cell_id,
+            tags,
             settings.KAFKA_OUTPUT_TOPIC,
         )
 
 
-def _serialize_anomaly(result: AnomalyDetectionResult) -> dict:
-    """Convert AnomalyDetectionResult to a JSON-safe dict."""
-    return result.model_dump()
-
-
-def _serialize_forecast(result: dict) -> dict:
-    """Convert forecast result dict (with Pydantic objects) to JSON-safe dict."""
-    result = result.copy()
-    if "predictions" in result:
-        result["predictions"] = [
-            p.model_dump() if hasattr(p, "model_dump") else p
-            for p in result["predictions"]
-        ]
-    return result
-
-
 def setup_inference_pipeline():
-    """Start the Kafka inference pipeline in a daemon thread.
-
-    The thread runs its own asyncio event loop so that a Kafka
-    failure does not bring down the FastAPI server.
-    """
+    """Start the Kafka inference pipeline in a daemon thread."""
     from threading import Thread
 
     def _worker():
