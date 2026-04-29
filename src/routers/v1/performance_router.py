@@ -199,9 +199,8 @@ async def trigger_model_importance(
     Loads the model, fetches data, runs alibi PermutationImportance, stores results
     as MLflow tags and returns the result. Use GET /importance to read cached results.
     """
-    cells = await performance_service.data_storage_client.get_known_cells()
     try:
-        return await performance_service.trigger_feature_importance(field_name, model_id, cells)
+        return await performance_service.trigger_feature_importance(field_name, model_id)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:

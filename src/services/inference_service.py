@@ -93,35 +93,23 @@ class InferenceService:
         self.data_storage_client = data_storage_client
 
     async def predict(
-        self, output_field: str, cell_id: int, model_id: str | None = None, explain: bool = False
+        self, output_field: str, tags: dict, model_id: str | None = None, explain: bool = False
     ) -> dict:
-        """
-        Run inference for a single cell using a trained model.
-
-        Args:
-            model_id: UUID of the model.
-            cell_id: Cell index to predict for.
-
-        Returns:
-            Dict containing model info and structured predictions.
-
-        Raises:
-            ValueError: If model not found, not trained, or insufficient data.
-            RuntimeError: If prediction fails.
-        """
+        """Run inference using tag filters (snssai/dnn/event). explain=True adds KernelSHAP."""
         configs = self.mlflow_service.ml_config_service.list_all()
+        event_type = tags.get("event", "") if isinstance(tags, dict) else ""
 
-        best_id = next(
-            (
-                config.model_id
-                for config in configs
-                if self.mlflow_service.client.get_registered_model(
-                    config.model_id
-                ).tags.get(f"best_for:{output_field}")
-                == "true"
-            ),
-            None,
-        )
+        # Tags use format: best_for:{event_type}:{field} = "true"
+        def _is_best(model_id: str) -> bool:
+            rm_tags = self.mlflow_service.client.get_registered_model(model_id).tags
+            tag_key = f"best_for:{event_type}:{output_field}" if event_type else None
+            if tag_key and rm_tags.get(tag_key) == "true":
+                return True
+            # Fallback: scan all best_for:*:{output_field} tags
+            suffix = f":{output_field}"
+            return any(v == "true" and k.endswith(suffix) for k, v in rm_tags.items())
+
+        best_id = next((c.model_id for c in configs if _is_best(c.model_id)), None)
 
         if best_id is None:
             raise ValueError(
@@ -159,27 +147,21 @@ class InferenceService:
             config=config,
         )
 
-        # Fetch recent cell data
         lookback_seconds = config.lookback_steps * config.window_duration_seconds
-        buffer_seconds = config.window_duration_seconds
-        start_ts, end_ts = calculate_timestamps(lookback_seconds + buffer_seconds)
+        start_ts, end_ts = calculate_timestamps(lookback_seconds + config.window_duration_seconds)
 
-        # Derive component_id for policy enforcement
-        component_id = f"ml-{model_detail.name}" if model_detail.name else None
-
-        cell_data = await self.data_storage_client.fetch_cell_data(
-            cell_index=cell_id,
+        cell_data = await self.data_storage_client.fetch_data(
             start_timestamp=start_ts,
             end_timestamp=end_ts,
             window_duration_seconds=config.window_duration_seconds,
-            component_id=component_id,
+            snssai_sst=tags.get("snssai_sst"),
+            dnn=tags.get("dnn"),
+            snssai_sd=tags.get("snssai_sd"),
+            event=tags.get("event"),
         )
 
         if not cell_data:
-            raise ValueError(
-                f"No data available for cell {cell_id} in the "
-                f"last {lookback_seconds} seconds"
-            )
+            raise ValueError(f"No data for tags {tags} in last {lookback_seconds}s")
 
         # Sort by timestamp
         cell_data.sort(key=lambda x: x.get("window_start_time", 0))
@@ -259,18 +241,18 @@ class InferenceService:
                     model_id=model_id,
                     version=model_detail.latest_version,
                     field_name=output_field,
-                    cell_id=cell_id,
+                    tags=tags,
                     X_instance=X,
                 )
             except Exception as e:
-                logger.warning("KernelSHAP explanation failed for cell %d field '%s': %s", cell_id, output_field, e)
+                logger.warning("KernelSHAP explanation failed tags=%s field='%s': %s", tags, output_field, e)
 
         return {
             "model_id": model_id,
             "model_name": model_detail.name,
             "model_version": model_detail.latest_version,
             "architecture": config.architecture,
-            "cell_id": cell_id,
+            "tags": tags,
             "lookback_steps": config.lookback_steps,
             "forecast_steps": config.forecast_steps,
             "window_duration_seconds": config.window_duration_seconds,
@@ -282,6 +264,108 @@ class InferenceService:
             "predictions": predictions,
             "used_data": used_data,
             "explanation": explanation,
+        }
+
+    async def predict_for_tags(
+        self, output_field: str, tags: dict, model_id: str
+    ) -> dict:
+        """Run forecast using snssai/dnn tags (pipeline path, no cell_id).
+
+        model_id must be the designated best model for this event_type:output_field.
+        Returns {"model_info": {...}, "input": {...}, "output": {...}}.
+        """
+        from src.services.data_preparation import calculate_timestamps, prepare_last_sequence
+
+        model_detail = await asyncio.to_thread(self.mlflow_service.get_model, model_id)
+        config = model_detail.config
+
+        if model_detail.latest_version is None:
+            raise ValueError(f"Model '{model_id}' has no trained versions.")
+
+        model = await asyncio.to_thread(
+            self._load_trained_model,
+            model_id=model_id,
+            version=model_detail.latest_version,
+            config=config,
+        )
+
+        lookback_seconds = config.lookback_steps * config.window_duration_seconds
+        start_ts, end_ts = calculate_timestamps(lookback_seconds + config.window_duration_seconds)
+
+        cell_data = await self.data_storage_client.fetch_data(
+            start_timestamp=start_ts,
+            end_timestamp=end_ts,
+            window_duration_seconds=config.window_duration_seconds,
+            snssai_sst=tags.get("snssai_sst"),
+            dnn=tags.get("dnn"),
+            snssai_sd=tags.get("snssai_sd"),
+            event=tags.get("event"),
+        )
+
+        if not cell_data:
+            raise ValueError(f"No data for tags {tags} in last {lookback_seconds}s")
+
+        cell_data.sort(key=lambda x: x.get("window_start_time", 0))
+
+        X = prepare_last_sequence(
+            cell_data=cell_data,
+            input_fields=config.input_fields,
+            lookback_steps=config.lookback_steps,
+        )
+        X = np.nan_to_num(X, nan=0.0)
+
+        try:
+            raw_predictions = model.predict(X)
+        except Exception as e:
+            raise RuntimeError(f"Prediction failed: {e}")
+
+        def _ts(window, field):
+            ts = window.get(field, 0)
+            if isinstance(ts, str):
+                from datetime import datetime as _dt
+                return int(_dt.fromisoformat(ts).timestamp())
+            return int(ts)
+
+        used_data = cell_data[-config.lookback_steps:]
+        input_start = _ts(used_data[0], "window_start_time")
+        last_end = _ts(used_data[-1], "window_end_time") or (
+            _ts(used_data[-1], "window_start_time") + config.window_duration_seconds
+        )
+
+        window_overlap = 0
+        if len(used_data) >= 2:
+            step = _ts(used_data[1], "window_start_time") - _ts(used_data[0], "window_start_time")
+            window_overlap = config.window_duration_seconds - step
+
+        predictions = self._structure_predictions(
+            raw_predictions=raw_predictions,
+            output_fields=config.output_fields,
+            forecast_steps=config.forecast_steps,
+            last_window_end=last_end,
+            window_duration_seconds=config.window_duration_seconds,
+            window_overlap=window_overlap,
+        )
+
+        return {
+            "model_info": {
+                "id": model_id,
+                "name": model_detail.name,
+                "version": model_detail.latest_version,
+                "architecture": config.architecture,
+            },
+            "input": {
+                "fields": config.input_fields,
+                "start": input_start,
+                "end": last_end,
+                "windows": len(used_data),
+            },
+            "output": {
+                "fields": config.output_fields,
+                "predictions": [
+                    p.model_dump() if hasattr(p, "model_dump") else p
+                    for p in predictions
+                ],
+            },
         }
 
     def _load_background(self, model_id: str, run_id: str) -> np.ndarray:
@@ -307,7 +391,7 @@ class InferenceService:
         model_id: str,
         version: int,
         field_name: str,
-        cell_id: int,
+        tags: dict,
         X_instance: np.ndarray,
         n_samples: int = 200,
     ) -> LocalExplanationResponse:
@@ -351,8 +435,8 @@ class InferenceService:
         pred_for_field = model.predict(X_instance)[0][field_idx::num_out].tolist()
 
         logger.info(
-            "KernelSHAP cell=%d field='%s' baseline=%.4f attributions=%s",
-            cell_id, field_name, expected_value,
+            "KernelSHAP tags=%s field='%s' baseline=%.4f attributions=%s",
+            tags, field_name, expected_value,
             {k: v for k, v in sorted(attributions.items(), key=lambda x: abs(x[1]), reverse=True)},
         )
 
@@ -360,7 +444,7 @@ class InferenceService:
             field_name=field_name,
             model_id=model_id,
             method="kernelshap",
-            cell_id=cell_id,
+            tags=tags,
             prediction=pred_for_field,
             attributions=attributions,
             baseline=round(expected_value, 6),

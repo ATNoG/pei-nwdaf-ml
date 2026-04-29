@@ -94,7 +94,7 @@ class TestTrainingService:
         assert input_data[0][1] == 10.0  # sinr_mean
         assert output_data[0][0] == 20.0  # latency_mean
 
-    def test_prepare_sequences_per_cell_basic(
+    def test_prepare_sequences_basic(
         self, training_service, sample_cell_data
     ):
         """Test sequence preparation with valid data."""
@@ -103,7 +103,7 @@ class TestTrainingService:
         lookback_steps = 5
         forecast_steps = 2
 
-        X, y = training_service._prepare_sequences_per_cell(
+        X, y = training_service._prepare_sequences(
             sample_cell_data, input_fields, output_fields, lookback_steps, forecast_steps
         )
 
@@ -132,7 +132,7 @@ class TestTrainingService:
         lookback_steps = 20  # More than available
         forecast_steps = 2
 
-        X, y = training_service._prepare_sequences_per_cell(
+        X, y = training_service._prepare_sequences(
             sample_cell_data, input_fields, output_fields, lookback_steps, forecast_steps
         )
 
@@ -142,7 +142,7 @@ class TestTrainingService:
 
     def test_prepare_sequences_empty_data(self, training_service):
         """Test sequence preparation with empty data."""
-        X, y = training_service._prepare_sequences_per_cell(
+        X, y = training_service._prepare_sequences(
             [], ["rsrp_mean"], ["latency_mean"], 5, 2
         )
 
@@ -163,7 +163,7 @@ class TestTrainingService:
         all_sequences_y = []
 
         for cell_data in [cell_0_data, cell_1_data]:
-            X, y = training_service._prepare_sequences_per_cell(
+            X, y = training_service._prepare_sequences(
                 cell_data, ["rsrp_mean"], ["latency_mean"], 5, 2
             )
             if len(X) > 0:
@@ -210,7 +210,7 @@ class TestTrainingService:
 
     def test_data_type_conversion(self, training_service, sample_cell_data):
         """Test that data is properly converted to numpy arrays."""
-        X, y = training_service._prepare_sequences_per_cell(
+        X, y = training_service._prepare_sequences(
             sample_cell_data, ["rsrp_mean"], ["latency_mean"], 5, 2
         )
 

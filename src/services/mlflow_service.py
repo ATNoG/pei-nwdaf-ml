@@ -17,7 +17,7 @@ class MLflowService:
         self.client = mlflow_client
         self.ml_config_service = ml_config_service
 
-    def create_model(self, name: str, config: ModelConfig) -> ModelDetail:
+    def create_model(self, name: str, config: ModelConfig, event_type: str = "") -> ModelDetail:
         """
         Create a new model in MLflow registry and store config in PostgreSQL.
 
@@ -46,6 +46,7 @@ class MLflowService:
                 forecast_steps=config.forecast_steps,
                 hidden_size=config.hidden_size,
                 created_at=created_at,
+                event_type=event_type,
             )
             self.ml_config_service.create(model_config)
 
@@ -58,6 +59,7 @@ class MLflowService:
                 last_trained_at=None,
                 mlflow_run_id=None,
                 training_loss=None,
+                event_type=event_type,
             )
         except Exception:
             # Clean up MLflow model if DB insert failed
@@ -112,6 +114,7 @@ class MLflowService:
             last_trained_at=last_trained_at,
             mlflow_run_id=mlflow_run_id,
             training_loss=training_loss,
+            event_type=model_config.event_type,
         )
 
     def list_models(self) -> list[ModelSummary]:
@@ -139,6 +142,7 @@ class MLflowService:
                     architecture=ArchitectureType(model_config.architecture),
                     created_at=model_config.created_at,
                     latest_version=latest_version,
+                    event_type=model_config.event_type,
                 )
             )
 
@@ -206,6 +210,7 @@ class MLflowService:
                 best_for_fields=best_for_fields,
                 score_per_field=score_per_field,
                 eval_metric_per_field=eval_metric_per_field,
+                event_type=model_config.event_type,
             ))
 
         return results

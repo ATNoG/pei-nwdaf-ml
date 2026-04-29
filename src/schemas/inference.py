@@ -4,12 +4,13 @@ from pydantic import BaseModel, Field
 
 from src.schemas.model import ArchitectureType
 from src.schemas.performance import LocalExplanationResponse
+from src.schemas.tags import Tags
 
 
 class InferenceRequest(BaseModel):
     """Request schema for running inference"""
     output_field: str = Field(..., description="Name of the output field to predict")
-    cell_id: int = Field(..., ge=0, description="Cell index to fetch data for and predict")
+    tags: Tags = Field(..., description="Tag filters for fetching data")
     model_id: str | None = Field(None, description="UUID of the trained model to use for prediction")
     explain: bool = Field(
         False,
@@ -34,7 +35,7 @@ class InferenceResult(BaseModel):
     model_name: str = Field(..., description="Human-readable model name")
     model_version: int = Field(..., description="Model version used")
     architecture: ArchitectureType = Field(..., description="Model architecture")
-    cell_id: int = Field(..., description="Cell index predictions are for")
+    tags: Tags = Field(..., description="Tag filters used to fetch data")
     lookback_steps: int = Field(..., description="Number of historical windows used as input")
     forecast_steps: int = Field(..., description="Number of future windows predicted")
     window_duration_seconds: int = Field(..., description="Duration of each time window in seconds")

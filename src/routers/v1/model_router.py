@@ -2,7 +2,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from src.services.mlflow_service import MLflowService
-from src.services.data_storage_client import DataStorageClient
+from src.services.data_storage_client import DataStorageClient, derive_event_type
 from src.core.dependencies import get_mlflow_client
 from src.schemas.model import ModelConfig, ModelCreate, ModelDetail, ModelSummary, ModelSummaryDetail
 router = APIRouter()
@@ -54,18 +54,20 @@ async def create_model(
         is_valid, invalid_fields = await data_storage_client.validate_fields(all_fields)
 
         if not is_valid:
-            available_fields = await data_storage_client.get_available_fields()
+            available_fields = sorted((await data_storage_client.get_fields_with_events()).keys())
             raise HTTPException(
                 status_code=400,
                 detail={
                     "message": "Invalid field names provided",
                     "invalid_fields": sorted(invalid_fields),
-                    "available_fields": sorted(available_fields)
+                    "available_fields": available_fields,
                 }
             )
 
+        event_type = await derive_event_type(all_fields, model_create.config.event, data_storage_client)
+
         # Create model
-        model = mlflow_service.create_model(model_create.name, model_create.config)
+        model = mlflow_service.create_model(model_create.name, model_create.config, event_type=event_type)
 
         # Register with policy service if enabled
         policy_client = _get_policy_client(request)

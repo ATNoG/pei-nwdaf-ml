@@ -123,29 +123,30 @@ class AnomalyTrainingService:
                     f"Anomaly job {job_id}: Fetching data from {start_ts} to {end_ts}"
                 )
 
-                # Fetch data for all cells
-                cell_data_dict = await self._fetch_all_cell_data(
-                    start_ts, end_ts, config.window_duration_seconds
+                # Fetch all data for this model's event_type, group by slice
+                training_data = await self._fetch_training_data(
+                    start_ts, end_ts, config.window_duration_seconds,
+                    event_type=config_db.event_type,
                 )
-                if not cell_data_dict:
-                    raise ValueError("No data available from any cell")
+                if not training_data:
+                    raise ValueError("No data available for training")
 
-                # Build flat feature vectors - each window is one sample
+                slice_groups = self._group_by_slice(training_data)
+                logger.info(
+                    f"Anomaly job {job_id}: {len(training_data)} windows across {len(slice_groups)} slices"
+                )
+
                 all_features = []
-                for cell_index, cell_data in cell_data_dict.items():
+                for slice_key, slice_data in slice_groups.items():
                     try:
-                        inputs, _ = extract_fields(cell_data, config.input_fields, [])
+                        inputs, _ = extract_fields(slice_data, config.input_fields, [])
                         all_features.extend(inputs)
-                        logger.info(
-                            f"Anomaly job {job_id}: Cell {cell_index} - {len(inputs)} windows"
-                        )
+                        logger.info(f"Anomaly job {job_id}: Slice {slice_key} - {len(inputs)} windows")
                     except Exception as e:
-                        logger.warning(
-                            f"Anomaly job {job_id}: Failed for cell {cell_index}: {e}"
-                        )
+                        logger.warning(f"Anomaly job {job_id}: Slice {slice_key} failed: {e}")
 
                 if not all_features:
-                    raise ValueError("No cells had sufficient data")
+                    raise ValueError("No data had sufficient fields for training")
 
                 X_train = np.nan_to_num(np.array(all_features, dtype=np.float32))
                 logger.info(
@@ -237,7 +238,7 @@ class AnomalyTrainingService:
         kube = get_kube_training_service()
         if kube:
             try:
-                kube.cancel(job.model_id)
+                kube.cancel(job.model_id, job_id)
             except Exception as e:
                 logger.error(f"Failed to delete K8s job for {job_id}: {e}")
             finally:
@@ -264,31 +265,31 @@ class AnomalyTrainingService:
         )
         self.db.commit()
 
-    async def _fetch_all_cell_data(
+    async def _fetch_training_data(
         self,
         start_timestamp: int,
         end_timestamp: int,
         window_duration_seconds: int,
-    ) -> dict[int, list[dict]]:
-        cells = await self.data_storage_client.get_known_cells()
-        logger.info(f"Found {len(cells)} cells to fetch data from")
+        event_type: str | None = None,
+    ) -> list[dict]:
+        """Fetch all data for training filtered by event type."""
+        data = await self.data_storage_client.fetch_data(
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+            window_duration_seconds=window_duration_seconds,
+            event=event_type,
+        )
+        data.sort(key=lambda x: x.get("window_start_time", 0))
+        logger.info(f"Fetched {len(data)} windows for event_type={event_type}")
+        return data
 
-        cell_data: dict[int, list[dict]] = {}
-        for cell_index in cells:
-            try:
-                data = await self.data_storage_client.fetch_cell_data(
-                    cell_index=cell_index,
-                    start_timestamp=start_timestamp,
-                    end_timestamp=end_timestamp,
-                    window_duration_seconds=window_duration_seconds,
-                    ip_src="*",
-                )
-                if data:
-                    data.sort(key=lambda x: x.get("window_start_time", 0))
-                    cell_data[cell_index] = data
-            except Exception as e:
-                logger.error(f"Failed to fetch data for cell {cell_index}: {e}")
-        return cell_data
+    def _group_by_slice(self, data: list[dict]) -> dict[tuple, list[dict]]:
+        """Group windows by (snssai_sst, snssai_sd, dnn) slice context."""
+        groups: dict[tuple, list[dict]] = {}
+        for w in data:
+            key = (w.get("snssai_sst", ""), w.get("snssai_sd", ""), w.get("dnn", ""))
+            groups.setdefault(key, []).append(w)
+        return groups
 
     def _contamination_filter(
         self,
@@ -449,7 +450,12 @@ class AnomalyTrainingService:
             result = mlflow.register_model(model_uri, model_id)
             mlflow.set_tag("model_version", result.version)
 
-            logger.info(f"Anomaly model {model_id} v{result.version} logged")
+            # Store KernelSHAP background for explainability
+            with tempfile.TemporaryDirectory() as tmpdir:
+                bg_path = os.path.join(tmpdir, "background.npz")
+                np.savez(bg_path, X_background=X_scaled)
+                mlflow.log_artifact(bg_path, artifact_path="background")
+            logger.info(f"Anomaly model {model_id} v{result.version} logged - background stored ({len(X_scaled)} samples)")
             return run_id
 
     @staticmethod

@@ -6,6 +6,7 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 from src.schemas.model import ArchitectureType
+from src.schemas.tags import Tags
 
 
 class EvalMetricType(str, Enum):
@@ -110,7 +111,7 @@ class LocalExplanationResponse(BaseModel):
     field_name: str
     model_id: str
     method: str = Field("kernelshap", description="Explainer used")
-    cell_id: int
+    tags: Tags
     prediction: list[float] = Field(..., description="Forecast values for the explained field across forecast steps",)
     attributions: dict[str, float] = Field(
         ...,
