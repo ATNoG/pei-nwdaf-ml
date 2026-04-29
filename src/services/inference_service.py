@@ -63,7 +63,7 @@ async def _dlt_trace_inference(
             time_range_end=time_range_end,
         )
     except Exception as exc:
-        logger.warning("DLT record_data_fetch failed (non-fatal): %s", exc)
+        logger.warning("DLT record_data_fetch failed [%s] (non-fatal): %s", type(exc).__name__, exc)
     try:
         await inference.record_inference(
             mlflow_run_id=model_run_id or "",
@@ -75,7 +75,7 @@ async def _dlt_trace_inference(
             decision=decision,
         )
     except Exception as exc:
-        logger.warning("DLT record_inference failed (non-fatal): %s", exc)
+        logger.warning("DLT record_inference failed [%s] (non-fatal): %s", type(exc).__name__, exc)
 
 # (model_id, run_id) -> X_background (invalidated automatically when model version changes)
 _background_cache: dict[tuple[str, str], np.ndarray] = {}
@@ -344,6 +344,18 @@ class InferenceService:
             last_window_end=last_end,
             window_duration_seconds=config.window_duration_seconds,
             window_overlap=window_overlap,
+        )
+
+        await _dlt_trace_inference(
+            model_run_id=model_detail.mlflow_run_id or "",
+            model_name=model_detail.name or model_id,
+            model_version=model_detail.latest_version,
+            query_params={**tags, "output_field": output_field, "lookback_seconds": lookback_seconds},
+            data_payload=cell_data,
+            anomaly_score=0.0,
+            decision="NORMAL",
+            time_range_start=str(start_ts),
+            time_range_end=str(end_ts),
         )
 
         return {

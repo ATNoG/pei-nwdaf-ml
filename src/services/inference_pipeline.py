@@ -52,7 +52,10 @@ class InferencePipeline:
         self._last_run[tag_key] = now
 
         loop = asyncio.get_event_loop()
-        loop.create_task(self._process(tags))
+        task = loop.create_task(self._process(tags))
+        task.add_done_callback(
+            lambda t: logger.error("_process failed: %s", t.exception()) if t.exception() else None
+        )
         return data
 
     async def _process(self, tags: dict):
@@ -97,7 +100,7 @@ class InferencePipeline:
                     )
                     results.append({"type": "forecast", "result": forecast})
                 except Exception as e:
-                    logger.debug("Forecast %s skipped: %s", field_name, e)
+                    logger.warning("Forecast %s skipped [%s]: %s", field_name, type(e).__name__, e)
 
             if results:
                 self._publish(tags, results)

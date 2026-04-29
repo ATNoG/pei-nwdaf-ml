@@ -227,7 +227,7 @@ class AnomalyDetectionService:
 
         if raw_data:
             max_score = max((s.reconstruction_error for s in scores), default=0.0)
-            asyncio.create_task(_dlt_trace_anomaly(
+            await _dlt_trace_anomaly(
                 model_run_id=mlflow_run_id,
                 model_name=config_db.name,
                 model_version=model_version,
@@ -237,7 +237,7 @@ class AnomalyDetectionService:
                 decision="ANOMALY" if num_anomalies > 0 else "NORMAL",
                 time_range_start=str(start_ts),
                 time_range_end=str(end_ts),
-            ))
+            )
 
         return result
 
