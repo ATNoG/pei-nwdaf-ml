@@ -13,6 +13,7 @@ def mock_settings():
     with patch("src.services.data_storage_client.settings") as mock:
         mock.DATA_STORAGE_API_URL = "http://data-storage:8000"
         mock.DATA_STORAGE_EXAMPLE_ENDPOINT = "/api/v1/processed/latency/example"
+        mock.DATA_STORAGE_FIELDS_ENDPOINT = "/api/v1/processed/fields"
         mock.DATA_STORAGE_EXCLUDED_FIELDS = "window_start_time,window_end_time,window_duration_seconds,cell_index,network,sample_count"
         mock.DATA_STORAGE_DATA_ENDPOINT = "/api/v1/processed/latency"
         mock.DATA_STORAGE_CELL_ENDPOINT = "/api/v1/cell"
@@ -22,39 +23,31 @@ def mock_settings():
 
 @pytest.fixture
 def sample_example_response():
-    """Sample response from data-storage example endpoint."""
-    return [
-        {
-            "window_start_time": 1706745600,
-            "window_end_time": 1706745660,
-            "window_duration_seconds": 60.0,
-            "cell_index": 12898855,
-            "network": "5G",
-            "rsrp_mean": -85.5,
-            "rsrp_max": -80.0,
-            "rsrp_min": -90.0,
-            "rsrp_std": 2.5,
-            "sinr_mean": 15.3,
-            "sinr_max": 20.0,
-            "sinr_min": 10.0,
-            "sinr_std": 2.1,
-            "rsrq_mean": -12.5,
-            "rsrq_max": -10.0,
-            "rsrq_min": -15.0,
-            "rsrq_std": 1.2,
-            "latency_mean": 25.5,
-            "latency_max": 35.0,
-            "latency_min": 20.0,
-            "latency_std": 3.2,
-            "cqi_mean": 12.5,
-            "cqi_max": 15.0,
-            "cqi_min": 10.0,
-            "cqi_std": 1.5,
-            "primary_bandwidth": 100.0,
-            "ul_bandwidth": 50.0,
-            "sample_count": 120,
-        }
-    ]
+    """Sample response from data-storage fields endpoint."""
+    return {
+        "rsrp_mean": ["PERF_DATA"],
+        "rsrp_max": ["PERF_DATA"],
+        "rsrp_min": ["PERF_DATA"],
+        "rsrp_std": ["PERF_DATA"],
+        "sinr_mean": ["PERF_DATA"],
+        "sinr_max": ["PERF_DATA"],
+        "sinr_min": ["PERF_DATA"],
+        "sinr_std": ["PERF_DATA"],
+        "rsrq_mean": ["PERF_DATA"],
+        "rsrq_max": ["PERF_DATA"],
+        "rsrq_min": ["PERF_DATA"],
+        "rsrq_std": ["PERF_DATA"],
+        "latency_mean": ["PERF_DATA"],
+        "latency_max": ["PERF_DATA"],
+        "latency_min": ["PERF_DATA"],
+        "latency_std": ["PERF_DATA"],
+        "cqi_mean": ["PERF_DATA"],
+        "cqi_max": ["PERF_DATA"],
+        "cqi_min": ["PERF_DATA"],
+        "cqi_std": ["PERF_DATA"],
+        "primary_bandwidth": ["PERF_DATA"],
+        "ul_bandwidth": ["PERF_DATA"],
+    }
 
 
 class TestDataStorageClient:
@@ -82,7 +75,7 @@ class TestDataStorageClient:
 
             # Verify request
             mock_client_instance.get.assert_called_once_with(
-                "http://data-storage:8000/api/v1/processed/latency/example",
+                "http://data-storage:8000/api/v1/processed/fields",
                 timeout=10.0,
                 headers={},
             )
@@ -113,7 +106,7 @@ class TestDataStorageClient:
 
         with patch("httpx.AsyncClient") as mock_async_client:
             mock_response = MagicMock()
-            mock_response.content = _json.dumps([]).encode()
+            mock_response.content = _json.dumps({}).encode()
             mock_response.headers = {}
             mock_response.raise_for_status = MagicMock()
 

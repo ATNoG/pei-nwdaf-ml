@@ -63,17 +63,13 @@ class DataStorageClient:
 
     async def get_available_fields(self, component_id: str | None = None) -> list[str]:
         """
-        Get available data field names from the data-storage example endpoint.
+        Get available data field names from the data-storage fields endpoint.
 
         Returns a list of field names, excluding metadata fields defined in
         DATA_STORAGE_EXCLUDED_FIELDS.
-
-        Args:
-            component_id: Optional component ID to pass as X-Component-ID header
-                for policy enforcement.
         """
         self._ensure_handshake()
-        url = f"{self.base_url}{self.example_endpoint}"
+        url = f"{self.base_url}{settings.DATA_STORAGE_FIELDS_ENDPOINT}"
         headers = {}
         if component_id:
             headers["X-Component-ID"] = component_id
@@ -85,20 +81,15 @@ class DataStorageClient:
             raw = self._decrypt_response(response)
             data = json.loads(raw)
 
-            # data is a list with at least one example record
-            if not data or not isinstance(data, list):
+            # data is {"field_name": ["EVENT_TYPE"], ...}
+            if not data or not isinstance(data, dict):
                 return []
 
-            sample = data[0]
-
-            # Extract field names, excluding metadata fields
-            fields = [
+            return sorted(
                 field_name
-                for field_name in sample.keys()
+                for field_name in data.keys()
                 if field_name not in self.excluded_fields
-            ]
-
-            return sorted(fields)
+            )
 
     async def validate_fields(self, fields: list[str]) -> tuple[bool, list[str]]:
         """

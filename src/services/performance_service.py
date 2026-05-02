@@ -66,6 +66,8 @@ def _make_alibi_scorer(metric: str, score_fn):
     Sets __name__ = metric so alibi keys the result dict by metric name.
     """
     def scorer(y_true, y_pred):
+        if len(y_pred) == 0 or len(y_true) == 0:
+            return 0.0
         val = score_fn(list(y_pred), list(y_true), metric)
         return val if metric == "r2" else -val
 
@@ -747,6 +749,8 @@ class PerformanceService:
         y_1d = np.array([float(np.mean(y)) for y in y_list])
 
         def predict_fn(X: np.ndarray) -> np.ndarray:
+            if len(X) == 0:
+                return np.zeros((0,), dtype=np.float32)
             X_3d = bridge.reconstruct(X)
             preds = model.predict(X_3d)
             return preds[:, field_idx::num_out].mean(axis=1)
