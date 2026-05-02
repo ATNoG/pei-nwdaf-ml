@@ -21,7 +21,7 @@ class TrainingRequest(BaseModel):
 
     model_id: str = Field(..., description="UUID of the model to train")
     lookback_seconds: int = Field(
-        ..., gt=0, description="How far back to fetch data (e.g., 604800 for 7 days)"
+        ..., gt=0, le=2_592_000, description="How far back to fetch data (e.g., 604800 for 7 days, max 30 days)"
     )
     resources: JobResources | None = Field(
         None, description="Resource requirements for the training job"
