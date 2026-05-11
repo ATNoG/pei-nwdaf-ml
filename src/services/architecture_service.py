@@ -1,12 +1,14 @@
 import ast
-import re
 import sys
+import types
+from contextlib import contextmanager
 from datetime import datetime
 
 import boto3
 
 import src.services.architecture_validations as architecture_validations
 from src.core.config import settings
+from src.models import ModelInterface
 
 _BUCKET_NAME = "pei-nwdaf-ml-architectures"
 
@@ -24,9 +26,48 @@ class ArchitectureService:
 
         self._ensure_bucket()
 
-    def load_architecture(self, architecture_id: str) -> tuple[type, bytes]:
-        # get from minio and source
-        pass
+    @contextmanager
+    def load_architecture(self, architecture_id: str):
+        cls, content = self._load(architecture_id)
+        try:
+            yield cls, content
+        finally:
+            self._unload(architecture_id)
+
+    def _load(self, architecture_id: str) -> tuple[type, bytes]:
+        response = self.s3.get_object(Bucket=_BUCKET_NAME, Key=architecture_id)
+        content = response["Body"].read()
+
+        module_name = self.module_name(architecture_id)
+        namespace = self._make_namespace(module_name)
+
+        exec(content, namespace)
+
+        mod = types.ModuleType(module_name)
+        mod.__dict__.update(namespace)
+        sys.modules[module_name] = mod
+
+        cls = next(
+            (
+                v
+                for v in namespace.values()
+                if isinstance(v, type)
+                and issubclass(v, ModelInterface)
+                and v is not ModelInterface
+            ),
+            None,
+        )
+        if cls is None:
+            raise ValueError(f"No ModelInterface subclass found in {architecture_id}")
+
+        return cls, content
+
+    def _unload(self, architecture_id: str) -> None:
+        """Unload the architecture from memory."""
+        sys.modules.pop(self.module_name(architecture_id), None)
+
+    def module_name(self, architecture_id: str) -> str:
+        return f"_custom_{architecture_id}"
 
     def list_architectures(self):
         # list from minio. this doesnt change state
@@ -81,6 +122,9 @@ class ArchitectureService:
         architecture_validations.content.run(tree)
         architecture_validations.interface.run(tree)
         architecture_validations.name.run(architecture_id)
+        architecture_validations.dry_run.run(
+            architecture_id, file, self._make_namespace
+        )
 
     @staticmethod
     def help() -> str:
@@ -97,3 +141,48 @@ Architecture file constraints:
 - Max file size: 100KB
 - Name: alphanumeric, underscore, hyphen only
 """
+
+    def _make_safe_import(self):
+
+        allowed = architecture_validations.content.ALLOWED_IMPORTS
+
+        def _safe_import(name, *args, **kwargs) -> dict:
+            if name.split(".")[0] not in allowed:
+                raise ImportError(f"Import not allowed: {name}")
+            return __import__(name, *args, **kwargs)
+
+        return _safe_import
+
+    def _make_namespace(self, module_name: str) -> dict:
+        return {
+            "__name__": module_name,
+            "__builtins__": {
+                "__import__": self._make_safe_import(),
+                "__build_class__": __build_class__,
+                "float": float,
+                "int": int,
+                "str": str,
+                "bool": bool,
+                "list": list,
+                "super": super,
+                "dict": dict,
+                "tuple": tuple,
+                "len": len,
+                "range": range,
+                "None": None,
+                "True": True,
+                "False": False,
+                "min": min,
+                "max": max,
+                "len": len,
+                "range": range,
+                "enumerate": enumerate,
+                "zip": zip,
+                "isinstance": isinstance,
+                "print": print,
+                "sum": sum,
+                "abs": abs,
+                "round": round,
+            },
+            "ModelInterface": ModelInterface,
+        }
