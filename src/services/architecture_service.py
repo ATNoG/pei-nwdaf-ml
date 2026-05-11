@@ -70,14 +70,22 @@ class ArchitectureService:
     def module_name(self, architecture_id: str) -> str:
         return f"_custom_{architecture_id}"
 
-    def list_architectures(self, db: Session):
-        # list from minio. this doesnt change state
-        pass
+    def list_architectures(self, db: Session) -> list[dict]:
+        from src.db.architecture_config import ArchitectureConfigDB
+        rows = db.query(ArchitectureConfigDB).all()
+        return [
+            {
+                "name": r.architecture_id,
+                "uploaded_by": r.uploaded_by,
+                "uploaded_at": r.uploaded_at.isoformat(),
+            }
+            for r in rows
+        ]
 
     def save_architecture(
         self, architecture_id: str, file: bytes, uploaded_by: str, db: Session
     ):
-        """Validate and save the architecture to MinIO."""
+        """Validate and save the architecture to MinIO and record in DB."""
         self._validate(architecture_id, file)
 
         try:
@@ -91,15 +99,32 @@ class ArchitectureService:
             Bucket=_BUCKET_NAME,
             Key=architecture_id,
             Body=file,
-            Metadata={
-                "uploaded_by": uploaded_by,
-                "uploaded_at": datetime.now().isoformat(),
-            },
         )
 
+        from src.db.architecture_config import ArchitectureConfigDB
+        db.add(ArchitectureConfigDB(
+            architecture_id=architecture_id,
+            uploaded_by=uploaded_by,
+            uploaded_at=datetime.now(),
+        ))
+        db.commit()
+
     def delete_architecture(self, architecture_id: str, db: Session):
-        # TODO
-        pass
+        from src.db.architecture_config import ArchitectureConfigDB
+        from src.db.model_config import ModelConfigDB
+
+        in_use = db.query(ModelConfigDB).filter(
+            ModelConfigDB.architecture == architecture_id
+        ).first()
+        if in_use:
+            raise ValueError(f"Architecture '{architecture_id}' in use by one or more models")
+
+        self.s3.delete_object(Bucket=_BUCKET_NAME, Key=architecture_id)
+
+        row = db.get(ArchitectureConfigDB, architecture_id)
+        if row:
+            db.delete(row)
+            db.commit()
 
     def _ensure_bucket(self):
         """Create the bucket if it does not exist."""
