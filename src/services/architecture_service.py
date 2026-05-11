@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime
 
 import boto3
+from sqlalchemy.orm import Session
 
 import src.services.architecture_validations as architecture_validations
 from src.core.config import settings
@@ -69,11 +70,13 @@ class ArchitectureService:
     def module_name(self, architecture_id: str) -> str:
         return f"_custom_{architecture_id}"
 
-    def list_architectures(self):
+    def list_architectures(self, db: Session):
         # list from minio. this doesnt change state
         pass
 
-    def save_architecture(self, architecture_id: str, file: bytes, uploaded_by: str):
+    def save_architecture(
+        self, architecture_id: str, file: bytes, uploaded_by: str, db: Session
+    ):
         """Validate and save the architecture to MinIO."""
         self._validate(architecture_id, file)
 
@@ -94,8 +97,8 @@ class ArchitectureService:
             },
         )
 
-    def delete_architecture(self, architecture_id: str):
-        # delete from minio and source
+    def delete_architecture(self, architecture_id: str, db: Session):
+        # TODO
         pass
 
     def _ensure_bucket(self):
