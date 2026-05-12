@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import mlflow
 from fastapi import FastAPI
 
+from src.auth_middleware import AuthMiddleware
 from src.core.config import settings
 from src.core.monitoring_state import (
     clear_field_jobs,
@@ -614,7 +615,7 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-
+app.add_middleware(AuthMiddleware)
 app.include_router(router)
 
 
