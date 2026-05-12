@@ -8,9 +8,9 @@ import mlflow
 import numpy as np
 
 from src.core.config import settings
-from src.models import MODEL_REGISTRY
+from src.services.model_loader import load_trained_model
 from src.schemas.inference import ForecastStepPrediction
-from src.schemas.model import ArchitectureType, ModelConfig
+from src.schemas.model import ModelConfig
 from src.schemas.performance import LocalExplanationResponse
 from src.services.data_preparation import calculate_timestamps, prepare_last_sequence
 from src.services.data_storage_client import DataStorageClient
@@ -483,43 +483,9 @@ class InferenceService:
         Raises:
             ValueError: If architecture is unsupported or model cannot be loaded.
         """
-        model_class = MODEL_REGISTRY.get(config.architecture)
-        if not model_class:
-            raise ValueError(f"Unsupported architecture: {config.architecture}")
-
         model_uri = f"models:/{model_id}/{version}"
         logger.info(f"Loading model from {model_uri}")
-
-        try:
-            loaded_pytorch_model = mlflow.pytorch.load_model(model_uri)
-        except Exception as e:
-            raise ValueError(
-                f"Failed to load model artifact from {model_uri}: {str(e)}"
-            )
-
-        # Create wrapper with config
-        if config.architecture == ArchitectureType.LSTM:
-            model = model_class(
-                input_fields=config.input_fields,
-                output_fields=config.output_fields,
-                window_duration_seconds=config.window_duration_seconds,
-                lookback_steps=config.lookback_steps,
-                forecast_steps=config.forecast_steps,
-                hidden_size=config.hidden_size,
-                num_layers=2,
-            )
-        else:
-            model = model_class(
-                input_fields=config.input_fields,
-                output_fields=config.output_fields,
-                window_duration_seconds=config.window_duration_seconds,
-                lookback_steps=config.lookback_steps,
-                forecast_steps=config.forecast_steps,
-                hidden_size=config.hidden_size,
-            )
-
-        model.model = loaded_pytorch_model
-        return model
+        return load_trained_model(config.architecture, model_uri, config)
 
     def _structure_predictions(
         self,

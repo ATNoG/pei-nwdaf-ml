@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     POLICY_FAILOPEN: bool = True
     POLICY_ROLENAME: str = "ML"
 
+    # Training
+    TRAIN_MAX_EPOCHS: int = 100
+    ADD_TEST_MODELS: bool = False
+
     # Kubernetes training
     TRAIN_USE_KUBE: bool = False
     TRAIN_KUBE_HOST: str = ""

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from src.core.config import settings
 from src.db.score_history import ScoreHistoryDB
-from src.schemas.model import ArchitectureType, ModelConfig
+from src.schemas.model import ModelConfig
 from src.schemas.performance import (
     FeatureImportanceResponse,
     FieldEvaluationResponse,
@@ -23,7 +23,7 @@ from src.services.config_service import MLConfigService
 from src.services.data_preparation import calculate_timestamps, prepare_last_sequence
 from src.services.data_storage_client import DataStorageClient
 from src.services.mlflow_service import MLflowService
-from src.models import MODEL_REGISTRY
+from src.services.model_loader import load_trained_model
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +175,7 @@ class PerformanceService:
             base = ModelPerformance(
                 model_id=model_config.model_id,
                 model_name=model_config.name,
-                architecture=ArchitectureType(model_config.architecture),
+                architecture=model_config.architecture,
                 latest_version=model_detail.latest_version,
                 training_loss=model_detail.training_loss,
                 last_trained_at=model_detail.last_trained_at,
@@ -305,7 +305,7 @@ class PerformanceService:
                 ModelPerformance(
                     model_id=model_config.model_id,
                     model_name=model_config.name,
-                    architecture=ArchitectureType(model_config.architecture),
+                    architecture=model_config.architecture,
                     latest_version=model_detail.latest_version,
                     training_loss=model_detail.training_loss,
                     score=score,
@@ -347,7 +347,7 @@ class PerformanceService:
                 return ModelPerformance(
                     model_id=model_config.model_id,
                     model_name=model_config.name,
-                    architecture=ArchitectureType(model_config.architecture),
+                    architecture=model_config.architecture,
                     latest_version=model_detail.latest_version,
                     training_loss=model_detail.training_loss,
                     score=float(score_str) if score_str else None,
@@ -556,40 +556,9 @@ class PerformanceService:
 
     def _load_model(self, model_id: str, version: int, config: ModelConfig):
         """Load a trained PyTorch model from the MLflow registry."""
-        model_class = MODEL_REGISTRY.get(config.architecture)
-        if not model_class:
-            raise ValueError(f"Unsupported architecture: {config.architecture}")
-
         model_uri = f"models:/{model_id}/{version}"
         logger.info(f"Loading model for evaluation: {model_uri}")
-
-        try:
-            loaded_pytorch_model = mlflow.pytorch.load_model(model_uri)
-        except Exception as e:
-            raise ValueError(f"Failed to load model from {model_uri}: {e}")
-
-        if config.architecture == ArchitectureType.LSTM:
-            model = model_class(
-                input_fields=config.input_fields,
-                output_fields=config.output_fields,
-                window_duration_seconds=config.window_duration_seconds,
-                lookback_steps=config.lookback_steps,
-                forecast_steps=config.forecast_steps,
-                hidden_size=config.hidden_size,
-                num_layers=2,
-            )
-        else:
-            model = model_class(
-                input_fields=config.input_fields,
-                output_fields=config.output_fields,
-                window_duration_seconds=config.window_duration_seconds,
-                lookback_steps=config.lookback_steps,
-                forecast_steps=config.forecast_steps,
-                hidden_size=config.hidden_size,
-            )
-
-        model.model = loaded_pytorch_model
-        return model
+        return load_trained_model(config.architecture, model_uri, config)
 
     async def _compute_score_for_model(
         self,

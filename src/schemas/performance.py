@@ -5,7 +5,6 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
-from src.schemas.model import ArchitectureType
 from src.schemas.tags import Tags
 
 
@@ -23,7 +22,7 @@ class ModelPerformance(BaseModel):
 
     model_id: str = Field(..., description="Model UUID")
     model_name: str = Field(..., description="Human-readable model name")
-    architecture: ArchitectureType = Field(..., description="Model architecture")
+    architecture: str = Field(..., description="Model architecture")
     latest_version: int | None = Field(None, description="Latest trained version number")
     training_loss: float | None = Field(None, description="Final MSE from last training run")
     score: float | None = Field(

@@ -453,6 +453,15 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info("Database initialized successfully")
 
+    if settings.ADD_TEST_MODELS:
+        from src.db.database import SessionLocal as _SL
+        from src.services.architecture_service import ArchitectureService as _AS
+        _db = _SL()
+        try:
+            _AS().seed_builtins(_db)
+        finally:
+            _db.close()
+
     if settings.KAFKA_ENABLED:
         setup_inference_pipeline()
 

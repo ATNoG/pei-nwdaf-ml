@@ -11,7 +11,10 @@ import src.services.architecture_validations as architecture_validations
 from src.core.config import settings
 from src.models import ModelInterface
 
+import logging
+
 _BUCKET_NAME = "pei-nwdaf-ml-architectures"
+logger = logging.getLogger(__name__)
 
 
 class ArchitectureService:
@@ -70,6 +73,20 @@ class ArchitectureService:
     def module_name(self, architecture_id: str) -> str:
         return f"_custom_{architecture_id}"
 
+    def seed_builtins(self, db: Session) -> None:
+        import os
+        models_dir = os.path.join(os.path.dirname(__file__), "..", "models", "test")
+        for name in ["ann", "lstm"]:
+            path = os.path.join(models_dir, f"{name}.py")
+            try:
+                content = open(path, "rb").read()
+                self.save_architecture(name, content, "system", db)
+                logger.info(f"Seeded architecture: {name}")
+            except ValueError:
+                logger.debug(f"Architecture '{name}' already exists, skipping seed")
+            except Exception as e:
+                logger.warning(f"Failed to seed architecture '{name}': {e}")
+
     def list_architectures(self, db: Session) -> list[dict]:
         from src.db.architecture_config import ArchitectureConfigDB
         rows = db.query(ArchitectureConfigDB).all()
@@ -77,7 +94,7 @@ class ArchitectureService:
             {
                 "name": r.architecture_id,
                 "uploaded_by": r.uploaded_by,
-                "uploaded_at": r.uploaded_at.isoformat(),
+                "uploaded_at": r.uploaded_at,
             }
             for r in rows
         ]

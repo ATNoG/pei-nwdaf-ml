@@ -3,7 +3,7 @@
 from sqlalchemy.orm import Session
 
 from src.db.model_config import ModelConfigDB
-from src.schemas.model import ArchitectureType, ModelConfig
+from src.schemas.model import ModelConfig
 
 
 class MLConfigService:
@@ -38,7 +38,7 @@ class MLConfigService:
     def config_from_db(self, model_config: ModelConfigDB) -> ModelConfig:
         """Convert database model to ModelConfig schema."""
         return ModelConfig(
-            architecture=ArchitectureType(model_config.architecture),
+            architecture=model_config.architecture,
             input_fields=model_config.input_fields,
             output_fields=model_config.output_fields,
             window_duration_seconds=model_config.window_duration_seconds,

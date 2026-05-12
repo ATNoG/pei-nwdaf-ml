@@ -5,9 +5,10 @@ from uuid import uuid4
 
 from mlflow import MlflowClient
 from mlflow.exceptions import MlflowException
-from src.services.config_service import MLConfigService
+
 from src.db.model_config import ModelConfigDB
-from src.schemas.model import ArchitectureType, ModelConfig, ModelDetail, ModelSummary, ModelSummaryDetail
+from src.schemas.model import ModelConfig, ModelDetail, ModelSummary, ModelSummaryDetail
+from src.services.config_service import MLConfigService
 
 
 class MLflowService:
@@ -17,7 +18,9 @@ class MLflowService:
         self.client = mlflow_client
         self.ml_config_service = ml_config_service
 
-    def create_model(self, name: str, config: ModelConfig, event_type: str = "") -> ModelDetail:
+    def create_model(
+        self, name: str, config: ModelConfig, event_type: str = ""
+    ) -> ModelDetail:
         """
         Create a new model in MLflow registry and store config in PostgreSQL.
 
@@ -38,7 +41,7 @@ class MLflowService:
             model_config = ModelConfigDB(
                 model_id=model_id,
                 name=name,
-                architecture=config.architecture.value,
+                architecture=config.architecture,
                 input_fields=config.input_fields,
                 output_fields=config.output_fields,
                 window_duration_seconds=config.window_duration_seconds,
@@ -122,10 +125,7 @@ class MLflowService:
         model_configs = self.ml_config_service.list_all()
 
         try:
-            registered = {
-                rm.name: rm
-                for rm in self.client.search_registered_models()
-            }
+            registered = {rm.name: rm for rm in self.client.search_registered_models()}
         except MlflowException:
             registered = {}
 
@@ -139,7 +139,7 @@ class MLflowService:
                 ModelSummary(
                     id=model_config.model_id,
                     name=model_config.name,
-                    architecture=ArchitectureType(model_config.architecture),
+                    architecture=model_config.architecture,
                     created_at=model_config.created_at,
                     latest_version=latest_version,
                     event_type=model_config.event_type,
@@ -153,10 +153,7 @@ class MLflowService:
         model_configs = self.ml_config_service.list_all()
 
         try:
-            registered = {
-                rm.name: rm
-                for rm in self.client.search_registered_models()
-            }
+            registered = {rm.name: rm for rm in self.client.search_registered_models()}
         except MlflowException:
             registered = {}
 
@@ -175,7 +172,9 @@ class MLflowService:
                 mlflow_run_id = mv.run_id or None
                 current_stage = mv.current_stage if mv.current_stage != "None" else None
                 if mv.creation_timestamp:
-                    last_trained_at = datetime.fromtimestamp(mv.creation_timestamp / 1000)
+                    last_trained_at = datetime.fromtimestamp(
+                        mv.creation_timestamp / 1000
+                    )
 
             # Extract performance tags
             tags = dict(rm.tags) if rm and rm.tags else {}
@@ -197,21 +196,23 @@ class MLflowService:
                     field = k.removeprefix("eval_metric:")
                     eval_metric_per_field[field] = v
 
-            results.append(ModelSummaryDetail(
-                id=model_config.model_id,
-                name=model_config.name,
-                architecture=ArchitectureType(model_config.architecture),
-                created_at=model_config.created_at,
-                latest_version=latest_version,
-                last_trained_at=last_trained_at,
-                mlflow_run_id=mlflow_run_id,
-                current_stage=current_stage,
-                is_training=model_config.is_training,
-                best_for_fields=best_for_fields,
-                score_per_field=score_per_field,
-                eval_metric_per_field=eval_metric_per_field,
-                event_type=model_config.event_type,
-            ))
+            results.append(
+                ModelSummaryDetail(
+                    id=model_config.model_id,
+                    name=model_config.name,
+                    architecture=model_config.architecture,
+                    created_at=model_config.created_at,
+                    latest_version=latest_version,
+                    last_trained_at=last_trained_at,
+                    mlflow_run_id=mlflow_run_id,
+                    current_stage=current_stage,
+                    is_training=model_config.is_training,
+                    best_for_fields=best_for_fields,
+                    score_per_field=score_per_field,
+                    eval_metric_per_field=eval_metric_per_field,
+                    event_type=model_config.event_type,
+                )
+            )
 
         return results
 

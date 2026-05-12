@@ -5,25 +5,26 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from uuid import uuid4
+
+import mlflow
 import numpy as np
+from mlflow.tracking import MlflowClient
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
+from src.core.config import settings
 from src.db.model_config import ModelConfigDB
 from src.db.training_job import TrainingJobDB
-from src.services.data_storage_client import DataStorageClient
-from src.services.mlflow_service import MLflowService
+from src.schemas.training import TrainingJobStatus
+from src.services.architecture_service import ArchitectureService
 from src.services.config_service import MLConfigService
 from src.services.data_preparation import (
     calculate_timestamps,
     extract_fields,
     prepare_sequences,
 )
-from src.schemas.model import ArchitectureType
-from src.schemas.training import TrainingJobStatus
-from src.models import MODEL_REGISTRY
-import mlflow
-from mlflow.tracking import MlflowClient
+from src.services.data_storage_client import DataStorageClient
+from src.services.mlflow_service import MLflowService
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="training")
 def _run_training_sync(job_id: str):
     import mlflow
     from mlflow import MlflowClient
-    from src.core.config import settings
+
     from src.db.database import SessionLocal
     from src.services.config_service import MLConfigService
 
@@ -149,7 +150,9 @@ class TrainingService:
             )
             self.db.commit()
             if result.rowcount == 0:
-                logger.info(f"Job {job_id} was not in QUEUED state (likely cancelled), aborting")
+                logger.info(
+                    f"Job {job_id} was not in QUEUED state (likely cancelled), aborting"
+                )
                 return
 
             # Lock is already acquired in create_training_job
@@ -166,15 +169,20 @@ class TrainingService:
                 event_type = getattr(model_detail, "event_type", None)
                 component_id = f"ml-{model_detail.name}" if model_detail.name else None
                 training_data = await self._fetch_training_data(
-                    start_ts, end_ts, config.window_duration_seconds,
-                    event_type=event_type, component_id=component_id,
+                    start_ts,
+                    end_ts,
+                    config.window_duration_seconds,
+                    event_type=event_type,
+                    component_id=component_id,
                 )
 
                 if not training_data:
                     raise ValueError("No data available for training")
 
                 slice_groups = self._group_by_slice(training_data)
-                logger.info(f"Job {job_id}: {len(training_data)} windows across {len(slice_groups)} slices")
+                logger.info(
+                    f"Job {job_id}: {len(training_data)} windows across {len(slice_groups)} slices"
+                )
 
                 all_X = []
                 all_y = []
@@ -191,7 +199,9 @@ class TrainingService:
                             continue
                         all_X.append(X)
                         all_y.append(y)
-                        logger.info(f"Job {job_id}: Slice {slice_key} - {len(X)} sequences")
+                        logger.info(
+                            f"Job {job_id}: Slice {slice_key} - {len(X)} sequences"
+                        )
                     except Exception as e:
                         logger.warning(f"Job {job_id}: Slice {slice_key} failed: {e}")
 
@@ -204,9 +214,11 @@ class TrainingService:
 
                 X_train = np.concatenate(all_X, axis=0)
                 y_train = np.concatenate(all_y, axis=0)
-                X_background = X_train[-min(50, len(X_train)):]
+                X_background = X_train[-min(50, len(X_train)) :]
 
-                logger.info(f"Job {job_id}: {len(X_train)} total sequences from {len(all_X)} slices")
+                logger.info(
+                    f"Job {job_id}: {len(X_train)} total sequences from {len(all_X)} slices"
+                )
 
                 # Train model and log to MLflow
                 # Note: mlflow_run_id is set inside _train_and_log immediately after run starts
@@ -233,7 +245,9 @@ class TrainingService:
                     job.status = TrainingJobStatus.COMPLETED
                     job.completed_at = datetime.now()
                     self.db.commit()
-                    logger.info(f"Job {job_id}: Training completed successfully with run {mlflow_run_id}")
+                    logger.info(
+                        f"Job {job_id}: Training completed successfully with run {mlflow_run_id}"
+                    )
 
             finally:
                 # Always release lock
@@ -252,12 +266,13 @@ class TrainingService:
                 job.completed_at = datetime.now()
                 self.db.commit()
 
-
     def get_job(self, job_id: str) -> TrainingJobDB | None:
         """Get training job by ID."""
         return self.db.get(TrainingJobDB, job_id)
 
-    def list_jobs(self, model_id: str | None = None, status: str | None = None) -> list[TrainingJobDB]:
+    def list_jobs(
+        self, model_id: str | None = None, status: str | None = None
+    ) -> list[TrainingJobDB]:
         """List training jobs with optional filters."""
         query = self.db.query(TrainingJobDB)
         if model_id:
@@ -272,9 +287,15 @@ class TrainingService:
         from src.schemas.kube import JobResources
         from src.services.kube_training import get_kube_training_service
 
-        job = self.db.query(TrainingJobDB).filter(TrainingJobDB.job_id == job_id).first()
+        job = (
+            self.db.query(TrainingJobDB).filter(TrainingJobDB.job_id == job_id).first()
+        )
         if resources is None and job:
-            cfg = self.db.query(ModelConfigDB).filter(ModelConfigDB.model_id == job.model_id).first()
+            cfg = (
+                self.db.query(ModelConfigDB)
+                .filter(ModelConfigDB.model_id == job.model_id)
+                .first()
+            )
             if cfg and cfg.default_cpu and cfg.default_memory:
                 resources = JobResources(cpu=cfg.default_cpu, memory=cfg.default_memory)
 
@@ -282,7 +303,9 @@ class TrainingService:
         if kube:
             kube.to_kube(job.model_id, job_id, resources, "forecast")
         else:
-            asyncio.get_running_loop().run_in_executor(_executor, _run_training_sync, job_id)
+            asyncio.get_running_loop().run_in_executor(
+                _executor, _run_training_sync, job_id
+            )
 
     def cancel_job(self, job_id: str):
         """
@@ -315,6 +338,7 @@ class TrainingService:
                 logger.error(f"Failed to terminate MLflow run: {str(e)}")
 
         from src.services.kube_training import get_kube_training_service
+
         kube = get_kube_training_service()
         if kube:
             try:
@@ -349,7 +373,9 @@ class TrainingService:
         if acquired:
             logger.info(f"Acquired training lock for model {model_id}")
         else:
-            logger.warning(f"Failed to acquire training lock for model {model_id} (already locked)")
+            logger.warning(
+                f"Failed to acquire training lock for model {model_id} (already locked)"
+            )
 
         return acquired
 
@@ -425,7 +451,7 @@ class TrainingService:
         self,
         model_id: str,
         job_id: str,
-        architecture: ArchitectureType,
+        architecture: str,
         X_train: np.ndarray,
         y_train: np.ndarray,
         X_background: np.ndarray,
@@ -448,77 +474,98 @@ class TrainingService:
         Raises:
             InterruptedError: If training is cancelled
         """
-        with mlflow.start_run(run_name=f"{model_id}_training") as run:
-            run_id = run.info.run_id
-            logger.info(f"Started MLflow run {run_id} for model {model_id}")
+        # normalize architecture to string (may come in as ArchitectureType enum)
+        architecture_id = (
+            architecture.value if hasattr(architecture, "value") else architecture
+        )
 
-            # CRITICAL: Store run_id immediately so it can be cancelled
-            job = self.get_job(job_id)
-            if job:
-                job.mlflow_run_id = run_id
-                self.db.commit()
-                logger.info(f"Job {job_id}: MLflow run {run_id} linked to job")
+        arch_svc = ArchitectureService()
+        import os
+        import tempfile
 
-            # Log parameters
-            mlflow.log_params({
-                "model_id": model_id,
-                "architecture": architecture.value,
-                "num_sequences": len(X_train),
-                "num_input_features": X_train.shape[2],
-                "num_output_features": y_train.shape[2],
-                **config_dict
-            })
+        with arch_svc.load_architecture(architecture_id) as (cls, content):
+            with mlflow.start_run(run_name=f"{model_id}_training") as run:
+                run_id = run.info.run_id
+                logger.info(f"Started MLflow run {run_id} for model {model_id}")
 
-            # Build or load model for incremental training
-            model = self._build_model(
-                model_id=model_id,
-                architecture=architecture,
-                input_fields=config_dict["input_fields"],
-                output_fields=config_dict["output_fields"],
-                window_duration_seconds=config_dict["window_duration_seconds"],
-                lookback_steps=config_dict["lookback_steps"],
-                forecast_steps=config_dict["forecast_steps"],
-                hidden_size=config_dict["hidden_size"],
-            )
+                # CRITICAL: Store run_id immediately so it can be cancelled
+                job = self.get_job(job_id)
+                if job:
+                    job.mlflow_run_id = run_id
+                    self.db.commit()
+                    logger.info(f"Job {job_id}: MLflow run {run_id} linked to job")
 
-            # Train model (with cancellation support)
-            final_loss = self._train_pytorch_model(
-                model=model,
-                X_train=X_train,
-                y_train=y_train,
-                job_id=job_id,
-                epochs=100,
-                batch_size=32,
-                learning_rate=0.001,
-            )
+                # Log parameters
+                mlflow.log_params(
+                    {
+                        "model_id": model_id,
+                        "architecture": architecture_id,
+                        "num_sequences": len(X_train),
+                        "num_input_features": X_train.shape[2],
+                        "num_output_features": y_train.shape[2],
+                        **config_dict,
+                    }
+                )
 
-            # Log final metrics
-            mlflow.log_metric("final_loss", final_loss)
+                # Build or load model for incremental training
+                # cls is already in sys.modules — mlflow.pytorch.load_model can deserialize
+                model = self._build_model(
+                    cls=cls,
+                    model_id=model_id,
+                    input_fields=config_dict["input_fields"],
+                    output_fields=config_dict["output_fields"],
+                    window_duration_seconds=config_dict["window_duration_seconds"],
+                    lookback_steps=config_dict["lookback_steps"],
+                    forecast_steps=config_dict["forecast_steps"],
+                    hidden_size=config_dict["hidden_size"],
+                )
 
-            # Log model to MLflow
-            model_uri = f"runs:/{run_id}/model"
-            mlflow.pytorch.log_model(
-                pytorch_model=model.model,
-                artifact_path="model",
-                registered_model_name=None
-            )
+                # Train model (with cancellation support)
+                final_loss = self._train_pytorch_model(
+                    model=model,
+                    X_train=X_train,
+                    y_train=y_train,
+                    job_id=job_id,
+                    epochs=settings.TRAIN_MAX_EPOCHS,
+                    batch_size=32,
+                    learning_rate=0.001,
+                )
 
-            # Register or update model
-            version = self._register_or_update_model(model_id, model_uri)
-            mlflow.set_tag("model_version", version)
+                # Log final metrics
+                mlflow.log_metric("final_loss", final_loss)
 
-            # Store KernelSHAP background - one representative window per training cell
-            import os, tempfile
-            with tempfile.TemporaryDirectory() as tmpdir:
-                bg_path = os.path.join(tmpdir, "background.npz")
-                np.savez(bg_path, X_background=X_background)
-                mlflow.log_artifact(bg_path, artifact_path="background")
-            logger.info(
-                f"Model {model_id} v{version} logged successfully - "
-                f"KernelSHAP background stored ({len(X_background)} cells)"
-            )
+                # Log architecture .py as artifact so incremental training can reload the class
+                with tempfile.NamedTemporaryFile(suffix=".py", delete=False) as f:
+                    f.write(content)
+                    tmp_arch_path = f.name
+                try:
+                    mlflow.log_artifact(tmp_arch_path, artifact_path="architecture")
+                finally:
+                    os.unlink(tmp_arch_path)
 
-            return run_id
+                # Log model to MLflow
+                model_uri = f"runs:/{run_id}/model"
+                mlflow.pytorch.log_model(
+                    pytorch_model=model.model,
+                    artifact_path="model",
+                    registered_model_name=None,
+                )
+
+                # Register or update model
+                version = self._register_or_update_model(model_id, model_uri)
+                mlflow.set_tag("model_version", version)
+
+                # Store KernelSHAP background
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    bg_path = os.path.join(tmpdir, "background.npz")
+                    np.savez(bg_path, X_background=X_background)
+                    mlflow.log_artifact(bg_path, artifact_path="background")
+                logger.info(
+                    f"Model {model_id} v{version} logged successfully - "
+                    f"KernelSHAP background stored ({len(X_background)} cells)"
+                )
+
+                return run_id
 
     def _register_or_update_model(self, model_id: str, model_uri: str) -> str:
         """
@@ -538,8 +585,8 @@ class TrainingService:
 
     def _build_model(
         self,
+        cls: type,
         model_id: str,
-        architecture: ArchitectureType,
         input_fields: list[str],
         output_fields: list[str],
         window_duration_seconds: int,
@@ -550,33 +597,15 @@ class TrainingService:
         """
         Build or load PyTorch model for incremental training.
 
-        Tries to load the latest version from MLflow for incremental training.
-        If no version exists, creates a new model from scratch.
-
-        Args:
-            model_id: Model ID (for loading from MLflow)
-            architecture: Model architecture (LSTM or ANN)
-            input_fields: List of input field names
-            output_fields: List of output field names
-            window_duration_seconds: Data window granularity in seconds
-            lookback_steps: Lookback window size
-            forecast_steps: Forecast window size
-            hidden_size: Hidden layer size
-
-        Returns:
-            PyTorch model instance (loaded or new)
-
-        Raises:
-            ValueError: If architecture not supported
+        cls is already registered in sys.modules by load_architecture context manager,
+        so mlflow.pytorch.load_model can deserialize it correctly.
         """
-        model_class = MODEL_REGISTRY.get(architecture)
-        if not model_class:
-            raise ValueError(f"Unsupported architecture: {architecture}")
-
         # Try to load latest model for incremental training
         try:
             client = MlflowClient()
-            latest_versions = client.get_latest_versions(model_id, stages=["Production", "None"])
+            latest_versions = client.get_latest_versions(
+                model_id, stages=["Production", "None"]
+            )
 
             if latest_versions:
                 latest_version = max(latest_versions, key=lambda v: int(v.version))
@@ -587,59 +616,36 @@ class TrainingService:
                     f"for incremental training"
                 )
 
-                # Load the PyTorch model from MLflow
                 loaded_model = mlflow.pytorch.load_model(model_uri)
 
-                # Wrap it back in our model interface with configuration
-                if architecture == ArchitectureType.LSTM:
-                    model = model_class(
-                        input_fields=input_fields,
-                        output_fields=output_fields,
-                        window_duration_seconds=window_duration_seconds,
-                        lookback_steps=lookback_steps,
-                        forecast_steps=forecast_steps,
-                        hidden_size=hidden_size,
-                        num_layers=2
-                    )
-                else:  # ANN
-                    model = model_class(
-                        input_fields=input_fields,
-                        output_fields=output_fields,
-                        window_duration_seconds=window_duration_seconds,
-                        lookback_steps=lookback_steps,
-                        forecast_steps=forecast_steps,
-                        hidden_size=hidden_size
-                    )
+                model = cls(
+                    input_fields=input_fields,
+                    output_fields=output_fields,
+                    window_duration_seconds=window_duration_seconds,
+                    lookback_steps=lookback_steps,
+                    forecast_steps=forecast_steps,
+                    hidden_size=hidden_size,
+                )
                 model.model = loaded_model
 
                 logger.info("Successfully loaded model for incremental training")
                 return model
 
         except Exception as e:
-            logger.info(f"No existing model found ({str(e)}), creating new model from scratch")
+            logger.info(
+                f"No existing model found ({str(e)}), creating new model from scratch"
+            )
 
-        # Create new model if loading failed or no versions exist
-        if architecture == ArchitectureType.LSTM:
-            model = model_class(
-                input_fields=input_fields,
-                output_fields=output_fields,
-                window_duration_seconds=window_duration_seconds,
-                lookback_steps=lookback_steps,
-                forecast_steps=forecast_steps,
-                hidden_size=hidden_size,
-                num_layers=2
-            )
-        else:  # ANN
-            model = model_class(
-                input_fields=input_fields,
-                output_fields=output_fields,
-                window_duration_seconds=window_duration_seconds,
-                lookback_steps=lookback_steps,
-                forecast_steps=forecast_steps,
-                hidden_size=hidden_size
-            )
+        model = cls(
+            input_fields=input_fields,
+            output_fields=output_fields,
+            window_duration_seconds=window_duration_seconds,
+            lookback_steps=lookback_steps,
+            forecast_steps=forecast_steps,
+            hidden_size=hidden_size,
+        )
         logger.info(
-            f"Built new {architecture.value} model with {len(input_fields)} inputs, "
+            f"Built new model with {len(input_fields)} inputs, "
             f"{len(output_fields)} outputs, lookback={lookback_steps}, forecast={forecast_steps}"
         )
 
@@ -673,6 +679,7 @@ class TrainingService:
         Raises:
             InterruptedError: If training is cancelled
         """
+
         def status_callback(epoch, max_epochs, loss, **kwargs):
             """Callback for logging progress and checking cancellation."""
             logger.info(f"Epoch {epoch}/{max_epochs}: loss={loss:.6f}")
@@ -684,7 +691,9 @@ class TrainingService:
                 logger.warning(f"Job {job_id} cancelled at epoch {epoch}")
                 raise InterruptedError("Training cancelled by user")
 
-        logger.info(f"Starting training: {epochs} epochs, batch_size={batch_size}, lr={learning_rate}")
+        logger.info(
+            f"Starting training: {epochs} epochs, batch_size={batch_size}, lr={learning_rate}"
+        )
 
         # Prepare data for training
         X_prepared = np.nan_to_num(np.array(X_train, dtype=np.float32))
@@ -703,7 +712,7 @@ class TrainingService:
             X=X_prepared,
             y=y_prepared,
             max_epochs=epochs,
-            status_callback=status_callback
+            status_callback=status_callback,
         )
 
         logger.info(f"Training completed with final loss: {final_loss:.6f}")

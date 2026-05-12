@@ -2,7 +2,6 @@
 
 from pydantic import BaseModel, Field
 
-from src.schemas.model import ArchitectureType
 from src.schemas.performance import LocalExplanationResponse
 from src.schemas.tags import Tags
 
@@ -34,7 +33,7 @@ class InferenceResult(BaseModel):
     model_id: str = Field(..., description="Model ID used for prediction")
     model_name: str = Field(..., description="Human-readable model name")
     model_version: int = Field(..., description="Model version used")
-    architecture: ArchitectureType = Field(..., description="Model architecture")
+    architecture: str = Field(..., description="Model architecture")
     tags: Tags = Field(..., description="Tag filters used to fetch data")
     lookback_steps: int = Field(..., description="Number of historical windows used as input")
     forecast_steps: int = Field(..., description="Number of future windows predicted")
