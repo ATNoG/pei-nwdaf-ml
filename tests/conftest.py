@@ -6,6 +6,9 @@ from unittest.mock import Mock, MagicMock
 from mlflow import MlflowClient
 
 
+os.environ.setdefault("DEV_MODE", "true")
+
+
 def pytest_configure(config):
     """
     Set test environment variables before any imports.
