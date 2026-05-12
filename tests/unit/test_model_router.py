@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 from fastapi.testclient import TestClient
 from datetime import datetime
 
-from src.schemas.model import ArchitectureType, ModelConfig, ModelDetail, ModelSummary
+from src.schemas.model import ModelConfig, ModelDetail, ModelSummary
 
 
 @pytest.fixture
@@ -47,7 +47,7 @@ class TestModelRouterEndpoints:
             ModelSummary(
                 id="uuid-1",
                 name="model_one",
-                architecture=ArchitectureType.LSTM,
+                architecture="lstm",
                 event_type="PERF_DATA",
                 created_at=datetime(2024, 2, 1),
                 latest_version=1,
@@ -85,7 +85,7 @@ class TestModelRouterEndpoints:
             name="test_model",
             event_type="PERF_DATA",
             config=ModelConfig(
-                architecture=ArchitectureType.LSTM,
+                architecture="lstm",
                 input_fields=["latency_mean"],
                 output_fields=["latency_mean"],
                 window_duration_seconds=60,
@@ -232,7 +232,7 @@ class TestModelRouterEndpoints:
             name="test_model",
             event_type="PERF_DATA",
             config=ModelConfig(
-                architecture=ArchitectureType.LSTM,
+                architecture="lstm",
                 input_fields=["latency_mean"],
                 output_fields=["latency_mean"],
                 window_duration_seconds=60,

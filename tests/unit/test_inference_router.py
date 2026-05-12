@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from fastapi.testclient import TestClient
 
-from src.schemas.model import ArchitectureType
+
 from src.schemas.inference import ForecastStepPrediction
 
 
@@ -35,7 +35,7 @@ def _make_success_result():
         "model_id": "test-uuid",
         "model_name": "test_model",
         "model_version": 2,
-        "architecture": ArchitectureType.LSTM,
+        "architecture": "lstm",
         "tags": _TAGS,
         "lookback_steps": 30,
         "forecast_steps": 3,

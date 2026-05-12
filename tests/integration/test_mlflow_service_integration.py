@@ -3,7 +3,7 @@
 import pytest
 
 from src.services.mlflow_service import MLflowService
-from src.schemas.model import ArchitectureType, ModelConfig
+from src.schemas.model import ModelConfig
 
 pytestmark = pytest.mark.integration
 
@@ -12,7 +12,7 @@ pytestmark = pytest.mark.integration
 def sample_config():
     """Sample model config for integration tests."""
     return ModelConfig(
-        architecture=ArchitectureType.LSTM,
+        architecture="lstm",
         input_fields=["latency_mean", "rsrp_mean"],
         output_fields=["latency_mean"],
         window_duration_seconds=60,
@@ -49,7 +49,7 @@ class TestMLflowServiceIntegration:
 
         assert retrieved.id == result.id
         assert retrieved.name == "test_model"
-        assert retrieved.config.architecture == ArchitectureType.LSTM
+        assert retrieved.config.architecture == "lstm"
         assert retrieved.config.input_fields == ["latency_mean", "rsrp_mean"]
         assert retrieved.config.output_fields == ["latency_mean"]
         assert retrieved.config.window_duration_seconds == 60
@@ -67,7 +67,7 @@ class TestMLflowServiceIntegration:
         # Create two models
         config1 = sample_config
         config2 = ModelConfig(
-            architecture=ArchitectureType.ANN,
+            architecture="ann",
             input_fields=["sinr_mean"],
             output_fields=["latency_mean"],
             window_duration_seconds=300,
@@ -93,8 +93,8 @@ class TestMLflowServiceIntegration:
         model_one = next(m for m in models if m.name == "model_one")
         model_two = next(m for m in models if m.name == "model_two")
 
-        assert model_one.architecture == ArchitectureType.LSTM
-        assert model_two.architecture == ArchitectureType.ANN
+        assert model_one.architecture == "lstm"
+        assert model_two.architecture == "ann"
 
     def test_delete_model(self, mlflow_service, sample_config):
         """Test deleting a model."""
@@ -126,7 +126,7 @@ class TestMLflowServiceIntegration:
     def test_config_reconstruction(self, mlflow_service):
         """Test that complex configs are correctly stored and reconstructed."""
         config = ModelConfig(
-            architecture=ArchitectureType.ANN,
+            architecture="ann",
             input_fields=[
                 "latency_mean",
                 "latency_max",
@@ -159,7 +159,7 @@ class TestMLflowServiceIntegration:
         """Test creating multiple models with different configurations."""
         configs = [
             ModelConfig(
-                architecture=ArchitectureType.ANN,
+                architecture="ann",
                 input_fields=["latency_mean"],
                 output_fields=["latency_mean"],
                 window_duration_seconds=60,
@@ -168,7 +168,7 @@ class TestMLflowServiceIntegration:
                 hidden_size=16,
             ),
             ModelConfig(
-                architecture=ArchitectureType.LSTM,
+                architecture="lstm",
                 input_fields=["latency_mean", "rsrp_mean", "sinr_mean"],
                 output_fields=["latency_mean"],
                 window_duration_seconds=300,
@@ -240,7 +240,7 @@ class TestMLflowServiceIntegration:
 
         # Create second model with same name but different config
         different_config = ModelConfig(
-            architecture=ArchitectureType.ANN,
+            architecture="ann",
             input_fields=["rsrp_mean"],
             output_fields=["rsrp_mean"],
             window_duration_seconds=120,
@@ -260,8 +260,8 @@ class TestMLflowServiceIntegration:
 
         assert retrieved1.id == model1.id
         assert retrieved2.id == model2.id
-        assert retrieved1.config.architecture == ArchitectureType.LSTM
-        assert retrieved2.config.architecture == ArchitectureType.ANN
+        assert retrieved1.config.architecture == "lstm"
+        assert retrieved2.config.architecture == "ann"
 
         # Both should appear in list
         models = mlflow_service.list_models()

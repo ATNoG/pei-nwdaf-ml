@@ -5,7 +5,7 @@ import numpy as np
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from src.services.inference_service import InferenceService
-from src.schemas.model import ArchitectureType, ModelConfig, ModelDetail
+from src.schemas.model import ModelConfig, ModelDetail
 from src.schemas.inference import ForecastStepPrediction
 
 
@@ -13,7 +13,7 @@ from src.schemas.inference import ForecastStepPrediction
 def sample_model_config():
     """Model config with small dimensions for fast tests."""
     return ModelConfig(
-        architecture=ArchitectureType.LSTM,
+        architecture="lstm",
         input_fields=["rsrp_mean", "sinr_mean", "latency_mean"],
         output_fields=["latency_mean"],
         window_duration_seconds=60,
@@ -110,14 +110,9 @@ class TestInferenceServicePredict:
         )
 
         with patch(
-            "mlflow.pytorch.load_model"
-        ) as mock_load, patch(
-            "src.services.inference_service.MODEL_REGISTRY"
-        ) as mock_registry:
-            mock_model_class = MagicMock(return_value=mock_model)
-            mock_registry.get.return_value = mock_model_class
-            mock_load.return_value = MagicMock()
-
+            "src.services.inference_service.load_trained_model",
+            return_value=mock_model,
+        ):
             result = await inference_service.predict(
                 output_field="latency_mean",
                 tags={"snssai_sst": "1", "dnn": "internet", "event": "PERF_DATA"},
@@ -127,7 +122,7 @@ class TestInferenceServicePredict:
         assert result["model_id"] == "test-uuid"
         assert result["model_name"] == "test_model"
         assert result["model_version"] == 2
-        assert result["architecture"] == ArchitectureType.LSTM
+        assert result["architecture"] == "lstm"
         assert result["tags"]["snssai_sst"] == "1"
         assert result["lookback_steps"] == config.lookback_steps
         assert result["forecast_steps"] == forecast_steps
@@ -166,10 +161,8 @@ class TestInferenceServicePredict:
         mock_data_storage_client.fetch_data = AsyncMock(return_value=[])
 
         mock_model = MagicMock()
-        with patch(
-            "mlflow.pytorch.load_model"
-        ), patch("src.services.inference_service.MODEL_REGISTRY") as mock_registry:
-            mock_registry.get.return_value = MagicMock(return_value=mock_model)
+        with patch("src.services.inference_service.load_trained_model") as mock_registry:
+            mock_registry.return_value = mock_model
 
             with pytest.raises(ValueError, match="No data for tags"):
                 await inference_service.predict(
@@ -195,10 +188,8 @@ class TestInferenceServicePredict:
         )
 
         mock_model = MagicMock()
-        with patch(
-            "mlflow.pytorch.load_model"
-        ), patch("src.services.inference_service.MODEL_REGISTRY") as mock_registry:
-            mock_registry.get.return_value = MagicMock(return_value=mock_model)
+        with patch("src.services.inference_service.load_trained_model") as mock_registry:
+            mock_registry.return_value = mock_model
 
             with pytest.raises(ValueError, match="Insufficient data"):
                 await inference_service.predict(
@@ -222,10 +213,8 @@ class TestInferenceServicePredict:
         mock_model = MagicMock()
         mock_model.predict.side_effect = RuntimeError("CUDA error")
 
-        with patch(
-            "mlflow.pytorch.load_model"
-        ), patch("src.services.inference_service.MODEL_REGISTRY") as mock_registry:
-            mock_registry.get.return_value = MagicMock(return_value=mock_model)
+        with patch("src.services.inference_service.load_trained_model") as mock_registry:
+            mock_registry.return_value = mock_model
 
             with pytest.raises(RuntimeError, match="Prediction failed"):
                 await inference_service.predict(
@@ -256,12 +245,12 @@ class TestInferenceServicePredict:
         with patch(
             "mlflow.pytorch.load_model"
         ), patch(
-            "src.services.inference_service.MODEL_REGISTRY"
+            "src.services.inference_service.load_trained_model"
         ) as mock_registry, patch(
             "src.services.inference_service.calculate_timestamps",
             return_value=(1000, 2000),
         ) as mock_ts:
-            mock_registry.get.return_value = MagicMock(return_value=mock_model)
+            mock_registry.return_value = mock_model
 
             await inference_service.predict(
                 output_field="latency_mean", tags={"snssai_sst": "1", "dnn": "internet", "event": "PERF_DATA"}, model_id="test-uuid"
@@ -277,126 +266,31 @@ class TestInferenceServicePredict:
 class TestLoadTrainedModel:
     """Tests for InferenceService._load_trained_model."""
 
-    def test_loads_lstm_with_num_layers(self, inference_service, sample_model_config):
-        """Test LSTM model is loaded with num_layers=2."""
+    def test_delegates_to_load_trained_model(self, inference_service, sample_model_config):
+        """Test that _load_trained_model delegates to load_trained_model."""
+        mock_model = MagicMock()
         with patch(
-            "mlflow.pytorch.load_model"
-        ) as mock_load, patch(
-            "src.services.inference_service.MODEL_REGISTRY"
-        ) as mock_registry:
-            mock_model_class = MagicMock()
-            mock_registry.get.return_value = mock_model_class
-            mock_load.return_value = MagicMock()
-
-            inference_service._load_trained_model(
-                model_id="test-uuid",
-                version=2,
-                config=sample_model_config,
-            )
-
-            mock_model_class.assert_called_once_with(
-                input_fields=sample_model_config.input_fields,
-                output_fields=sample_model_config.output_fields,
-                window_duration_seconds=sample_model_config.window_duration_seconds,
-                lookback_steps=sample_model_config.lookback_steps,
-                forecast_steps=sample_model_config.forecast_steps,
-                hidden_size=sample_model_config.hidden_size,
-                num_layers=2,
-            )
-
-    def test_loads_ann_without_num_layers(self, inference_service):
-        """Test ANN model is loaded without num_layers kwarg."""
-        ann_config = ModelConfig(
-            architecture=ArchitectureType.ANN,
-            input_fields=["rsrp_mean"],
-            output_fields=["latency_mean"],
-            window_duration_seconds=60,
-            lookback_steps=5,
-            forecast_steps=3,
-            hidden_size=32,
-        )
-
-        with patch(
-            "mlflow.pytorch.load_model"
-        ) as mock_load, patch(
-            "src.services.inference_service.MODEL_REGISTRY"
-        ) as mock_registry:
-            mock_model_class = MagicMock()
-            mock_registry.get.return_value = mock_model_class
-            mock_load.return_value = MagicMock()
-
-            inference_service._load_trained_model(
-                model_id="test-uuid", version=1, config=ann_config
-            )
-
-            mock_model_class.assert_called_once_with(
-                input_fields=ann_config.input_fields,
-                output_fields=ann_config.output_fields,
-                window_duration_seconds=ann_config.window_duration_seconds,
-                lookback_steps=ann_config.lookback_steps,
-                forecast_steps=ann_config.forecast_steps,
-                hidden_size=ann_config.hidden_size,
-            )
-
-    def test_unsupported_architecture(self, inference_service, sample_model_config):
-        """Test that unsupported architecture raises ValueError."""
-        with patch(
-            "src.services.inference_service.MODEL_REGISTRY"
-        ) as mock_registry:
-            mock_registry.get.return_value = None
-
-            with pytest.raises(ValueError, match="Unsupported architecture"):
-                inference_service._load_trained_model(
-                    model_id="test-uuid", version=1, config=sample_model_config
-                )
-
-    def test_correct_mlflow_uri(self, inference_service, sample_model_config):
-        """Test that the correct MLflow URI is constructed."""
-        with patch(
-            "mlflow.pytorch.load_model"
-        ) as mock_load, patch(
-            "src.services.inference_service.MODEL_REGISTRY"
-        ) as mock_registry:
-            mock_registry.get.return_value = MagicMock()
-            mock_load.return_value = MagicMock()
-
-            inference_service._load_trained_model(
-                model_id="test-uuid", version=2, config=sample_model_config
-            )
-
-            mock_load.assert_called_once_with("models:/test-uuid/2")
-
-    def test_assigns_loaded_model(self, inference_service, sample_model_config):
-        """Test that the loaded PyTorch model is assigned to the wrapper."""
-        loaded_pytorch_model = MagicMock()
-
-        with patch(
-            "mlflow.pytorch.load_model",
-            return_value=loaded_pytorch_model,
-        ), patch(
-            "src.services.inference_service.MODEL_REGISTRY"
-        ) as mock_registry:
-            mock_wrapper = MagicMock()
-            mock_registry.get.return_value = MagicMock(return_value=mock_wrapper)
-
+            "src.services.inference_service.load_trained_model",
+            return_value=mock_model,
+        ) as mock_loader:
             result = inference_service._load_trained_model(
                 model_id="test-uuid", version=2, config=sample_model_config
             )
-
-            assert result.model == loaded_pytorch_model
+            mock_loader.assert_called_once_with(
+                sample_model_config.architecture,
+                "models:/test-uuid/2",
+                sample_model_config,
+            )
+            assert result == mock_model
 
     def test_mlflow_load_failure_raises_valueerror(
         self, inference_service, sample_model_config
     ):
-        """Test that MLflow load failure is wrapped in ValueError."""
+        """Test that load_trained_model failure propagates."""
         with patch(
-            "mlflow.pytorch.load_model",
-            side_effect=Exception("Connection refused"),
-        ), patch(
-            "src.services.inference_service.MODEL_REGISTRY"
-        ) as mock_registry:
-            mock_registry.get.return_value = MagicMock()
-
+            "src.services.inference_service.load_trained_model",
+            side_effect=ValueError("Failed to load model artifact from models:/test-uuid/2"),
+        ):
             with pytest.raises(ValueError, match="Failed to load model artifact"):
                 inference_service._load_trained_model(
                     model_id="test-uuid", version=2, config=sample_model_config

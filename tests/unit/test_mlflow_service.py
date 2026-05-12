@@ -6,7 +6,7 @@ from datetime import datetime
 from mlflow.exceptions import MlflowException
 
 from src.services.mlflow_service import MLflowService
-from src.schemas.model import ArchitectureType, ModelConfig
+from src.schemas.model import ModelConfig
 from src.db.model_config import ModelConfigDB
 
 
@@ -103,7 +103,7 @@ class TestMLflowServiceGet:
 
         mock_config_service.get_config.return_value = mock_model_config
         mock_config_service.config_from_db.return_value = ModelConfig(
-            architecture=ArchitectureType.LSTM,
+            architecture="lstm",
             input_fields=["latency_mean", "rsrp_mean", "sinr_mean"],
             output_fields=["latency_mean"],
             window_duration_seconds=60,
@@ -126,7 +126,7 @@ class TestMLflowServiceGet:
         # Verify result
         assert result.id == "test-model-uuid"
         assert result.name == "my_test_model"
-        assert result.config.architecture == ArchitectureType.LSTM
+        assert result.config.architecture == "lstm"
 
     def test_get_model_not_found_in_db(self, mock_mlflow_client, mock_config_service):
         """Test getting a model that doesn't exist in database."""
@@ -163,7 +163,7 @@ class TestMLflowServiceGet:
 
         mock_config_service.get_config.return_value = mock_model_config
         mock_config_service.config_from_db.return_value = ModelConfig(
-            architecture=ArchitectureType.LSTM,
+            architecture="lstm",
             input_fields=["latency_mean"],
             output_fields=["latency_mean"],
             window_duration_seconds=60,
@@ -248,12 +248,12 @@ class TestMLflowServiceList:
 
         assert result[0].id == "uuid-1"
         assert result[0].name == "model_one"
-        assert result[0].architecture == ArchitectureType.ANN
+        assert result[0].architecture == "ann"
         assert result[0].latest_version is None
 
         assert result[1].id == "uuid-2"
         assert result[1].name == "model_two"
-        assert result[1].architecture == ArchitectureType.LSTM
+        assert result[1].architecture == "lstm"
         assert result[1].latest_version == 3
 
 
