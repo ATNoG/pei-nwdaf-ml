@@ -2,6 +2,7 @@ import sys
 import types
 
 import numpy as np
+import torch.nn as nn
 
 from src.models.model_interface import ModelInterface
 
@@ -40,6 +41,8 @@ def run(architecture_id: str, content: bytes, namespace_factory) -> None:
         X = np.zeros((2, 2, 1), dtype=np.float32)
         y = np.zeros((2, 1), dtype=np.float32)
         model.train(X, y, max_epochs=1)
+        if not hasattr(model, 'model') or not isinstance(model.model, nn.Module):
+            raise ValueError("After train(), self.model must be set to a torch.nn.Module instance")
         model.predict(X)
     except ValueError:
         raise

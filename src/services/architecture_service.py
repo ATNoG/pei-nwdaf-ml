@@ -179,6 +179,7 @@ Architecture file constraints:
 - Class must implement train(self, X, y, max_epochs, status_callback)
 -> float
 - Class must implement predict(self, X)
+- self.model must be set to a torch.nn.Module instance after train() is called
 - Do not import ModelInterface. It is injected at runtime
 - Allowed imports: torch, numpy, logging, math, typing, abc ( other imports are forbidden)
 - Forbidden calls: eval, exec, compile, __import__, open
