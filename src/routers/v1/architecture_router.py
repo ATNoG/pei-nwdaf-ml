@@ -1,6 +1,7 @@
 """Router for custom model architecture management."""
 
 import logging
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from fastapi.responses import Response
@@ -50,6 +51,22 @@ def list_architectures(
 @router.get("/help", response_model=ArchitectureHelpResponse)
 def architecture_help():
     return ArchitectureHelpResponse(constraints=ArchitectureService.help())
+
+
+@router.get("/interface/download")
+def download_interface():
+    """Download model_interface.py — the base class all custom architectures must extend."""
+    interface_path = os.path.join(os.path.dirname(__file__), "..", "..", "models", "model_interface.py")
+    interface_path = os.path.abspath(interface_path)
+    if not os.path.exists(interface_path):
+        raise HTTPException(status_code=404, detail="model_interface.py not found")
+    with open(interface_path, "rb") as f:
+        content = f.read()
+    return Response(
+        content=content,
+        media_type="text/x-python",
+        headers={"Content-Disposition": "attachment; filename=model_interface.py"},
+    )
 
 
 @router.get("/{architecture_id}/download")
