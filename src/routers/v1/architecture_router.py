@@ -1,9 +1,11 @@
 """Router for custom model architecture management."""
 
+import base64
+import json
 import logging
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Query
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -19,15 +21,28 @@ def get_architecture_service() -> ArchitectureService:
     return ArchitectureService()
 
 
+def get_username(request: Request) -> str:
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return "unknown"
+    try:
+        payload = auth.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.b64decode(payload))
+        return claims.get("preferred_username", "unknown")
+    except Exception:
+        return "unknown"
+
+
 @router.post("", status_code=201, response_model=ArchitectureUploadResponse)
 async def upload_architecture(
     name: str = Query(..., pattern=r"^[a-zA-Z0-9_-]+$"),
     file: UploadFile = File(...),
-    uploaded_by: str = Query(default="unknown"),
     db: Session = Depends(get_db),
     svc: ArchitectureService = Depends(get_architecture_service),
+    uploaded_by: str = Depends(get_username),
 ):
-    if not file.filename.endswith(".py"):
+    if not file.filename or not file.filename.endswith(".py"):
         raise HTTPException(status_code=422, detail="File must be a .py file")
 
     content = await file.read()
