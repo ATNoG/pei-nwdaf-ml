@@ -1,7 +1,5 @@
 """Router for custom model architecture management."""
 
-import base64
-import json
 import logging
 import os
 
@@ -22,16 +20,10 @@ def get_architecture_service() -> ArchitectureService:
 
 
 def get_username(request: Request) -> str:
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        return "unknown"
-    try:
-        payload = auth.split(".")[1]
-        payload += "=" * (-len(payload) % 4)
-        claims = json.loads(base64.b64decode(payload))
-        return claims.get("preferred_username", "unknown")
-    except Exception:
-        return "unknown"
+    user = getattr(request.state, "user", None)
+    if user:
+        return user.get("username", "unknown")
+    return "unknown"
 
 
 @router.post("", status_code=201, response_model=ArchitectureUploadResponse)
