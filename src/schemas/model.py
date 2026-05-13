@@ -1,16 +1,8 @@
 """Pydantic schemas for model configuration and management."""
 
 from datetime import datetime
-from enum import Enum
 
 from pydantic import BaseModel, Field
-
-
-class ArchitectureType(str, Enum):
-    """Supported model architectures."""
-
-    ANN = "ann"
-    LSTM = "lstm"
 
 
 class ModelConfig(BaseModel):
@@ -21,8 +13,10 @@ class ModelConfig(BaseModel):
     Once created, this config cannot be changed.
     """
 
-    architecture: ArchitectureType = Field(
-        ..., description="Model architecture type"
+    architecture: str = Field(
+        ...,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+        description="Architecture name — must match an uploaded architecture in the registry",
     )
     input_fields: list[str] = Field(
         ...,
@@ -78,14 +72,10 @@ class ModelSummary(BaseModel):
 
     id: str = Field(..., description="Model ID ")
     name: str = Field(..., description="Model name")
-    architecture: ArchitectureType = Field(..., description="Model architecture")
+    architecture: str = Field(..., description="Model architecture")
     event_type: str = Field(..., description="5G event type this model belongs to")
-    created_at: datetime|None = Field(
-        None, description="Model creation timestamp"
-    )
-    latest_version: int|None = Field(
-        None, description="Latest registered model version number"
-    )
+    created_at: datetime | None = Field(None, description="Model creation timestamp")
+    latest_version: int | None = Field(None, description="Latest registered model version number")
 
 
 class ModelSummaryDetail(BaseModel):
@@ -93,7 +83,7 @@ class ModelSummaryDetail(BaseModel):
 
     id: str = Field(..., description="Model ID")
     name: str = Field(..., description="Model name")
-    architecture: ArchitectureType = Field(..., description="Model architecture")
+    architecture: str = Field(..., description="Model architecture")
     event_type: str = Field(..., description="5G event type this model belongs to")
     created_at: datetime | None = Field(None, description="Model creation timestamp")
     latest_version: int | None = Field(None, description="Latest registered model version number")
@@ -113,14 +103,8 @@ class ModelDetail(BaseModel):
     name: str = Field(..., description="Model name")
     event_type: str = Field(..., description="5G event type this model belongs to")
     config: ModelConfig = Field(..., description="Full model configuration")
-    created_at: datetime|None = Field(None, description="Creation timestamp")
-    latest_version: int|None = Field(None, description="Latest version number")
-    last_trained_at: datetime|None = Field(
-        None, description="Last training completion timestamp"
-    )
-    mlflow_run_id: str|None = Field(
-        None, description="MLflow run ID of the latest training"
-    )
-    training_loss: float|None = Field(
-        None, description="Final training loss from latest run"
-    )
+    created_at: datetime | None = Field(None, description="Creation timestamp")
+    latest_version: int | None = Field(None, description="Latest version number")
+    last_trained_at: datetime | None = Field(None, description="Last training completion timestamp")
+    mlflow_run_id: str | None = Field(None, description="MLflow run ID of the latest training")
+    training_loss: float | None = Field(None, description="Final training loss from latest run")

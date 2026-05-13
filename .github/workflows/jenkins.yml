@@ -3,10 +3,10 @@ name: CI/CD
 on:
   push:
     branches:
-      - '**'
+      - "dont-run-this"
   pull_request:
     branches:
-      - '**'
+      - "dont-run-this"
 
 jobs:
   test:
@@ -18,7 +18,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: "3.13"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -54,6 +54,6 @@ jobs:
           JENKINS_API_TOKEN: ${{ secrets.JENKINS_API_TOKEN }}
           JENKINS_TRIGGER_TOKEN: ${{ secrets.JENKINS_TRIGGER_TOKEN }}
         run: >-
-                  curl -X POST
-                  -u "${JENKINS_USER}:${JENKINS_API_TOKEN}"
-                  "http://localhost:8080/job/ml/build?token=${JENKINS_TRIGGER_TOKEN}"
+          curl -X POST
+          -u "${JENKINS_USER}:${JENKINS_API_TOKEN}"
+          "http://localhost:8080/job/ml/build?token=${JENKINS_TRIGGER_TOKEN}"

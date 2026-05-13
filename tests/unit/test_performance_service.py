@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, call, patch
 from mlflow.exceptions import MlflowException
 
-from src.schemas.model import ArchitectureType, ModelConfig
+from src.schemas.model import ModelConfig
 from src.schemas.performance import ModelPerformance
 from src.services.performance_service import PerformanceService
 
@@ -56,7 +56,7 @@ def _make_perf(model_id: str, score: float | None, metric: str = "rmse") -> Mode
     return ModelPerformance(
         model_id=model_id,
         model_name=f"model_{model_id}",
-        architecture=ArchitectureType.LSTM,
+        architecture="lstm",
         score=score,
         metric=metric,
     )

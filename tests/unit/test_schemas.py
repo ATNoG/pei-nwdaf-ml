@@ -4,7 +4,6 @@ import pytest
 from pydantic import ValidationError
 
 from src.schemas.model import (
-    ArchitectureType,
     ModelConfig,
     ModelCreate,
     ModelSummary,
@@ -24,7 +23,7 @@ class TestModelConfig:
     def test_valid_config(self):
         """Test creating a valid model config."""
         config = ModelConfig(
-            architecture=ArchitectureType.ANN,
+            architecture="ann",
             input_fields=["latency_mean", "rsrp_mean"],
             output_fields=["latency_mean"],
             window_duration_seconds=60,
@@ -33,7 +32,7 @@ class TestModelConfig:
             hidden_size=64,
         )
 
-        assert config.architecture == ArchitectureType.ANN
+        assert config.architecture == "ann"
         assert config.input_fields == ["latency_mean", "rsrp_mean"]
         assert config.output_fields == ["latency_mean"]
         assert config.window_duration_seconds == 60
@@ -44,7 +43,7 @@ class TestModelConfig:
     def test_default_hidden_size(self):
         """Test that hidden_size defaults to 32."""
         config = ModelConfig(
-            architecture=ArchitectureType.LSTM,
+            architecture="lstm",
             input_fields=["latency_mean"],
             output_fields=["latency_mean"],
             window_duration_seconds=300,
@@ -58,7 +57,7 @@ class TestModelConfig:
         """Test that empty input_fields is invalid."""
         with pytest.raises(ValidationError) as exc_info:
             ModelConfig(
-                architecture=ArchitectureType.ANN,
+                architecture="ann",
                 input_fields=[],
                 output_fields=["latency_mean"],
                 window_duration_seconds=60,
@@ -72,7 +71,7 @@ class TestModelConfig:
         """Test that empty output_fields is invalid."""
         with pytest.raises(ValidationError):
             ModelConfig(
-                architecture=ArchitectureType.ANN,
+                architecture="ann",
                 input_fields=["latency_mean"],
                 output_fields=[],
                 window_duration_seconds=60,
@@ -84,7 +83,7 @@ class TestModelConfig:
         """Test that negative window_duration_seconds is invalid."""
         with pytest.raises(ValidationError):
             ModelConfig(
-                architecture=ArchitectureType.ANN,
+                architecture="ann",
                 input_fields=["latency_mean"],
                 output_fields=["latency_mean"],
                 window_duration_seconds=0,
@@ -96,7 +95,7 @@ class TestModelConfig:
         """Test that zero lookback_steps is invalid."""
         with pytest.raises(ValidationError):
             ModelConfig(
-                architecture=ArchitectureType.ANN,
+                architecture="ann",
                 input_fields=["latency_mean"],
                 output_fields=["latency_mean"],
                 window_duration_seconds=60,
@@ -108,7 +107,7 @@ class TestModelConfig:
         """Test that zero forecast_steps is invalid."""
         with pytest.raises(ValidationError):
             ModelConfig(
-                architecture=ArchitectureType.ANN,
+                architecture="ann",
                 input_fields=["latency_mean"],
                 output_fields=["latency_mean"],
                 window_duration_seconds=60,
@@ -120,7 +119,7 @@ class TestModelConfig:
         """Test that hidden_size < 4 is invalid."""
         with pytest.raises(ValidationError):
             ModelConfig(
-                architecture=ArchitectureType.ANN,
+                architecture="ann",
                 input_fields=["latency_mean"],
                 output_fields=["latency_mean"],
                 window_duration_seconds=60,
@@ -204,7 +203,7 @@ class TestModelSummary:
         summary = ModelSummary(
             id="uuid-123",
             name="my_model",
-            architecture=ArchitectureType.LSTM,
+            architecture="lstm",
             event_type="PERF_DATA",
             created_at=datetime(2024, 1, 1),
             latest_version=1,
@@ -212,7 +211,7 @@ class TestModelSummary:
 
         assert summary.id == "uuid-123"
         assert summary.name == "my_model"
-        assert summary.architecture == ArchitectureType.LSTM
+        assert summary.architecture == "lstm"
         assert summary.latest_version == 1
 
     def test_model_summary_optional_fields(self):
@@ -220,7 +219,7 @@ class TestModelSummary:
         summary = ModelSummary(
             id="uuid-123",
             name="my_model",
-            architecture=ArchitectureType.ANN,
+            architecture="ann",
             event_type="PERF_DATA",
         )
 
@@ -370,7 +369,7 @@ class TestInferenceResult:
             model_id="uuid-123",
             model_name="test_model",
             model_version=2,
-            architecture=ArchitectureType.LSTM,
+            architecture="lstm",
             tags=_TAGS,
             lookback_steps=30,
             forecast_steps=5,
@@ -397,7 +396,7 @@ class TestInferenceResult:
 
         assert result.model_id == "uuid-123"
         assert result.model_version == 2
-        assert result.architecture == ArchitectureType.LSTM
+        assert result.architecture == "lstm"
         assert result.input_data_start == 1000
         assert result.input_data_end == 2800
         assert len(result.predictions) == 2
@@ -408,7 +407,7 @@ class TestInferenceResult:
             model_id="uuid-123",
             model_name="test_ann",
             model_version=1,
-            architecture=ArchitectureType.ANN,
+            architecture="ann",
             tags=_TAGS,
             lookback_steps=10,
             forecast_steps=3,
@@ -420,4 +419,4 @@ class TestInferenceResult:
             predictions=[],
         )
 
-        assert result.architecture == ArchitectureType.ANN
+        assert result.architecture == "ann"

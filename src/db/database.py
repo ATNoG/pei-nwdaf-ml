@@ -57,6 +57,8 @@ def get_db_context() -> Generator[Session, None, None]:
 
 def init_db() -> None:
     """Create all tables in the database."""
+    from src.db.architecture_config import ArchitectureConfigDB  # noqa: F401
+
     Base.metadata.create_all(bind=engine)
     # Add new nullable columns to existing tables (idempotent)
     with engine.connect() as conn:
