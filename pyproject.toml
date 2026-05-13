@@ -19,6 +19,7 @@ dependencies = [
     "confluent-kafka>=2.13.2",
     "aiohttp>=3.9.0",
     "cachetools>=5.3.0",
+    "PyJWT[crypto]>=2.8.0",
     "policy-client-sdk @ git+https://github.com/ATNoG/pei-nwdaf-policy.git#subdirectory=client_sdk",
     "kubernetes>=35.0.0",
     "alibi==0.9.4",

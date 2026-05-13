@@ -54,6 +54,9 @@ services:
       - DLT_ENABLED=${DLT_ENABLED:-false}
       - DLT_SIDECAR_URL=${DLT_SIDECAR_URL:-http://fabric-client-sidecar:8080}
       - DLT_TIMEOUT=${DLT_TIMEOUT:-10.0}
+      - DEV_MODE=${DEV_MODE:-false}
+      - KEYCLOAK_URL=${KEYCLOAK_URL:-http://keycloak:8080/auth}
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM:-aion}
     networks:
       - nwdaf-ml
       - nwdaf-network
