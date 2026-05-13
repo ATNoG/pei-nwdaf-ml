@@ -2,12 +2,52 @@
 
 import json
 import logging
+import os
+import time
 
 import httpx
 
 from src.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+_KC_URL = os.getenv("KEYCLOAK_URL", "http://keycloak:8080/auth")
+_KC_REALM = os.getenv("KEYCLOAK_REALM", "aion")
+_KC_CLIENT = os.getenv("KEYCLOAK_CLIENT_ID", "aion-services")
+_KC_USER = os.getenv("ML_SERVICE_KC_USER", "ml-service")
+_KC_PASS = os.getenv("ML_SERVICE_KC_PASSWORD", "ml-service")
+_TOKEN_URL = f"{_KC_URL}/realms/{_KC_REALM}/protocol/openid-connect/token"
+
+_cached_token: str | None = None
+_token_expires_at: float = 0.0
+
+
+async def _get_service_token() -> str | None:
+    global _cached_token, _token_expires_at
+    if os.getenv("DEV_MODE", "").lower() == "true":
+        return None
+    if _cached_token and time.time() < _token_expires_at - 30:
+        return _cached_token
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                _TOKEN_URL,
+                data={
+                    "grant_type": "password",
+                    "client_id": _KC_CLIENT,
+                    "username": _KC_USER,
+                    "password": _KC_PASS,
+                },
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            _cached_token = data["access_token"]
+            _token_expires_at = time.time() + data.get("expires_in", 300)
+            return _cached_token
+    except Exception:
+        logger.warning("Failed to fetch service token from Keycloak", exc_info=True)
+        return None
 
 
 class DataStorageClient:
@@ -19,13 +59,16 @@ class DataStorageClient:
         self.data_endpoint = settings.DATA_STORAGE_DATA_ENDPOINT
         self.cell_endpoint = settings.DATA_STORAGE_CELL_ENDPOINT
         self.excluded_fields = set(
-            f.strip() for f in settings.DATA_STORAGE_EXCLUDED_FIELDS.split(",") if f.strip()
+            f.strip()
+            for f in settings.DATA_STORAGE_EXCLUDED_FIELDS.split(",")
+            if f.strip()
         )
         self._encryptor_client = None
         self._handshake_done = False
         self._session_token: str | None = None
         if settings.ENCRYPTION_ENABLED:
             from encryptor.core.secure_channel_client import EncryptorClient
+
             self._encryptor_client = EncryptorClient()
 
     def _ensure_handshake(self) -> None:
@@ -41,15 +84,19 @@ class DataStorageClient:
                 self._session_token,
             )
         except Exception as exc:
-            logger.warning("Encryption handshake failed, continuing without encryption: %s", exc)
+            logger.warning(
+                "Encryption handshake failed, continuing without encryption: %s", exc
+            )
             self._encryptor_client = None
 
-    @property
-    def _auth_headers(self) -> dict[str, str]:
-        """Headers to attach to every data-storage request."""
+    async def _get_auth_headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {}
         if self._session_token:
-            return {"X-Session-Token": self._session_token}
-        return {}
+            headers["X-Session-Token"] = self._session_token
+        token = await _get_service_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        return headers
 
     def _decrypt_response(self, response: httpx.Response) -> bytes:
         """Decrypt the response body if the server marked it as encrypted."""
@@ -75,7 +122,10 @@ class DataStorageClient:
             headers["X-Component-ID"] = component_id
 
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=10.0, headers={**self._auth_headers, **headers})
+            auth_headers = await self._get_auth_headers()
+            response = await client.get(
+                url, timeout=10.0, headers={**auth_headers, **headers}
+            )
             response.raise_for_status()
 
             raw = self._decrypt_response(response)
@@ -113,7 +163,9 @@ class DataStorageClient:
         self._ensure_handshake()
         url = f"{self.base_url}{settings.DATA_STORAGE_FIELDS_ENDPOINT}"
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=10.0, headers=self._auth_headers)
+            response = await client.get(
+                url, timeout=10.0, headers=await self._get_auth_headers()
+            )
             response.raise_for_status()
             raw = self._decrypt_response(response)
             return json.loads(raw)
@@ -136,7 +188,9 @@ class DataStorageClient:
             headers["X-Component-ID"] = component_id
 
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=30.0, headers={**self._auth_headers, **headers})
+            response = await client.get(
+                url, timeout=30.0, headers={**await self._get_auth_headers(), **headers}
+            )
             response.raise_for_status()
             return json.loads(self._decrypt_response(response))
 
@@ -173,7 +227,11 @@ class DataStorageClient:
             if data:
                 raw = data[0].get("window_start_time", 0)
                 if isinstance(raw, str):
-                    ts = int(datetime.fromisoformat(raw).replace(tzinfo=timezone.utc).timestamp())
+                    ts = int(
+                        datetime.fromisoformat(raw)
+                        .replace(tzinfo=timezone.utc)
+                        .timestamp()
+                    )
                 else:
                     ts = int(raw)
                 if ts > 0:
@@ -228,11 +286,13 @@ class DataStorageClient:
                 if ip_src is not None:
                     params["ip_src"] = ip_src
 
-                headers = {**self._auth_headers}
+                headers = {**await self._get_auth_headers()}
                 if component_id:
                     headers["X-Component-ID"] = component_id
 
-                response = await client.get(url, params=params, timeout=60.0, headers=headers)
+                response = await client.get(
+                    url, params=params, timeout=60.0, headers=headers
+                )
                 response.raise_for_status()
                 batch = json.loads(self._decrypt_response(response))
 
@@ -286,7 +346,12 @@ class DataStorageClient:
                 if event is not None:
                     params["event"] = event
 
-                response = await client.get(url, params=params, timeout=60.0, headers=self._auth_headers)
+                response = await client.get(
+                    url,
+                    params=params,
+                    timeout=60.0,
+                    headers=await self._get_auth_headers(),
+                )
                 response.raise_for_status()
                 batch = json.loads(self._decrypt_response(response))
 

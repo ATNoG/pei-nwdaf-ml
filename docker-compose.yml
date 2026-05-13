@@ -57,6 +57,9 @@ services:
       - DEV_MODE=${DEV_MODE:-false}
       - KEYCLOAK_URL=${KEYCLOAK_URL:-http://keycloak:8080/auth}
       - KEYCLOAK_REALM=${KEYCLOAK_REALM:-aion}
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-aion-services}
+      - ML_SERVICE_KC_USER=${ML_SERVICE_KC_USER:-ml-service}
+      - ML_SERVICE_KC_PASSWORD=${ML_SERVICE_KC_PASSWORD:-ml-service}
     networks:
       - nwdaf-ml
       - nwdaf-network
