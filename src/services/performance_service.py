@@ -24,6 +24,7 @@ from src.services.data_preparation import calculate_timestamps, prepare_last_seq
 from src.services.data_storage_client import DataStorageClient
 from src.services.mlflow_service import MLflowService
 from src.services.model_loader import load_trained_model
+from src.services.safe_predict import sync_safe_predict
 
 logger = logging.getLogger(__name__)
 
@@ -191,9 +192,9 @@ class PerformanceService:
 
             detail_map[model_config.model_id] = model_detail
             try:
-                model = self._load_model(model_config.model_id, model_detail.latest_version, config)
-                loaded_models[model_config.model_id] = model
-                score = await self._compute_score_for_model(model, config, field_name, event_type, metric, fallback_start_ts)
+                _model_uri = f"models:/{model_config.model_id}/{model_detail.latest_version}"
+                loaded_models[model_config.model_id] = _model_uri
+                score = await self._compute_score_for_model(_model_uri, config, field_name, event_type, metric, fallback_start_ts)
             except Exception as e:
                 logger.warning(
                     f"Failed to evaluate model {model_config.model_id} for field '{field_name}': {e}"
@@ -229,7 +230,7 @@ class PerformanceService:
         if best_model_id and best_model_id in loaded_models:
             try:
                 importances = await self._compute_permutation_importance(
-                    model=loaded_models[best_model_id],
+                    model_uri=loaded_models[best_model_id],
                     config=detail_map[best_model_id].config,
                     field_name=field_name,
                     event_type=event_type,
@@ -433,8 +434,8 @@ class PerformanceService:
             config.window_duration_seconds, event_type=model_event_type or None
         )
 
-        model = self._load_model(best.model_id, model_detail.latest_version, config)
-        score = await self._compute_score_for_model(model, config, field_name, model_event_type, metric, fallback_start_ts)
+        _model_uri = f"models:/{best.model_id}/{model_detail.latest_version}"
+        score = await self._compute_score_for_model(_model_uri, config, field_name, model_event_type, metric, fallback_start_ts)
 
         evaluated_at = datetime.now(tz=timezone.utc)
         evaluated_at_str = evaluated_at.isoformat()
@@ -562,7 +563,7 @@ class PerformanceService:
 
     async def _compute_score_for_model(
         self,
-        model,
+        model_uri: str,
         config: ModelConfig,
         field_name: str,
         event_type: str,
@@ -620,7 +621,7 @@ class PerformanceService:
             X = prepare_last_sequence(x_windows, config.input_fields, config.lookback_steps)
 
             try:
-                pred = model.predict(X)[0]
+                pred = sync_safe_predict(config.architecture, model_uri, config, X)[0]
             except Exception as e:
                 logger.warning("Prediction failed for slice %s: %s", slice_key, e)
                 continue
@@ -660,7 +661,7 @@ class PerformanceService:
 
     async def _compute_permutation_importance(
         self,
-        model,
+        model_uri: str,
         config: ModelConfig,
         field_name: str,
         event_type: str,
@@ -721,7 +722,7 @@ class PerformanceService:
             if len(X) == 0:
                 return np.zeros((0,), dtype=np.float32)
             X_3d = bridge.reconstruct(X)
-            preds = model.predict(X_3d)
+            preds = sync_safe_predict(config.architecture, model_uri, config, X_3d)
             return preds[:, field_idx::num_out].mean(axis=1)
 
         scorer = _make_alibi_scorer(metric, self._compute_score)
@@ -782,7 +783,7 @@ class PerformanceService:
         if model_detail.latest_version is None:
             raise ValueError(f"Model '{model_id}' has no trained version")
         config = model_detail.config
-        model = self._load_model(model_id, model_detail.latest_version, config)
+        _model_uri = f"models:/{model_id}/{model_detail.latest_version}"
         event_type = getattr(model_detail, "event_type", "")
         fallback_start_ts = await self.data_storage_client.probe_data_timestamp(
             config.window_duration_seconds, event_type=event_type or None
@@ -791,7 +792,7 @@ class PerformanceService:
 
         metric = tags.get(_metric_key(field_name), "rmse")
         importances = await self._compute_permutation_importance(
-            model=model,
+            model_uri=_model_uri,
             config=config,
             field_name=field_name,
             event_type=event_type,
