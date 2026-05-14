@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
-from src.models.model_interface import ModelInterface
 import logging
 
 logger = logging.getLogger(__name__)

@@ -8,6 +8,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.main
+    image: pei-ml-service:latest
     ports:
       - "8060:8060"
     environment:
@@ -48,10 +49,19 @@ services:
       - TRAIN_KUBE_CA_CERT=${TRAIN_KUBE_CA_CERT}
       - TRAIN_KUBE_NAMESPACE=${TRAIN_KUBE_NAMESPACE}
       - TRAIN_KUBE_IMAGE=${TRAIN_KUBE_IMAGE}
+      - TRAIN_MAX_EPOCHS=${TRAIN_MAX_EPOCHS:-100}
+      - ADD_TEST_MODELS=${ADD_TEST_MODELS:-false}
       - ENCRYPTION_ENABLED=${ENCRYPTION_ENABLED:-false}
       - DLT_ENABLED=${DLT_ENABLED:-false}
       - DLT_SIDECAR_URL=${DLT_SIDECAR_URL:-http://fabric-client-sidecar:8080}
       - DLT_TIMEOUT=${DLT_TIMEOUT:-10.0}
+      - DEV_MODE=${DEV_MODE:-false}
+      - KEYCLOAK_URL=${KEYCLOAK_URL:-http://keycloak:8080/auth}
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM:-aion}
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-aion-services}
+      - ML_SERVICE_KC_USER=${ML_SERVICE_KC_USER:-ml-service}
+      - ML_SERVICE_KC_PASSWORD=${ML_SERVICE_KC_PASSWORD:-ml-service}
+      - INFERENCE_WORKER_URL=http://inference-worker:8061
     networks:
       - nwdaf-ml
       - nwdaf-network
@@ -59,6 +69,52 @@ services:
     depends_on:
       mlflow:
         condition: service_healthy
+      inference-worker:
+        condition: service_healthy
+
+  inference-worker:
+    image: pei-ml-service:latest
+    container_name: pei-inference-worker
+    command: ["/app/.venv/bin/python", "-m", "src.workers.inference_worker"]
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL}
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
+      - MLFLOW_S3_ENDPOINT_URL=${MLFLOW_S3_ENDPOINT_URL}
+      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+      - DATA_STORAGE_API_URL=${DATA_STORAGE_API_URL}
+      - DATA_STORAGE_EXAMPLE_ENDPOINT=${DATA_STORAGE_EXAMPLE_ENDPOINT}
+      - DATA_STORAGE_DATA_ENDPOINT=${DATA_STORAGE_DATA_ENDPOINT}
+      - DATA_STORAGE_CELL_ENDPOINT=${DATA_STORAGE_CELL_ENDPOINT}
+      - DATA_STORAGE_EXCLUDED_FIELDS=${DATA_STORAGE_EXCLUDED_FIELDS}
+      - DATABASE_URL=${DATABASE_URL}
+      - INFERENCE_WORKER_URL=http://localhost:8061
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /root/.cache
+    networks:
+      - nwdaf-ml
+    restart: unless-stopped
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8061/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   postgres:
     build:
@@ -96,7 +152,13 @@ services:
     networks:
       - nwdaf-ml
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${MINIO_PORT}/minio/health/live"]
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://localhost:${MINIO_PORT}/minio/health/live",
+        ]
       interval: 5s
       timeout: 3s
       retries: 20

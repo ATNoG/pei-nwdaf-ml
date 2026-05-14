@@ -1,3 +1,4 @@
+from .architecture_router import router as architecture_router
 from .model_router import router as model_router
 from .fields_router import router as fields_router
 from .training_router import router as training_router
@@ -15,3 +16,4 @@ router.include_router(inference_router, prefix="/inference", tags=["Inference"])
 router.include_router(performance_router, prefix="/performance", tags=["Performance"])
 router.include_router(anomaly_router, prefix="/anomaly", tags=["Anomaly Detection"])
 router.include_router(resources_router, prefix="/resources", tags=["Resources"])
+router.include_router(architecture_router, prefix="/architectures", tags=["Architectures"])

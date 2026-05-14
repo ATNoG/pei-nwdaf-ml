@@ -6,6 +6,9 @@ from unittest.mock import Mock, MagicMock
 from mlflow import MlflowClient
 
 
+os.environ.setdefault("DEV_MODE", "true")
+
+
 def pytest_configure(config):
     """
     Set test environment variables before any imports.
@@ -62,10 +65,10 @@ def mock_config_service():
 @pytest.fixture
 def sample_model_config():
     """Sample model configuration for testing."""
-    from src.schemas.model import ModelConfig, ArchitectureType
+    from src.schemas.model import ModelConfig
 
     return ModelConfig(
-        architecture=ArchitectureType.LSTM,
+        architecture="lstm",
         input_fields=["latency_mean", "rsrp_mean", "sinr_mean"],
         output_fields=["latency_mean"],
         window_duration_seconds=60,

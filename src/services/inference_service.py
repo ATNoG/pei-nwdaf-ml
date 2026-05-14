@@ -4,13 +4,15 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
+import httpx
 import mlflow
 import numpy as np
 
 from src.core.config import settings
-from src.models import MODEL_REGISTRY
+from src.services.model_loader import load_trained_model
+from src.services.safe_predict import safe_predict, sync_safe_predict
 from src.schemas.inference import ForecastStepPrediction
-from src.schemas.model import ArchitectureType, ModelConfig
+from src.schemas.model import ModelConfig
 from src.schemas.performance import LocalExplanationResponse
 from src.services.data_preparation import calculate_timestamps, prepare_last_sequence
 from src.services.data_storage_client import DataStorageClient
@@ -139,14 +141,7 @@ class InferenceService:
                 f"Train the model first via POST /v1/training/train"
             )
 
-        # Load trained model from MLflow - sync call, run in thread
-        model = await asyncio.to_thread(
-            self._load_trained_model,
-            model_id=model_id,
-            version=model_detail.latest_version,
-            config=config,
-        )
-
+        model_uri = f"models:/{model_id}/{model_detail.latest_version}"
         lookback_seconds = config.lookback_steps * config.window_duration_seconds
         start_ts, end_ts = calculate_timestamps(lookback_seconds + config.window_duration_seconds)
 
@@ -175,11 +170,7 @@ class InferenceService:
 
         X = np.nan_to_num(X, nan=0.0)
 
-        # Run prediction
-        try:
-            raw_predictions = model.predict(X)
-        except Exception as e:
-            raise RuntimeError(f"Prediction failed: {str(e)}")
+        raw_predictions = await safe_predict(config.architecture, model_uri, config, X)
 
         asyncio.create_task(_dlt_trace_inference(
             model_run_id=model_detail.mlflow_run_id or "",
@@ -236,7 +227,7 @@ class InferenceService:
         if explain:
             try:
                 explanation = await self._explain_kernelshap(
-                    model=model,
+                    model_uri=model_uri,
                     config=config,
                     model_id=model_id,
                     version=model_detail.latest_version,
@@ -282,13 +273,7 @@ class InferenceService:
         if model_detail.latest_version is None:
             raise ValueError(f"Model '{model_id}' has no trained versions.")
 
-        model = await asyncio.to_thread(
-            self._load_trained_model,
-            model_id=model_id,
-            version=model_detail.latest_version,
-            config=config,
-        )
-
+        model_uri = f"models:/{model_id}/{model_detail.latest_version}"
         lookback_seconds = config.lookback_steps * config.window_duration_seconds
         start_ts, end_ts = calculate_timestamps(lookback_seconds + config.window_duration_seconds)
 
@@ -314,10 +299,7 @@ class InferenceService:
         )
         X = np.nan_to_num(X, nan=0.0)
 
-        try:
-            raw_predictions = model.predict(X)
-        except Exception as e:
-            raise RuntimeError(f"Prediction failed: {e}")
+        raw_predictions = await safe_predict(config.architecture, model_uri, config, X)
 
         def _ts(window, field):
             ts = window.get(field, 0)
@@ -398,7 +380,7 @@ class InferenceService:
 
     async def _explain_kernelshap(
         self,
-        model,
+        model_uri: str,
         config: ModelConfig,
         model_id: str,
         version: int,
@@ -427,7 +409,7 @@ class InferenceService:
 
         def predict_fn(X_2d: np.ndarray) -> np.ndarray:
             X_3d = bridge.reconstruct(X_2d)
-            preds = model.predict(X_3d)
+            preds = sync_safe_predict(config.architecture, model_uri, config, X_3d)
             return preds[:, field_idx::num_out].mean(axis=1)
 
         x_instance_2d = np.array([[0.0] * n_fields])       # index 0 = target
@@ -444,7 +426,7 @@ class InferenceService:
             name: round(float(v), 6)
             for name, v in zip(config.input_fields, shap_values)
         }
-        pred_for_field = model.predict(X_instance)[0][field_idx::num_out].tolist()
+        pred_for_field = sync_safe_predict(config.architecture, model_uri, config, X_instance)[0][field_idx::num_out].tolist()
 
         logger.info(
             "KernelSHAP tags=%s field='%s' baseline=%.4f attributions=%s",
@@ -483,43 +465,9 @@ class InferenceService:
         Raises:
             ValueError: If architecture is unsupported or model cannot be loaded.
         """
-        model_class = MODEL_REGISTRY.get(config.architecture)
-        if not model_class:
-            raise ValueError(f"Unsupported architecture: {config.architecture}")
-
         model_uri = f"models:/{model_id}/{version}"
         logger.info(f"Loading model from {model_uri}")
-
-        try:
-            loaded_pytorch_model = mlflow.pytorch.load_model(model_uri)
-        except Exception as e:
-            raise ValueError(
-                f"Failed to load model artifact from {model_uri}: {str(e)}"
-            )
-
-        # Create wrapper with config
-        if config.architecture == ArchitectureType.LSTM:
-            model = model_class(
-                input_fields=config.input_fields,
-                output_fields=config.output_fields,
-                window_duration_seconds=config.window_duration_seconds,
-                lookback_steps=config.lookback_steps,
-                forecast_steps=config.forecast_steps,
-                hidden_size=config.hidden_size,
-                num_layers=2,
-            )
-        else:
-            model = model_class(
-                input_fields=config.input_fields,
-                output_fields=config.output_fields,
-                window_duration_seconds=config.window_duration_seconds,
-                lookback_steps=config.lookback_steps,
-                forecast_steps=config.forecast_steps,
-                hidden_size=config.hidden_size,
-            )
-
-        model.model = loaded_pytorch_model
-        return model
+        return load_trained_model(config.architecture, model_uri, config)
 
     def _structure_predictions(
         self,

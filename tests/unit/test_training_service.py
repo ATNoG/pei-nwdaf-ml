@@ -6,7 +6,7 @@ from datetime import datetime
 import numpy as np
 
 from src.services.training_service import TrainingService
-from src.schemas.model import ModelConfig, ArchitectureType
+from src.schemas.model import ModelConfig
 
 
 class TestTrainingService:
@@ -48,7 +48,7 @@ class TestTrainingService:
     def sample_model_config(self):
         """Sample model configuration."""
         return ModelConfig(
-            architecture=ArchitectureType.LSTM,
+            architecture="lstm",
             input_fields=["rsrp_mean", "sinr_mean"],
             output_fields=["latency_mean"],
             window_duration_seconds=60,

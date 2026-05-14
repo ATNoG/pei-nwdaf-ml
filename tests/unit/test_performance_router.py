@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, AsyncMock, patch
 from fastapi.testclient import TestClient
 
-from src.schemas.model import ArchitectureType
+
 from src.schemas.performance import FieldEvaluationResponse, ModelPerformance
 
 
@@ -41,7 +41,7 @@ def _make_model_performance(
     return ModelPerformance(
         model_id=model_id,
         model_name=model_name,
-        architecture=ArchitectureType.LSTM,
+        architecture="lstm",
         latest_version=latest_version,
         training_loss=0.05,
         score=score,
@@ -410,7 +410,7 @@ class TestGetModelsWithOutputField:
             ModelSummary(
                 id="uuid-1",
                 name="model_a",
-                architecture=ArchitectureType.LSTM,
+                architecture="lstm",
                 event_type="PERF_DATA",
                 created_at=datetime(2024, 2, 1),
                 latest_version=1,
@@ -418,7 +418,7 @@ class TestGetModelsWithOutputField:
             ModelSummary(
                 id="uuid-2",
                 name="model_b",
-                architecture=ArchitectureType.ANN,
+                architecture="ann",
                 event_type="PERF_DATA",
                 created_at=datetime(2024, 2, 1),
                 latest_version=None,
@@ -464,7 +464,7 @@ class TestGetModelsWithOutputField:
             ModelSummary(
                 id="uuid-1",
                 name="model_a",
-                architecture=ArchitectureType.LSTM,
+                architecture="lstm",
                 event_type="PERF_DATA",
                 created_at=datetime(2024, 2, 1),
                 latest_version=1,
@@ -472,7 +472,7 @@ class TestGetModelsWithOutputField:
             ModelSummary(
                 id="uuid-2",
                 name="model_b",
-                architecture=ArchitectureType.ANN,
+                architecture="ann",
                 event_type="PERF_DATA",
                 created_at=datetime(2024, 2, 1),
                 latest_version=None,
@@ -505,7 +505,7 @@ class TestGetModelsWithOutputField:
             ModelSummary(
                 id="uuid-1",
                 name="model_a",
-                architecture=ArchitectureType.LSTM,
+                architecture="lstm",
                 event_type="PERF_DATA",
                 created_at=datetime(2024, 2, 1),
                 latest_version=1,

@@ -2,28 +2,27 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
-from src.models.model_interface import ModelInterface
 import logging
 
 logger = logging.getLogger(__name__)
 
-class SimpleANNNetwork(nn.Module):
-    """Simple feedforward ANN for time series"""
+class LSTMNetwork(nn.Module):
+    """Internal LSTM network"""
 
-    def __init__(self, input_size: int, hidden_size: int, output_size: int):
+    def __init__(self, input_size: int, hidden_size: int, num_layers: int, output_size: int):
         super().__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
+        dropout = 0.2 if num_layers > 1 else 0.0
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=dropout)
+        self.fc = nn.Linear(hidden_size, output_size)
         self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
-        # flatten sequence dimension
-        x = x.view(x.size(0), -1)
-        x = self.relu(self.fc1(x))
-        return self.fc2(x)
+        lstm_out, _ = self.lstm(x)
+        last_out = lstm_out[:, -1, :]
+        return self.fc(self.relu(last_out))
 
 
-class ANN(ModelInterface):
+class LSTM(ModelInterface):
 
     def __init__(
         self,
@@ -32,7 +31,8 @@ class ANN(ModelInterface):
         window_duration_seconds: int,
         lookback_steps: int,
         forecast_steps: int,
-        hidden_size: int
+        hidden_size: int,
+        num_layers: int = 2
     ):
         super().__init__(
             input_fields=input_fields,
@@ -44,17 +44,19 @@ class ANN(ModelInterface):
         )
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = None
+        self.num_layers = num_layers
 
     def _ensure_model(self):
         if self.model is None:
-            # ANN flattens the sequence: lookback_steps * num_input_features
-            flattened_input_size = self.lookback_steps * len(self.input_fields)
+            # LSTM processes sequences per-timestep
+            input_size = len(self.input_fields)
             # Output is flattened: forecast_steps * num_output_features
             output_size = self.forecast_steps * len(self.output_fields)
 
-            self.model = SimpleANNNetwork(
-                input_size=flattened_input_size,
+            self.model = LSTMNetwork(
+                input_size=input_size,
                 hidden_size=self.hidden_size,
+                num_layers=self.num_layers,
                 output_size=output_size
             ).to(self.device)
 
@@ -70,8 +72,10 @@ class ANN(ModelInterface):
         batch_size = min(32, max(1, len(X)//4))
         num_batches = (len(X)+batch_size-1)//batch_size
 
+        # start pytorch training mode
         self.model.train()
 
+        # train
         for epoch in range(max_epochs):
             total_loss = 0.0
             perm = torch.randperm(len(X))
@@ -80,6 +84,7 @@ class ANN(ModelInterface):
                 batch_X = X_tensor[idx]
                 batch_y = y_tensor[idx]
 
+                # reset gradient
                 optimizer.zero_grad()
                 pred = self.model(batch_X)
                 loss = criterion(pred, batch_y)
@@ -101,12 +106,16 @@ class ANN(ModelInterface):
                     except Exception as e:
                         logger.warning(f"Status callback error: {e}")
 
+        # return loss
         return float(total_loss/num_batches)
 
     def predict(self, X):
         self._ensure_model()
 
+        # set evaluation mode
         self.model.eval()
+
+        # disable gradient
         with torch.no_grad():
             pred = self.model(torch.from_numpy(X).to(self.device)).cpu().numpy()
         return pred
