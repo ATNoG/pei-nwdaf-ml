@@ -103,15 +103,9 @@ class TestInferenceServicePredict:
             return_value=sample_cell_data
         )
 
-        # Mock model loading and prediction
-        mock_model = MagicMock()
-        mock_model.predict.return_value = np.zeros(
-            (1, forecast_steps * num_outputs), dtype=np.float32
-        )
-
         with patch(
-            "src.services.inference_service.load_trained_model",
-            return_value=mock_model,
+            "src.services.inference_service.safe_predict",
+            return_value=np.zeros((1, forecast_steps * num_outputs), dtype=np.float32),
         ):
             result = await inference_service.predict(
                 output_field="latency_mean",
@@ -160,14 +154,10 @@ class TestInferenceServicePredict:
         mock_mlflow_service.get_model.return_value = sample_model_detail
         mock_data_storage_client.fetch_data = AsyncMock(return_value=[])
 
-        mock_model = MagicMock()
-        with patch("src.services.inference_service.load_trained_model") as mock_registry:
-            mock_registry.return_value = mock_model
-
-            with pytest.raises(ValueError, match="No data for tags"):
-                await inference_service.predict(
-                    output_field="latency_mean", tags={"snssai_sst": "1", "dnn": "internet", "event": "PERF_DATA"}, model_id="test-uuid"
-                )
+        with pytest.raises(ValueError, match="No data for tags"):
+            await inference_service.predict(
+                output_field="latency_mean", tags={"snssai_sst": "1", "dnn": "internet", "event": "PERF_DATA"}, model_id="test-uuid"
+            )
 
     async def test_predict_insufficient_data(
         self,
@@ -187,14 +177,10 @@ class TestInferenceServicePredict:
             return_value=sparse_data
         )
 
-        mock_model = MagicMock()
-        with patch("src.services.inference_service.load_trained_model") as mock_registry:
-            mock_registry.return_value = mock_model
-
-            with pytest.raises(ValueError, match="Insufficient data"):
-                await inference_service.predict(
-                    output_field="latency_mean", tags={"snssai_sst": "1", "dnn": "internet", "event": "PERF_DATA"}, model_id="test-uuid"
-                )
+        with pytest.raises(ValueError, match="Insufficient data"):
+            await inference_service.predict(
+                output_field="latency_mean", tags={"snssai_sst": "1", "dnn": "internet", "event": "PERF_DATA"}, model_id="test-uuid"
+            )
 
     async def test_predict_model_failure(
         self,
@@ -210,12 +196,10 @@ class TestInferenceServicePredict:
             return_value=sample_cell_data
         )
 
-        mock_model = MagicMock()
-        mock_model.predict.side_effect = RuntimeError("CUDA error")
-
-        with patch("src.services.inference_service.load_trained_model") as mock_registry:
-            mock_registry.return_value = mock_model
-
+        with patch(
+            "src.services.inference_service.safe_predict",
+            side_effect=RuntimeError("Prediction failed: CUDA error"),
+        ):
             with pytest.raises(RuntimeError, match="Prediction failed"):
                 await inference_service.predict(
                     output_field="latency_mean", tags={"snssai_sst": "1", "dnn": "internet", "event": "PERF_DATA"}, model_id="test-uuid"
@@ -236,22 +220,13 @@ class TestInferenceServicePredict:
             return_value=sample_cell_data
         )
 
-        mock_model = MagicMock()
-        mock_model.predict.return_value = np.zeros(
-            (1, config.forecast_steps * len(config.output_fields)),
-            dtype=np.float32,
-        )
-
         with patch(
-            "mlflow.pytorch.load_model"
+            "src.services.inference_service.safe_predict",
+            return_value=np.zeros((1, config.forecast_steps * len(config.output_fields)), dtype=np.float32),
         ), patch(
-            "src.services.inference_service.load_trained_model"
-        ) as mock_registry, patch(
             "src.services.inference_service.calculate_timestamps",
             return_value=(1000, 2000),
         ) as mock_ts:
-            mock_registry.return_value = mock_model
-
             await inference_service.predict(
                 output_field="latency_mean", tags={"snssai_sst": "1", "dnn": "internet", "event": "PERF_DATA"}, model_id="test-uuid"
             )

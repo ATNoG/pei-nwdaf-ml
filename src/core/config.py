@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     TRAIN_MAX_EPOCHS: int = 100
     ADD_TEST_MODELS: bool = False
 
+    # Inference worker
+    INFERENCE_WORKER_URL: str = "http://inference-worker:8061"
+
     # Kubernetes training
     TRAIN_USE_KUBE: bool = False
     TRAIN_KUBE_HOST: str = ""
