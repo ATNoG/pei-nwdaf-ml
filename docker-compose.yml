@@ -98,20 +98,20 @@ services:
     tmpfs:
       - /tmp
       - /root/.cache
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: '2'
     networks:
       - nwdaf-ml
-      - nwdaf-network
     restart: unless-stopped
     depends_on:
       mlflow:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8061/health')"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8061/health')",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -152,7 +152,13 @@ services:
     networks:
       - nwdaf-ml
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${MINIO_PORT}/minio/health/live"]
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://localhost:${MINIO_PORT}/minio/health/live",
+        ]
       interval: 5s
       timeout: 3s
       retries: 20
