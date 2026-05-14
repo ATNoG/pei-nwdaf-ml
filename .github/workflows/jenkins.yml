@@ -3,10 +3,12 @@ name: CI/CD
 on:
   push:
     branches:
-      - "dont-run-this"
+      - main
+      - dev
   pull_request:
     branches:
-      - "dont-run-this"
+      - main
+      - dev
 
 jobs:
   test:
@@ -42,18 +44,18 @@ jobs:
         run: |
           safety check || true
 
-  trigger-jenkins:
-    needs: test
-    runs-on: self-hosted
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
-    steps:
-      - name: Start build
-        env:
-          JENKINS_USER: admin
-          JENKINS_API_TOKEN: ${{ secrets.JENKINS_API_TOKEN }}
-          JENKINS_TRIGGER_TOKEN: ${{ secrets.JENKINS_TRIGGER_TOKEN }}
-        run: >-
-          curl -X POST
-          -u "${JENKINS_USER}:${JENKINS_API_TOKEN}"
-          "http://localhost:8080/job/ml/build?token=${JENKINS_TRIGGER_TOKEN}"
+#  trigger-jenkins:
+#    needs: test
+#    runs-on: self-hosted
+#    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+#
+#    steps:
+#      - name: Start build
+#        env:
+#          JENKINS_USER: admin
+#          JENKINS_API_TOKEN: ${{ secrets.JENKINS_API_TOKEN }}
+#          JENKINS_TRIGGER_TOKEN: ${{ secrets.JENKINS_TRIGGER_TOKEN }}
+#        run: >-
+#          curl -X POST
+#          -u "${JENKINS_USER}:${JENKINS_API_TOKEN}"
+#          "http://localhost:8080/job/ml/build?token=${JENKINS_TRIGGER_TOKEN}"
