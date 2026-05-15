@@ -227,6 +227,10 @@ class PerformanceService:
             metric=metric,
         )
 
+        # Invalidate inference cache so next request picks up new best model
+        from src.services import inference_cache
+        inference_cache.invalidate_field(field_name)
+
         if best_model_id and best_model_id in loaded_models:
             try:
                 importances = await self._compute_permutation_importance(
