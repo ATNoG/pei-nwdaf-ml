@@ -11,6 +11,7 @@ import numpy as np
 from src.core.config import settings
 from src.services.model_loader import load_trained_model
 from src.services.safe_predict import safe_predict, sync_safe_predict
+from src.services import inference_cache
 from src.schemas.inference import ForecastStepPrediction
 from src.schemas.model import ModelConfig
 from src.schemas.performance import LocalExplanationResponse
@@ -98,41 +99,51 @@ class InferenceService:
         self, output_field: str, tags: dict, model_id: str | None = None, explain: bool = False
     ) -> dict:
         """Run inference using tag filters (snssai/dnn/event). explain=True adds KernelSHAP."""
-        configs = self.mlflow_service.ml_config_service.list_all()
         event_type = tags.get("event", "") if isinstance(tags, dict) else ""
+        cache_key = f"{output_field}:{event_type}"
 
-        # Tags use format: best_for:{event_type}:{field} = "true"
-        def _is_best(model_id: str) -> bool:
-            rm_tags = self.mlflow_service.client.get_registered_model(model_id).tags
-            tag_key = f"best_for:{event_type}:{output_field}" if event_type else None
-            if tag_key and rm_tags.get(tag_key) == "true":
-                return True
-            # Fallback: scan all best_for:*:{output_field} tags
-            suffix = f":{output_field}"
-            return any(v == "true" and k.endswith(suffix) for k, v in rm_tags.items())
-
-        best_id = next((c.model_id for c in configs if _is_best(c.model_id)), None)
-
-        if best_id is None:
-            raise ValueError(
-                f"No best model designated for field '{output_field}'. "
-                f"Run POST /v1/performance/{output_field}/evaluate first."
-            )
-
-        if model_id is None:
+        # Cache hit: skip all MLflow calls (best model + model detail)
+        cached = inference_cache.get(cache_key)
+        if cached and model_id is None:
+            best_id, model_detail = cached
             model_id = best_id
+            config = model_detail.config
         else:
-            config = next(
-                (config for config in configs if config.model_id == model_id), None
+            # Cache miss: resolve best model (N MLflow calls) then cache result
+            configs = await asyncio.to_thread(self.mlflow_service.ml_config_service.list_all)
+
+            def _is_best(mid: str) -> bool:
+                rm_tags = self.mlflow_service.client.get_registered_model(mid).tags
+                tag_key = f"best_for:{event_type}:{output_field}" if event_type else None
+                if tag_key and rm_tags.get(tag_key) == "true":
+                    return True
+                suffix = f":{output_field}"
+                return any(v == "true" and k.endswith(suffix) for k, v in rm_tags.items())
+
+            best_id = await asyncio.to_thread(
+                lambda: next((c.model_id for c in configs if _is_best(c.model_id)), None)
             )
-            if config is None or output_field not in config.output_fields:
+
+            if best_id is None:
                 raise ValueError(
-                    f"Model '{model_id}' does not predict field '{output_field}'."
+                    f"No best model designated for field '{output_field}'. "
+                    f"Run POST /v1/performance/{output_field}/evaluate first."
                 )
 
-        # Load model detail (config + version info) - sync call, run in thread
-        model_detail = await asyncio.to_thread(self.mlflow_service.get_model, model_id)
-        config = model_detail.config
+            if model_id is not None and model_id != best_id:
+                config_entry = next((c for c in configs if c.model_id == model_id), None)
+                if config_entry is None or output_field not in config_entry.output_fields:
+                    raise ValueError(
+                        f"Model '{model_id}' does not predict field '{output_field}'."
+                    )
+            else:
+                model_id = best_id
+
+            model_detail = await asyncio.to_thread(self.mlflow_service.get_model, model_id)
+            config = model_detail.config
+
+            if model_id == best_id:
+                inference_cache.set(cache_key, (best_id, model_detail))
 
         # Validate model has been trained
         if model_detail.latest_version is None:
