@@ -396,7 +396,7 @@ async def _kube_reconciliation_loop():
             for job in (
                 db.query(TrainingJobDB).filter(TrainingJobDB.status.in_(active)).all()
             ):
-                if kube.is_job_dead(job.model_id):
+                if kube.is_job_dead(job.model_id, job.job_id):
                     job.status = TrainingJobStatus.FAILED
                     job.error_message = "K8s job failed or not found"
                     job.completed_at = datetime.now()
@@ -414,7 +414,7 @@ async def _kube_reconciliation_loop():
                 .filter(AnomalyTrainingJobDB.status.in_(active))
                 .all()
             ):
-                if kube.is_job_dead(job.model_id):
+                if kube.is_job_dead(job.model_id, job.job_id):
                     job.status = TrainingJobStatus.FAILED
                     job.error_message = "K8s job failed or not found"
                     job.completed_at = datetime.now()

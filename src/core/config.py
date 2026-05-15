@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     TRAIN_KUBE_CA_CERT: str = ""  # base64-encoded PEM CA certificate
     TRAIN_KUBE_NAMESPACE: str = "default"
     TRAIN_KUBE_IMAGE: str = ""
+    # Override URLs for k3s pods (use external IPs, not Docker hostnames)
+    TRAIN_KUBE_MLFLOW_URI: str = ""
+    TRAIN_KUBE_MLFLOW_S3: str = ""
+    TRAIN_KUBE_DB_URL: str = ""
+    TRAIN_KUBE_DATA_STORAGE_URL: str = ""
 
     # Encryption (DH key exchange + AES-256-GCM)
     ENCRYPTION_ENABLED: bool = False
