@@ -41,6 +41,11 @@ class KubeTrainingService:
                 "DATA_STORAGE_EXCLUDED_FIELDS": settings.DATA_STORAGE_EXCLUDED_FIELDS,
                 "LOG_LEVEL": settings.LOG_LEVEL,
                 "ENCRYPTION_ENABLED": str(settings.ENCRYPTION_ENABLED).lower(),
+                "KEYCLOAK_URL": settings.TRAIN_KUBE_KEYCLOAK_URL,
+                "KEYCLOAK_REALM": settings.KEYCLOAK_REALM,
+                "KEYCLOAK_CLIENT_ID": settings.KEYCLOAK_CLIENT_ID,
+                "ML_SERVICE_KC_USER": settings.ML_SERVICE_KC_USER,
+                "ML_SERVICE_KC_PASSWORD": settings.ML_SERVICE_KC_PASSWORD,
             },
             resources=resources or self._DEFAULT_RESOURCES,
         )

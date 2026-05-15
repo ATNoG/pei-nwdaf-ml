@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     TRAIN_KUBE_MLFLOW_S3: str = ""
     TRAIN_KUBE_DB_URL: str = ""
     TRAIN_KUBE_DATA_STORAGE_URL: str = ""
+    TRAIN_KUBE_KEYCLOAK_URL: str = ""
+    KEYCLOAK_REALM: str = "aion"
+    KEYCLOAK_CLIENT_ID: str = "aion-services"
+    ML_SERVICE_KC_USER: str = "ml-service"
+    ML_SERVICE_KC_PASSWORD: str = "ml-service"
 
     # Encryption (DH key exchange + AES-256-GCM)
     ENCRYPTION_ENABLED: bool = False
