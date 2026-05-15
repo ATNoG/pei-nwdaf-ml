@@ -51,7 +51,7 @@ class InferencePipeline:
             return data
         self._last_run[tag_key] = now
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         task = loop.create_task(self._process(tags))
         task.add_done_callback(
             lambda t: logger.error("_process failed: %s", t.exception()) if t.exception() else None
