@@ -29,7 +29,7 @@ async def _get_service_token() -> str | None:
     if _cached_token and time.time() < _token_expires_at - 30:
         return _cached_token
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             resp = await client.post(
                 _TOKEN_URL,
                 data={
