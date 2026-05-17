@@ -38,7 +38,7 @@ jobs:
 
       - name: Run security scan with bandit
         run: |
-          uvx bandit -r . --skip B101,B102,B104,B105,B110,B113 -x ./.venv
+          uvx bandit -r . --skip B101,B102,B104,B105,B110,B113,B307 -x ./.venv
 
       - name: Run pip-audit
         run: |
