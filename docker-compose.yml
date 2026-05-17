@@ -91,6 +91,8 @@ services:
         "8061",
         "--workers",
         "2",
+        "--loop",
+        "uvloop",
       ]
     environment:
       - LOG_LEVEL=${LOG_LEVEL}

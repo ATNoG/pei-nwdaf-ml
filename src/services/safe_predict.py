@@ -1,3 +1,4 @@
+import base64
 import logging
 
 import httpx
@@ -32,11 +33,13 @@ def _get_sync_client() -> httpx.Client:
 
 
 def _payload(architecture: str, model_uri: str, config, X: np.ndarray) -> dict:
+    arr = np.ascontiguousarray(X, dtype=np.float32)
     return {
         "architecture": architecture,
         "model_uri": model_uri,
         "config": config.model_dump(),
-        "X": X.tolist(),
+        "X_bytes": base64.b64encode(arr.tobytes()).decode(),
+        "X_shape": list(arr.shape),
     }
 
 
@@ -49,7 +52,8 @@ def sync_safe_predict(architecture: str, model_uri: str, config, X: np.ndarray) 
             json=_payload(architecture, model_uri, config, X),
         )
         r.raise_for_status()
-        return np.array(r.json()["output"], dtype=np.float32)
+        body = r.json()
+        return np.frombuffer(base64.b64decode(body["output_bytes"]), dtype=np.float32).reshape(body["output_shape"])
     except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
         logger.error("Inference worker unreachable: %s", e)
         raise RuntimeError("Inference service unavailable. Try again later.")
@@ -70,7 +74,8 @@ async def safe_predict(architecture: str, model_uri: str, config, X: np.ndarray)
             json=_payload(architecture, model_uri, config, X),
         )
         r.raise_for_status()
-        return np.array(r.json()["output"], dtype=np.float32)
+        body = r.json()
+        return np.frombuffer(base64.b64decode(body["output_bytes"]), dtype=np.float32).reshape(body["output_shape"])
     except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
         logger.error("Inference worker unreachable: %s", e)
         raise RuntimeError("Inference service unavailable. Try again later.")
