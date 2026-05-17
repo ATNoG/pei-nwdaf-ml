@@ -1,5 +1,7 @@
 import base64
 import logging
+import os
+import tempfile
 
 import httpx
 import numpy as np
@@ -10,6 +12,10 @@ logger = logging.getLogger(__name__)
 
 _async_client: httpx.AsyncClient | None = None
 _sync_client: httpx.Client | None = None
+
+# Cache: model_uri -> (arch_bytes, model_bytes)
+_bytes_cache: dict[str, tuple[bytes, bytes]] = {}
+_MAX_BYTES_CACHE = 20
 
 
 def _get_async_client() -> httpx.AsyncClient:
@@ -32,11 +38,43 @@ def _get_sync_client() -> httpx.Client:
     return _sync_client
 
 
-def _payload(architecture: str, model_uri: str, config, X: np.ndarray) -> dict:
+def _fetch_artifact_bytes(model_uri: str) -> bytes:
+    """Download model artifact bytes from MLflow/MinIO without torch.load."""
+    import mlflow
+    with tempfile.TemporaryDirectory() as tmpdir:
+        local_path = mlflow.artifacts.download_artifacts(
+            artifact_uri=model_uri,
+            dst_path=tmpdir,
+        )
+        for root, _, files in os.walk(local_path):
+            for f in files:
+                if f.endswith(".pth"):
+                    with open(os.path.join(root, f), "rb") as fp:
+                        return fp.read()
+    raise ValueError(f"No .pth file found in artifact {model_uri}")
+
+
+def _get_bytes(architecture_id: str, model_uri: str) -> tuple[bytes, bytes]:
+    global _bytes_cache
+    if model_uri not in _bytes_cache:
+        if len(_bytes_cache) >= _MAX_BYTES_CACHE:
+            oldest = next(iter(_bytes_cache))
+            del _bytes_cache[oldest]
+        from src.services.architecture_service import ArchitectureService
+        arch_bytes = ArchitectureService().get_raw_bytes(architecture_id)
+        model_bytes = _fetch_artifact_bytes(model_uri)
+        _bytes_cache[model_uri] = (arch_bytes, model_bytes)
+        logger.info("Cached bytes for %s", model_uri)
+    return _bytes_cache[model_uri]
+
+
+def _payload(architecture_id: str, model_uri: str, config, X: np.ndarray) -> dict:
+    arch_bytes, model_bytes = _get_bytes(architecture_id, model_uri)
     arr = np.ascontiguousarray(X, dtype=np.float32)
     return {
-        "architecture": architecture,
-        "model_uri": model_uri,
+        "architecture_id": architecture_id,
+        "arch_bytes": base64.b64encode(arch_bytes).decode(),
+        "model_bytes": base64.b64encode(model_bytes).decode(),
         "config": config.model_dump(),
         "X_bytes": base64.b64encode(arr.tobytes()).decode(),
         "X_shape": list(arr.shape),
@@ -62,10 +100,10 @@ def sync_safe_predict(architecture: str, model_uri: str, config, X: np.ndarray) 
 
 
 async def safe_predict(architecture: str, model_uri: str, config, X: np.ndarray) -> np.ndarray:
-    """Send prediction request to isolated inference worker container.
+    """Send prediction request to isolated inference worker.
 
-    Worker loads and caches the model by model_uri. All dangerous operations
-    (exec, torch.load, predict) run in a container with cap_drop=[ALL].
+    MLservice downloads arch + model bytes, caches them, sends to worker.
+    Worker has no MLflow/MinIO access — exec + torch.load run in cap_drop=[ALL] sandbox.
     """
     client = _get_async_client()
     try:
