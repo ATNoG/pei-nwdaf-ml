@@ -13,25 +13,25 @@ class Settings(BaseSettings):
     # API Configuration
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8060
-    LOG_LEVEL: str
+    LOG_LEVEL: str = "INFO"
 
     # MLflow Configuration
-    MLFLOW_TRACKING_URI: str
-    MLFLOW_S3_ENDPOINT_URL: str
-    AWS_ACCESS_KEY_ID: str
-    AWS_SECRET_ACCESS_KEY: str
+    MLFLOW_TRACKING_URI: str = ""
+    MLFLOW_S3_ENDPOINT_URL: str = ""
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
     AWS_DEFAULT_REGION: str = "us-east-1"
 
     # Data Storage API
-    DATA_STORAGE_API_URL: str
-    DATA_STORAGE_EXAMPLE_ENDPOINT: str
-    DATA_STORAGE_EXCLUDED_FIELDS: str
-    DATA_STORAGE_DATA_ENDPOINT: str
-    DATA_STORAGE_CELL_ENDPOINT: str
+    DATA_STORAGE_API_URL: str = ""
+    DATA_STORAGE_EXAMPLE_ENDPOINT: str = ""
+    DATA_STORAGE_EXCLUDED_FIELDS: str = ""
+    DATA_STORAGE_DATA_ENDPOINT: str = ""
+    DATA_STORAGE_CELL_ENDPOINT: str = ""
     DATA_STORAGE_FIELDS_ENDPOINT: str = "/api/v1/processed/fields"
 
     # Database Configuration
-    DATABASE_URL: str
+    DATABASE_URL: str = ""
 
     # Auto-monitoring
     MONITORING_ENABLED: bool = True

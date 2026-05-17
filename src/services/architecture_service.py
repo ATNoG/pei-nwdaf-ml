@@ -30,6 +30,10 @@ class ArchitectureService:
 
         self._ensure_bucket()
 
+    def get_raw_bytes(self, architecture_id: str) -> bytes:
+        response = self.s3.get_object(Bucket=_BUCKET_NAME, Key=architecture_id)
+        return response["Body"].read()
+
     @contextmanager
     def load_architecture(self, architecture_id: str):
         cls, content = self._load(architecture_id)
@@ -37,6 +41,26 @@ class ArchitectureService:
             yield cls, content
         finally:
             self._unload(architecture_id)
+
+    @contextmanager
+    def load_from_bytes(self, architecture_id: str, content: bytes):
+        module_name = self.module_name(architecture_id)
+        namespace = self._make_namespace(module_name)
+        exec(content, namespace)  # nosec B102
+        mod = types.ModuleType(module_name)
+        mod.__dict__.update(namespace)
+        sys.modules[module_name] = mod
+        cls = next(
+            (v for v in namespace.values()
+             if isinstance(v, type) and issubclass(v, ModelInterface) and v is not ModelInterface),
+            None,
+        )
+        if cls is None:
+            raise ValueError(f"No ModelInterface subclass found in bytes for {architecture_id}")
+        try:
+            yield cls, content
+        finally:
+            sys.modules.pop(module_name, None)
 
     def _load(self, architecture_id: str) -> tuple[type, bytes]:
         response = self.s3.get_object(Bucket=_BUCKET_NAME, Key=architecture_id)

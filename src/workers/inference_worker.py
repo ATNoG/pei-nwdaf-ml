@@ -1,35 +1,36 @@
-"""Isolated inference worker — exec + torch.load + predict with cap_drop=[ALL]."""
+"""Isolated inference worker — exec + torch.load + predict with cap_drop=[ALL].
+
+Receives arch_bytes + model_bytes from mlservice (no MinIO/MLflow access needed).
+"""
 
 import asyncio
 import base64
 import logging
-import os
 
-import mlflow
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from src.core.config import settings
 from src.schemas.model import ModelConfig
-from src.services.model_loader import load_trained_model
+from src.services.architecture_service import ArchitectureService
+
+# Pre-built ArchitectureService instance with no MinIO connection (only _make_namespace + load_from_bytes needed)
+_arch_svc = ArchitectureService.__new__(ArchitectureService)
 
 logging.basicConfig(
-    level=settings.LOG_LEVEL,
+    level="INFO",
     format="%(asctime)s %(name)-20s %(levelname)-8s %(message)s",
 )
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Inference Worker", docs_url=None, redoc_url=None)
 
-_model_cache: dict[str, object] = {}
-_MAX_CACHE = 20
-
 
 class PredictRequest(BaseModel):
-    architecture: str
-    model_uri: str
+    architecture_id: str
+    arch_bytes: str    # base64-encoded Python source
+    model_bytes: str   # base64-encoded .pth file
     config: dict
     X_bytes: str
     X_shape: list[int]
@@ -40,14 +41,29 @@ class PredictResponse(BaseModel):
     output_shape: list[int]
 
 
-@app.on_event("startup")
-async def startup():
-    mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
-    os.environ["MLFLOW_S3_ENDPOINT_URL"] = settings.MLFLOW_S3_ENDPOINT_URL
-    os.environ["AWS_ACCESS_KEY_ID"] = settings.AWS_ACCESS_KEY_ID
-    os.environ["AWS_SECRET_ACCESS_KEY"] = settings.AWS_SECRET_ACCESS_KEY
-    os.environ["AWS_DEFAULT_REGION"] = settings.AWS_DEFAULT_REGION
-    logger.info("Inference worker ready")
+def _load_and_predict(req: PredictRequest, config: ModelConfig) -> np.ndarray:
+    import torch
+    from io import BytesIO
+
+    arch_code = base64.b64decode(req.arch_bytes)
+    model_data = base64.b64decode(req.model_bytes)
+
+    with _arch_svc.load_from_bytes(req.architecture_id, arch_code) as (cls, _):
+        loaded = torch.load(BytesIO(model_data), map_location="cpu", weights_only=False)  # nosec B614
+
+        model = cls(
+            input_fields=config.input_fields,
+            output_fields=config.output_fields,
+            window_duration_seconds=config.window_duration_seconds,
+            lookback_steps=config.lookback_steps,
+            forecast_steps=config.forecast_steps,
+            hidden_size=config.hidden_size,
+        )
+        model.model = loaded
+
+        X = np.frombuffer(base64.b64decode(req.X_bytes), dtype=np.float32).reshape(req.X_shape)
+        X = np.nan_to_num(X, nan=0.0)
+        return model.predict(X)
 
 
 @app.post("/predict", response_model=PredictResponse)
@@ -57,34 +73,15 @@ async def predict(req: PredictRequest):
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Invalid config: {e}")
 
-    if req.model_uri not in _model_cache:
-        if len(_model_cache) >= _MAX_CACHE:
-            oldest = next(iter(_model_cache))
-            del _model_cache[oldest]
-        try:
-            model = await asyncio.to_thread(
-                load_trained_model, req.architecture, req.model_uri, config
-            )
-            _model_cache[req.model_uri] = model
-            logger.info("Cached model %s", req.model_uri)
-        except Exception as e:
-            logger.error("Failed to load %s: %s", req.model_uri, e)
-            raise HTTPException(status_code=500, detail=f"Model load failed: {e}")
-
-    model = _model_cache[req.model_uri]
-
     try:
-        X = np.frombuffer(base64.b64decode(req.X_bytes), dtype=np.float32).reshape(req.X_shape)
-        X = np.nan_to_num(X, nan=0.0)
-        raw = await asyncio.to_thread(model.predict, X)
+        raw = await asyncio.to_thread(_load_and_predict, req, config)
         raw = np.ascontiguousarray(raw, dtype=np.float32)
         return PredictResponse(
             output_bytes=base64.b64encode(raw.tobytes()).decode(),
             output_shape=list(raw.shape),
         )
     except Exception as e:
-        _model_cache.pop(req.model_uri, None)
-        logger.error("Prediction failed for %s: %s", req.model_uri, e)
+        logger.error("Prediction failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Prediction failed: {e}")
 
 
