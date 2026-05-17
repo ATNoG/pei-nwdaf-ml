@@ -60,15 +60,16 @@ class TestDataStorageClient:
         client = DataStorageClient()
 
         # Mock httpx response
-        with patch("httpx.AsyncClient") as mock_async_client:
-            mock_response = MagicMock()
-            mock_response.content = _json.dumps(sample_example_response).encode()
-            mock_response.headers = {}
-            mock_response.raise_for_status = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = _json.dumps(sample_example_response).encode()
+        mock_response.headers = {}
+        mock_response.raise_for_status = MagicMock()
 
-            mock_client_instance = AsyncMock()
-            mock_client_instance.get.return_value = mock_response
-            mock_async_client.return_value.__aenter__.return_value = mock_client_instance
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(return_value=mock_response)
+
+        with patch("src.services.data_storage_client._get_http_client", return_value=mock_client_instance), \
+             patch("src.services.data_storage_client._get_service_token", AsyncMock(return_value=None)):
 
             # Call method
             fields = await client.get_available_fields()
@@ -104,16 +105,16 @@ class TestDataStorageClient:
         import json as _json
         client = DataStorageClient()
 
-        with patch("httpx.AsyncClient") as mock_async_client:
-            mock_response = MagicMock()
-            mock_response.content = _json.dumps({}).encode()
-            mock_response.headers = {}
-            mock_response.raise_for_status = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = _json.dumps({}).encode()
+        mock_response.headers = {}
+        mock_response.raise_for_status = MagicMock()
 
-            mock_client_instance = AsyncMock()
-            mock_client_instance.get.return_value = mock_response
-            mock_async_client.return_value.__aenter__.return_value = mock_client_instance
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(return_value=mock_response)
 
+        with patch("src.services.data_storage_client._get_http_client", return_value=mock_client_instance), \
+             patch("src.services.data_storage_client._get_service_token", AsyncMock(return_value=None)):
             fields = await client.get_available_fields()
 
             assert fields == []
@@ -123,18 +124,19 @@ class TestDataStorageClient:
         """Test handling HTTP errors."""
         client = DataStorageClient()
 
-        with patch("httpx.AsyncClient") as mock_async_client:
-            mock_response = MagicMock()
-            mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-                "404 Not Found",
-                request=MagicMock(),
-                response=MagicMock(),
-            )
+        mock_response = MagicMock()
+        mock_response.headers = {}
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "404 Not Found",
+            request=MagicMock(),
+            response=MagicMock(),
+        )
 
-            mock_client_instance = AsyncMock()
-            mock_client_instance.get.return_value = mock_response
-            mock_async_client.return_value.__aenter__.return_value = mock_client_instance
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(return_value=mock_response)
 
+        with patch("src.services.data_storage_client._get_http_client", return_value=mock_client_instance), \
+             patch("src.services.data_storage_client._get_service_token", AsyncMock(return_value=None)):
             with pytest.raises(httpx.HTTPStatusError):
                 await client.get_available_fields()
 
@@ -222,16 +224,16 @@ class TestDataStorageClient:
         client = DataStorageClient()
         mock_cells = [0, 1, 2, 5, 7]
 
-        with patch("httpx.AsyncClient") as mock_async_client:
-            mock_response = MagicMock()
-            mock_response.content = _json.dumps(mock_cells).encode()
-            mock_response.headers = {}
-            mock_response.raise_for_status = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = _json.dumps(mock_cells).encode()
+        mock_response.headers = {}
+        mock_response.raise_for_status = MagicMock()
 
-            mock_client_instance = AsyncMock()
-            mock_client_instance.get.return_value = mock_response
-            mock_async_client.return_value.__aenter__.return_value = mock_client_instance
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(return_value=mock_response)
 
+        with patch("src.services.data_storage_client._get_http_client", return_value=mock_client_instance), \
+             patch("src.services.data_storage_client._get_service_token", AsyncMock(return_value=None)):
             cells = await client.get_known_cells()
 
             assert cells == [0, 1, 2, 5, 7]
@@ -252,16 +254,16 @@ class TestDataStorageClient:
             }
         ]
 
-        with patch("httpx.AsyncClient") as mock_async_client:
-            mock_response = MagicMock()
-            mock_response.content = _json.dumps(mock_data).encode()
-            mock_response.headers = {}
-            mock_response.raise_for_status = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = _json.dumps(mock_data).encode()
+        mock_response.headers = {}
+        mock_response.raise_for_status = MagicMock()
 
-            mock_client_instance = AsyncMock()
-            mock_client_instance.get.return_value = mock_response
-            mock_async_client.return_value.__aenter__.return_value = mock_client_instance
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get = AsyncMock(return_value=mock_response)
 
+        with patch("src.services.data_storage_client._get_http_client", return_value=mock_client_instance), \
+             patch("src.services.data_storage_client._get_service_token", AsyncMock(return_value=None)):
             data = await client.fetch_cell_data(
                 cell_index=0,
                 start_timestamp=1000,
