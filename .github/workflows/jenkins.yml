@@ -38,11 +38,11 @@ jobs:
 
       - name: Run security scan with bandit
         run: |
-          bandit -r src/ main.py -f txt || true
+          uvx bandit -r . --skip B101,B102,B104,B105,B110,B113 -x ./.venv
 
-      - name: Run safety check
+      - name: Run pip-audit
         run: |
-          safety check || true
+          uvx pip-audit
 
 #  trigger-jenkins:
 #    needs: test
