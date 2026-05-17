@@ -2,7 +2,7 @@ import time
 from typing import Any
 
 _cache: dict[str, tuple[Any, float]] = {}
-TTL = 60.0
+TTL = 300.0
 
 
 def get(key: str) -> Any | None:

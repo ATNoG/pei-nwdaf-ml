@@ -29,6 +29,7 @@ dependencies = [
     "tenseal>=0.3.14",
     "dlt-client @ git+https://github.com/ATNoG/pei-nwdaf-comms.git#subdirectory=dlt/dlt-package",
     "python-multipart>=0.0.28",
+    "uvloop>=0.21.0",
 ]
 
 [project.optional-dependencies]

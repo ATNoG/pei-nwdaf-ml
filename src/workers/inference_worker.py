@@ -1,6 +1,7 @@
 """Isolated inference worker — exec + torch.load + predict with cap_drop=[ALL]."""
 
 import asyncio
+import base64
 import logging
 import os
 
@@ -30,11 +31,13 @@ class PredictRequest(BaseModel):
     architecture: str
     model_uri: str
     config: dict
-    X: list
+    X_bytes: str
+    X_shape: list[int]
 
 
 class PredictResponse(BaseModel):
-    output: list
+    output_bytes: str
+    output_shape: list[int]
 
 
 @app.on_event("startup")
@@ -71,10 +74,14 @@ async def predict(req: PredictRequest):
     model = _model_cache[req.model_uri]
 
     try:
-        X = np.array(req.X, dtype=np.float32)
+        X = np.frombuffer(base64.b64decode(req.X_bytes), dtype=np.float32).reshape(req.X_shape)
         X = np.nan_to_num(X, nan=0.0)
         raw = await asyncio.to_thread(model.predict, X)
-        return PredictResponse(output=raw.tolist())
+        raw = np.ascontiguousarray(raw, dtype=np.float32)
+        return PredictResponse(
+            output_bytes=base64.b64encode(raw.tobytes()).decode(),
+            output_shape=list(raw.shape),
+        )
     except Exception as e:
         _model_cache.pop(req.model_uri, None)
         logger.error("Prediction failed for %s: %s", req.model_uri, e)

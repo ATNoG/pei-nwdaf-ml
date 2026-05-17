@@ -20,14 +20,21 @@ def _get_policy_client(request: Request) -> Optional[Any]:
     return getattr(request.app.state, "policy_client", None)
 
 
+def _get_data_storage_client(request: Request) -> DataStorageClient:
+    client = getattr(request.app.state, "data_storage_client", None)
+    if client is None:
+        client = DataStorageClient()
+    return client
+
+
 def get_inference_service(
+    request: Request,
     mlflow_service: MLflowService = Depends(get_mlflow_client),
 ) -> InferenceService:
     """Dependency for InferenceService."""
-    data_storage_client = DataStorageClient()
     return InferenceService(
         mlflow_service=mlflow_service,
-        data_storage_client=data_storage_client,
+        data_storage_client=_get_data_storage_client(request),
     )
 
 

@@ -450,6 +450,9 @@ async def lifespan(app: FastAPI):
 
     mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
 
+    from src.services.data_storage_client import DataStorageClient
+    app.state.data_storage_client = DataStorageClient()
+
     logger.info("Initializing database tables...")
     init_db()
     logger.info("Database initialized successfully")
@@ -656,4 +659,5 @@ if __name__ == "__main__":
         host=settings.API_HOST,
         port=settings.API_PORT,
         log_level=settings.LOG_LEVEL.lower(),
+        loop="uvloop",
     )

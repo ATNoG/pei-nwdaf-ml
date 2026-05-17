@@ -21,6 +21,18 @@ _TOKEN_URL = f"{_KC_URL}/realms/{_KC_REALM}/protocol/openid-connect/token"
 _cached_token: str | None = None
 _token_expires_at: float = 0.0
 
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            timeout=60.0,
+            limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+        )
+    return _http_client
+
 
 async def _get_service_token() -> str | None:
     global _cached_token, _token_expires_at
@@ -29,22 +41,22 @@ async def _get_service_token() -> str | None:
     if _cached_token and time.time() < _token_expires_at - 30:
         return _cached_token
     try:
-        async with httpx.AsyncClient(verify=False) as client:
-            resp = await client.post(
-                _TOKEN_URL,
-                data={
-                    "grant_type": "password",
-                    "client_id": _KC_CLIENT,
-                    "username": _KC_USER,
-                    "password": _KC_PASS,
-                },
-                timeout=10.0,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            _cached_token = data["access_token"]
-            _token_expires_at = time.time() + data.get("expires_in", 300)
-            return _cached_token
+        client = _get_http_client()
+        resp = await client.post(
+            _TOKEN_URL,
+            data={
+                "grant_type": "password",
+                "client_id": _KC_CLIENT,
+                "username": _KC_USER,
+                "password": _KC_PASS,
+            },
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        _cached_token = data["access_token"]
+        _token_expires_at = time.time() + data.get("expires_in", 300)
+        return _cached_token
     except Exception:
         logger.warning("Failed to fetch service token from Keycloak", exc_info=True)
         return None
@@ -121,25 +133,25 @@ class DataStorageClient:
         if component_id:
             headers["X-Component-ID"] = component_id
 
-        async with httpx.AsyncClient() as client:
-            auth_headers = await self._get_auth_headers()
-            response = await client.get(
-                url, timeout=10.0, headers={**auth_headers, **headers}
-            )
-            response.raise_for_status()
+        client = _get_http_client()
+        auth_headers = await self._get_auth_headers()
+        response = await client.get(
+            url, timeout=10.0, headers={**auth_headers, **headers}
+        )
+        response.raise_for_status()
 
-            raw = self._decrypt_response(response)
-            data = json.loads(raw)
+        raw = self._decrypt_response(response)
+        data = json.loads(raw)
 
-            # data is {"field_name": ["EVENT_TYPE"], ...}
-            if not data or not isinstance(data, dict):
-                return []
+        # data is {"field_name": ["EVENT_TYPE"], ...}
+        if not data or not isinstance(data, dict):
+            return []
 
-            return sorted(
-                field_name
-                for field_name in data.keys()
-                if field_name not in self.excluded_fields
-            )
+        return sorted(
+            field_name
+            for field_name in data.keys()
+            if field_name not in self.excluded_fields
+        )
 
     async def validate_fields(self, fields: list[str]) -> tuple[bool, list[str]]:
         """
@@ -162,13 +174,13 @@ class DataStorageClient:
         """Get field names with their associated event types from the data-storage fields endpoint."""
         self._ensure_handshake()
         url = f"{self.base_url}{settings.DATA_STORAGE_FIELDS_ENDPOINT}"
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                url, timeout=10.0, headers=await self._get_auth_headers()
-            )
-            response.raise_for_status()
-            raw = self._decrypt_response(response)
-            return json.loads(raw)
+        client = _get_http_client()
+        response = await client.get(
+            url, timeout=10.0, headers=await self._get_auth_headers()
+        )
+        response.raise_for_status()
+        raw = self._decrypt_response(response)
+        return json.loads(raw)
 
     async def get_known_cells(self, component_id: str | None = None) -> list[int]:
         """
@@ -187,12 +199,12 @@ class DataStorageClient:
         if component_id:
             headers["X-Component-ID"] = component_id
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                url, timeout=30.0, headers={**await self._get_auth_headers(), **headers}
-            )
-            response.raise_for_status()
-            return json.loads(self._decrypt_response(response))
+        client = _get_http_client()
+        response = await client.get(
+            url, timeout=30.0, headers={**await self._get_auth_headers(), **headers}
+        )
+        response.raise_for_status()
+        return json.loads(self._decrypt_response(response))
 
     async def probe_data_timestamp(
         self, window_duration_seconds: int, event_type: str | None = None
@@ -273,41 +285,38 @@ class DataStorageClient:
         offset = 0
         limit = 1000
 
-        async with httpx.AsyncClient() as client:
-            while True:
-                params: dict[str, int | str] = {
-                    "cell_index": cell_index,
-                    "start_time": start_timestamp,
-                    "end_time": end_timestamp,
-                    "window_duration_seconds": window_duration_seconds,
-                    "offset": offset,
-                    "limit": limit,
-                }
-                if ip_src is not None:
-                    params["ip_src"] = ip_src
+        client = _get_http_client()
+        while True:
+            params: dict[str, int | str] = {
+                "cell_index": cell_index,
+                "start_time": start_timestamp,
+                "end_time": end_timestamp,
+                "window_duration_seconds": window_duration_seconds,
+                "offset": offset,
+                "limit": limit,
+            }
+            if ip_src is not None:
+                params["ip_src"] = ip_src
 
-                headers = {**await self._get_auth_headers()}
-                if component_id:
-                    headers["X-Component-ID"] = component_id
+            headers = {**await self._get_auth_headers()}
+            if component_id:
+                headers["X-Component-ID"] = component_id
 
-                response = await client.get(
-                    url, params=params, timeout=60.0, headers=headers
-                )
-                response.raise_for_status()
-                batch = json.loads(self._decrypt_response(response))
+            response = await client.get(
+                url, params=params, timeout=60.0, headers=headers
+            )
+            response.raise_for_status()
+            batch = json.loads(self._decrypt_response(response))
 
-                if not batch:
-                    # No more data
-                    break
+            if not batch:
+                break
 
-                all_data.extend(batch)
+            all_data.extend(batch)
 
-                # If we got fewer than limit records, we've reached the end
-                if len(batch) < limit:
-                    break
+            if len(batch) < limit:
+                break
 
-                # Move to next page
-                offset += limit
+            offset += limit
 
         return all_data
 
@@ -328,39 +337,39 @@ class DataStorageClient:
         offset = 0
         limit = 1000
 
-        async with httpx.AsyncClient() as client:
-            while True:
-                params: dict[str, int | str] = {
-                    "start_time": start_timestamp,
-                    "end_time": end_timestamp,
-                    "window_duration_seconds": window_duration_seconds,
-                    "offset": offset,
-                    "limit": limit,
-                }
-                if snssai_sst is not None:
-                    params["snssai_sst"] = snssai_sst
-                if dnn is not None:
-                    params["dnn"] = dnn
-                if snssai_sd is not None:
-                    params["snssai_sd"] = snssai_sd
-                if event is not None:
-                    params["event"] = event
+        client = _get_http_client()
+        while True:
+            params: dict[str, int | str] = {
+                "start_time": start_timestamp,
+                "end_time": end_timestamp,
+                "window_duration_seconds": window_duration_seconds,
+                "offset": offset,
+                "limit": limit,
+            }
+            if snssai_sst is not None:
+                params["snssai_sst"] = snssai_sst
+            if dnn is not None:
+                params["dnn"] = dnn
+            if snssai_sd is not None:
+                params["snssai_sd"] = snssai_sd
+            if event is not None:
+                params["event"] = event
 
-                response = await client.get(
-                    url,
-                    params=params,
-                    timeout=60.0,
-                    headers=await self._get_auth_headers(),
-                )
-                response.raise_for_status()
-                batch = json.loads(self._decrypt_response(response))
+            response = await client.get(
+                url,
+                params=params,
+                timeout=60.0,
+                headers=await self._get_auth_headers(),
+            )
+            response.raise_for_status()
+            batch = json.loads(self._decrypt_response(response))
 
-                if not batch:
-                    break
-                all_data.extend(batch)
-                if len(batch) < limit:
-                    break
-                offset += limit
+            if not batch:
+                break
+            all_data.extend(batch)
+            if len(batch) < limit:
+                break
+            offset += limit
 
         return all_data
 
