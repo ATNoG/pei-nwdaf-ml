@@ -79,7 +79,6 @@ services:
 
   inference-worker:
     image: pei-ml-service:latest
-    container_name: pei-inference-worker
     command:
       [
         "/app/.venv/bin/python",
@@ -91,7 +90,7 @@ services:
         "--port",
         "8061",
         "--workers",
-        "4",
+        "2",
       ]
     environment:
       - LOG_LEVEL=${LOG_LEVEL}
