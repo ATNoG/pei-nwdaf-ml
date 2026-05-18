@@ -40,9 +40,11 @@ jobs:
         run: |
           uvx bandit -r . --skip B101,B102,B104,B105,B110,B113,B307 -x ./.venv
 
-      - name: Run pip-audit
+      - name: Dependency vulnerability scan
         run: |
-          uvx pip-audit
+          curl -sSfL https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 -o osv-scanner
+          chmod +x osv-scanner
+          ./osv-scanner scan --lockfile=uv.lock
 
 #  trigger-jenkins:
 #    needs: test
