@@ -112,31 +112,33 @@ class InferenceService:
             # Cache miss: resolve best model (N MLflow calls) then cache result
             configs = await asyncio.to_thread(self.mlflow_service.ml_config_service.list_all)
 
-            def _is_best(mid: str) -> bool:
-                rm_tags = self.mlflow_service.client.get_registered_model(mid).tags
-                tag_key = f"best_for:{event_type}:{output_field}" if event_type else None
-                if tag_key and rm_tags.get(tag_key) == "true":
-                    return True
-                suffix = f":{output_field}"
-                return any(v == "true" and k.endswith(suffix) for k, v in rm_tags.items())
-
-            best_id = await asyncio.to_thread(
-                lambda: next((c.model_id for c in configs if _is_best(c.model_id)), None)
-            )
-
-            if best_id is None:
-                raise ValueError(
-                    f"No best model designated for field '{output_field}'. "
-                    f"Run POST /v1/performance/{output_field}/evaluate first."
-                )
-
-            if model_id is not None and model_id != best_id:
+            if model_id is not None:
+                # Explicit model_id: validate it predicts this field, skip best-model resolution
                 config_entry = next((c for c in configs if c.model_id == model_id), None)
                 if config_entry is None or output_field not in config_entry.output_fields:
                     raise ValueError(
                         f"Model '{model_id}' does not predict field '{output_field}'."
                     )
+                best_id = None
             else:
+                def _is_best(mid: str) -> bool:
+                    rm_tags = self.mlflow_service.client.get_registered_model(mid).tags
+                    tag_key = f"best_for:{event_type}:{output_field}" if event_type else None
+                    if tag_key and rm_tags.get(tag_key) == "true":
+                        return True
+                    suffix = f":{output_field}"
+                    return any(v == "true" and k.endswith(suffix) for k, v in rm_tags.items())
+
+                best_id = await asyncio.to_thread(
+                    lambda: next((c.model_id for c in configs if _is_best(c.model_id)), None)
+                )
+
+                if best_id is None:
+                    raise ValueError(
+                        f"No best model designated for field '{output_field}'. "
+                        f"Run POST /v1/performance/{output_field}/evaluate first."
+                    )
+
                 model_id = best_id
 
             model_detail = await asyncio.to_thread(self.mlflow_service.get_model, model_id)
