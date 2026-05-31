@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import logging
 import os
@@ -10,7 +11,12 @@ from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-_async_client: httpx.AsyncClient | None = None
+# Per-event-loop AsyncClient cache. See data_storage_client.py for full
+# rationale: a singleton httpx.AsyncClient pins asyncio primitives to the
+# loop where it was created, so reusing it from a worker thread's
+# asyncio.run() loop raises "Event loop is closed" / "bound to a different
+# event loop".
+_async_clients: dict[int, httpx.AsyncClient] = {}
 _sync_client: httpx.Client | None = None
 
 # Cache: model_uri -> (arch_bytes, model_bytes)
@@ -19,13 +25,16 @@ _MAX_BYTES_CACHE = 20
 
 
 def _get_async_client() -> httpx.AsyncClient:
-    global _async_client
-    if _async_client is None or _async_client.is_closed:
-        _async_client = httpx.AsyncClient(
+    loop = asyncio.get_event_loop()
+    key = id(loop)
+    client = _async_clients.get(key)
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(
             timeout=60.0,
             limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
         )
-    return _async_client
+        _async_clients[key] = client
+    return client
 
 
 def _get_sync_client() -> httpx.Client:
