@@ -1,5 +1,6 @@
 """Client for interacting with the Data Storage API."""
 
+import asyncio
 import json
 import logging
 import os
@@ -21,17 +22,27 @@ _TOKEN_URL = f"{_KC_URL}/realms/{_KC_REALM}/protocol/openid-connect/token"
 _cached_token: str | None = None
 _token_expires_at: float = 0.0
 
-_http_client: httpx.AsyncClient | None = None
+# Per-event-loop AsyncClient cache. Sharing one httpx client across loops
+# triggers "Event loop is closed" / "bound to a different event loop" because
+# httpx internals (asyncio.Lock, transport pools) are pinned to the loop where
+# the client was instantiated. Training jobs run via asyncio.run() inside
+# thread pool workers, creating short-lived loops separate from the FastAPI
+# main loop, so a process-wide singleton breaks the moment a worker loop
+# closes and the next call lands back on a different loop.
+_http_clients: dict[int, httpx.AsyncClient] = {}
 
 
 def _get_http_client() -> httpx.AsyncClient:
-    global _http_client
-    if _http_client is None or _http_client.is_closed:
-        _http_client = httpx.AsyncClient(
+    loop = asyncio.get_event_loop()
+    key = id(loop)
+    client = _http_clients.get(key)
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(
             timeout=60.0,
             limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
         )
-    return _http_client
+        _http_clients[key] = client
+    return client
 
 
 async def _get_service_token() -> str | None:
