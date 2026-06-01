@@ -54,7 +54,11 @@ class InferencePipeline:
         loop = asyncio.get_running_loop()
         task = loop.create_task(self._process(tags))
         task.add_done_callback(
-            lambda t: logger.error("_process failed: %s", t.exception()) if t.exception() else None
+            lambda t: (
+                logger.error("_process failed: %s", t.exception())
+                if t.exception()
+                else None
+            )
         )
         return data
 
@@ -74,7 +78,7 @@ class InferencePipeline:
             for model_cfg in trained_models:
                 try:
                     anomaly = await self.anomaly_detection_service.detect_for_tags(
-                        tags=tags, model_id=model_cfg.model_id
+                        tags=tags, model_id=model_cfg.model_id, lookback_seconds=120
                     )
                     models_meta[anomaly.model_id] = AnomalyModelMeta(
                         name=anomaly.model_name,
@@ -82,15 +86,26 @@ class InferencePipeline:
                         threshold=anomaly.threshold_value,
                         window_duration_seconds=anomaly.window_duration_seconds,
                     )
-                    anomaly_counts[anomaly.model_id] = f"{anomaly.num_anomalies}/{anomaly.num_windows}"
+                    anomaly_counts[anomaly.model_id] = (
+                        f"{anomaly.num_anomalies}/{anomaly.num_windows}"
+                    )
                 except Exception as e:
-                    logger.warning("Anomaly skipped for model %s: %s", model_cfg.name, e)
+                    logger.warning(
+                        "Anomaly skipped for model %s: %s", model_cfg.name, e
+                    )
 
             if models_meta:
-                results.append({"type": "anomaly", "result": {
-                    "models": {mid: m.model_dump() for mid, m in models_meta.items()},
-                    "anomaly_counts": anomaly_counts,
-                }})
+                results.append(
+                    {
+                        "type": "anomaly",
+                        "result": {
+                            "models": {
+                                mid: m.model_dump() for mid, m in models_meta.items()
+                            },
+                            "anomaly_counts": anomaly_counts,
+                        },
+                    }
+                )
 
             # Forecast: best model per (event_type, output_field)
             for model_id, field_name in self._get_forecastable_fields(event_type):
@@ -100,7 +115,9 @@ class InferencePipeline:
                     )
                     results.append({"type": "forecast", "result": forecast})
                 except Exception as e:
-                    logger.warning("Forecast %s skipped [%s]: %s", field_name, type(e).__name__, e)
+                    logger.warning(
+                        "Forecast %s skipped [%s]: %s", field_name, type(e).__name__, e
+                    )
 
             if results:
                 self._publish(tags, results)
@@ -110,7 +127,9 @@ class InferencePipeline:
         result: list[tuple[str, str]] = []
         prefix = f"best_for:{event_type}:"
         try:
-            for config in self.inference_service.mlflow_service.ml_config_service.list_all():
+            for (
+                config
+            ) in self.inference_service.mlflow_service.ml_config_service.list_all():
                 rm = self.inference_service.mlflow_service.client.get_registered_model(
                     config.model_id
                 )
@@ -156,13 +175,13 @@ def setup_inference_pipeline():
 
 async def _start_pipeline():
     from mlflow.tracking import MlflowClient
+    from utils.kmw import PyKafBridge
 
     from src.db.database import SessionLocal
     from src.services.anomaly_config_service import AnomalyConfigService
     from src.services.config_service import MLConfigService
     from src.services.data_storage_client import DataStorageClient
     from src.services.mlflow_service import MLflowService
-    from utils.kmw import PyKafBridge
 
     bridge = PyKafBridge(
         settings.KAFKA_INPUT_TOPIC,
