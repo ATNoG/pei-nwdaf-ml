@@ -2077,18 +2077,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pei-nwdaf-encryptor"
-version = "0.1.0"
-source = { git = "https://github.com/ATNoG/pei-nwdaf-encryptor.git#86f110f86d8ca924d6050e4a09182c5712b6558a" }
-dependencies = [
-    { name = "cryptography" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "pydantic" },
-    { name = "uvicorn" },
-]
-
-[[package]]
 name = "pei-nwdaf-ml"
 version = "0.1.0"
 source = { editable = "." }
@@ -2104,7 +2092,6 @@ dependencies = [
     { name = "kubernetes" },
     { name = "mlflow" },
     { name = "numpy" },
-    { name = "pei-nwdaf-encryptor" },
     { name = "policy-client-sdk" },
     { name = "psycopg2-binary" },
     { name = "pydantic" },
@@ -2148,7 +2135,6 @@ requires-dist = [
     { name = "kubernetes", specifier = ">=35.0.0" },
     { name = "mlflow", specifier = ">=3.6.0" },
     { name = "numpy", specifier = ">=1.26.0,<2.0" },
-    { name = "pei-nwdaf-encryptor", git = "https://github.com/ATNoG/pei-nwdaf-encryptor.git" },
     { name = "policy-client-sdk", git = "https://github.com/ATNoG/pei-nwdaf-policy.git?subdirectory=client_sdk" },
     { name = "psycopg2-binary", specifier = ">=2.9.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
