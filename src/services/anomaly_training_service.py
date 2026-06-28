@@ -449,6 +449,7 @@ class AnomalyTrainingService:
             model_uri = f"runs:/{run_id}/model"
             result = mlflow.register_model(model_uri, model_id)
             mlflow.set_tag("model_version", result.version)
+            mlflow.set_tag("public_key", ae.model.public_key.hex())
 
             # Store KernelSHAP background for explainability
             with tempfile.TemporaryDirectory() as tmpdir:

@@ -554,6 +554,7 @@ class TrainingService:
                 # Register or update model
                 version = self._register_or_update_model(model_id, model_uri)
                 mlflow.set_tag("model_version", version)
+                mlflow.set_tag("public_key", model.public_key.hex())
 
                 # Store KernelSHAP background
                 with tempfile.TemporaryDirectory() as tmpdir:

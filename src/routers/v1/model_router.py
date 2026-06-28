@@ -103,6 +103,19 @@ async def get_model(model_id: str, mlflow_service: MLflowService = Depends(get_m
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.get("/{model_id}/public-key")
+async def get_model_public_key(
+    model_id: str,
+    mlflow_service: MLflowService = Depends(get_mlflow_client),
+) -> dict:
+    """Return the X25519 public key (hex) for encrypting data destined for this model."""
+    try:
+        pub_key = mlflow_service.get_public_key(model_id)
+        return {"model_id": model_id, "public_key": pub_key}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.delete("/{model_id}", status_code=204)
 async def delete_model(
     model_id: str,

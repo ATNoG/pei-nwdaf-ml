@@ -86,50 +86,12 @@ class DataStorageClient:
             for f in settings.DATA_STORAGE_EXCLUDED_FIELDS.split(",")
             if f.strip()
         )
-        self._encryptor_client = None
-        self._handshake_done = False
-        self._session_token: str | None = None
-        if settings.ENCRYPTION_ENABLED:
-            from encryptor.core.secure_channel_client import EncryptorClient
-
-            self._encryptor_client = EncryptorClient()
-
-    def _ensure_handshake(self) -> None:
-        """Perform the DH handshake with data-storage if not yet done."""
-        if self._encryptor_client is None or self._handshake_done:
-            return
-        try:
-            self._encryptor_client.handshake(self.base_url)
-            self._handshake_done = True
-            self._session_token = self._encryptor_client.session_token
-            logger.info(
-                "Encryption handshake with data-storage completed (session=%s).",
-                self._session_token,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Encryption handshake failed, continuing without encryption: %s", exc
-            )
-            self._encryptor_client = None
 
     async def _get_auth_headers(self) -> dict[str, str]:
-        headers: dict[str, str] = {}
-        if self._session_token:
-            headers["X-Session-Token"] = self._session_token
         token = await _get_service_token()
         if token:
-            headers["Authorization"] = f"Bearer {token}"
-        return headers
-
-    def _decrypt_response(self, response: httpx.Response) -> bytes:
-        """Decrypt the response body if the server marked it as encrypted."""
-        if (
-            self._encryptor_client is not None
-            and self._handshake_done
-            and response.headers.get("X-Encrypted") == "true"
-        ):
-            return self._encryptor_client.decrypt(response.content)
-        return response.content
+            return {"Authorization": f"Bearer {token}"}
+        return {}
 
     async def get_available_fields(self, component_id: str | None = None) -> list[str]:
         """
@@ -138,7 +100,6 @@ class DataStorageClient:
         Returns a list of field names, excluding metadata fields defined in
         DATA_STORAGE_EXCLUDED_FIELDS.
         """
-        self._ensure_handshake()
         url = f"{self.base_url}{settings.DATA_STORAGE_FIELDS_ENDPOINT}"
         headers = {}
         if component_id:
@@ -151,8 +112,7 @@ class DataStorageClient:
         )
         response.raise_for_status()
 
-        raw = self._decrypt_response(response)
-        data = json.loads(raw)
+        data = response.json()
 
         # data is {"field_name": ["EVENT_TYPE"], ...}
         if not data or not isinstance(data, dict):
@@ -183,15 +143,13 @@ class DataStorageClient:
 
     async def get_fields_with_events(self) -> dict[str, list[str]]:
         """Get field names with their associated event types from the data-storage fields endpoint."""
-        self._ensure_handshake()
         url = f"{self.base_url}{settings.DATA_STORAGE_FIELDS_ENDPOINT}"
         client = _get_http_client()
         response = await client.get(
             url, timeout=10.0, headers=await self._get_auth_headers()
         )
         response.raise_for_status()
-        raw = self._decrypt_response(response)
-        return json.loads(raw)
+        return response.json()
 
     async def get_known_cells(self, component_id: str | None = None) -> list[int]:
         """
@@ -204,7 +162,6 @@ class DataStorageClient:
         Returns:
             List of cell indexes (integers)
         """
-        self._ensure_handshake()
         url = f"{self.base_url}{self.cell_endpoint}"
         headers = {}
         if component_id:
@@ -215,7 +172,7 @@ class DataStorageClient:
             url, timeout=30.0, headers={**await self._get_auth_headers(), **headers}
         )
         response.raise_for_status()
-        return json.loads(self._decrypt_response(response))
+        return response.json()
 
     async def probe_data_timestamp(
         self, window_duration_seconds: int, event_type: str | None = None
@@ -237,7 +194,6 @@ class DataStorageClient:
         import time
         from datetime import datetime, timezone
 
-        self._ensure_handshake()
         far_future = int(time.time()) + 10 * 365 * 24 * 3600
 
         try:
@@ -290,7 +246,6 @@ class DataStorageClient:
         Returns:
             List of data windows with metrics (all pages combined)
         """
-        self._ensure_handshake()
         url = f"{self.base_url}{self.data_endpoint}"
         all_data = []
         offset = 0
@@ -317,7 +272,7 @@ class DataStorageClient:
                 url, params=params, timeout=60.0, headers=headers
             )
             response.raise_for_status()
-            batch = json.loads(self._decrypt_response(response))
+            batch = response.json()
 
             if not batch:
                 break
@@ -342,7 +297,6 @@ class DataStorageClient:
         event: str | None = None,
     ) -> list[dict]:
         """Fetch processed data with optional tag filters (no cell_index)."""
-        self._ensure_handshake()
         url = f"{self.base_url}{self.data_endpoint}"
         all_data = []
         offset = 0
@@ -373,7 +327,7 @@ class DataStorageClient:
                 headers=await self._get_auth_headers(),
             )
             response.raise_for_status()
-            batch = json.loads(self._decrypt_response(response))
+            batch = response.json()
 
             if not batch:
                 break
