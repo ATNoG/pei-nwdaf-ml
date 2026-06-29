@@ -207,19 +207,20 @@ class InferenceService:
         if not cell_data:
             raise ValueError(f"No data for tags {tags} in last {lookback_seconds}s")
 
-        # Sort by timestamp
-        cell_data.sort(key=lambda x: x.get("window_start_time", 0))
-
-        # Prepare input sequence
-        X = prepare_last_sequence(
-            cell_data=cell_data,
-            input_fields=config.input_fields,
-            lookback_steps=config.lookback_steps,
-        )
-
-        X = np.nan_to_num(X, nan=0.0)
-
-        raw_predictions = await safe_predict(config.architecture, model_uri, config, X)
+        if cell_data and isinstance(cell_data[0], bytes):
+            # Encrypted: worker decrypts with model private key, returns used_windows
+            raw_predictions, used_windows = await safe_predict(config.architecture, model_uri, config, cell_data)
+            used_data = used_windows or []
+        else:
+            cell_data.sort(key=lambda x: x.get("window_start_time", 0))
+            X = prepare_last_sequence(
+                cell_data=cell_data,
+                input_fields=config.input_fields,
+                lookback_steps=config.lookback_steps,
+            )
+            X = np.nan_to_num(X, nan=0.0)
+            raw_predictions, _ = await safe_predict(config.architecture, model_uri, config, X)
+            used_data = cell_data[-config.lookback_steps:]
 
         asyncio.create_task(
             _dlt_trace_inference(
@@ -231,7 +232,7 @@ class InferenceService:
                     "output_field": output_field,
                     "lookback_seconds": lookback_seconds,
                 },
-                data_payload=cell_data,
+                data_payload=used_data,
                 anomaly_score=0.0,
                 decision="NORMAL",
                 time_range_start=str(start_ts),
@@ -241,8 +242,6 @@ class InferenceService:
 
         # Calculate input data timestamps and window overlap
         from datetime import datetime
-
-        used_data = cell_data[-config.lookback_steps :]
 
         # Get timestamps from used data
         first_window = used_data[0]
@@ -360,16 +359,19 @@ class InferenceService:
         if not cell_data:
             raise ValueError(f"No data for tags {tags} in last {lookback_seconds}s")
 
-        cell_data.sort(key=lambda x: x.get("window_start_time", 0))
-
-        X = prepare_last_sequence(
-            cell_data=cell_data,
-            input_fields=config.input_fields,
-            lookback_steps=config.lookback_steps,
-        )
-        X = np.nan_to_num(X, nan=0.0)
-
-        raw_predictions = await safe_predict(config.architecture, model_uri, config, X)
+        if cell_data and isinstance(cell_data[0], bytes):
+            raw_predictions, used_windows = await safe_predict(config.architecture, model_uri, config, cell_data)
+            used_data = used_windows or []
+        else:
+            cell_data.sort(key=lambda x: x.get("window_start_time", 0))
+            X = prepare_last_sequence(
+                cell_data=cell_data,
+                input_fields=config.input_fields,
+                lookback_steps=config.lookback_steps,
+            )
+            X = np.nan_to_num(X, nan=0.0)
+            raw_predictions, _ = await safe_predict(config.architecture, model_uri, config, X)
+            used_data = cell_data[-config.lookback_steps:]
 
         def _ts(window, field):
             ts = window.get(field, 0)
@@ -378,8 +380,6 @@ class InferenceService:
 
                 return int(_dt.fromisoformat(ts).timestamp())
             return int(ts)
-
-        used_data = cell_data[-config.lookback_steps :]
         input_start = _ts(used_data[0], "window_start_time")
         last_end = _ts(used_data[-1], "window_end_time") or (
             _ts(used_data[-1], "window_start_time") + config.window_duration_seconds
@@ -410,7 +410,7 @@ class InferenceService:
                 "output_field": output_field,
                 "lookback_seconds": lookback_seconds,
             },
-            data_payload=cell_data,
+            data_payload=used_data,
             anomaly_score=0.0,
             decision="NORMAL",
             time_range_start=str(start_ts),
