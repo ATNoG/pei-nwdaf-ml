@@ -1,12 +1,20 @@
 """Unit tests for TrainingService."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
-import numpy as np
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.services.training_service import TrainingService
+import numpy as np
+import pytest
+
 from src.schemas.model import ModelConfig
+from src.services.training_service import TrainingService
+
+
+@pytest.fixture
+def mock_data_storage_client():
+    mock = MagicMock()
+    mock.fetch_data = AsyncMock(return_value=[])
+    return mock
 
 
 class TestTrainingService:
@@ -20,21 +28,17 @@ class TestTrainingService:
         return mock
 
     @pytest.fixture
-    def mock_data_storage_client(self):
-        """Mock DataStorageClient."""
-        mock = MagicMock()
-        mock.get_known_cells = AsyncMock(return_value=[0, 1, 2])
-        mock.fetch_cell_data = AsyncMock(return_value=[])
-        return mock
-
-    @pytest.fixture
     def mock_config_service(self):
         """Mock MLConfigService."""
         return MagicMock()
 
     @pytest.fixture
     def training_service(
-        self, mock_mlflow_service, mock_data_storage_client, mock_config_service, mock_db_session
+        self,
+        mock_mlflow_service,
+        mock_data_storage_client,
+        mock_config_service,
+        mock_db_session,
     ):
         """Create TrainingService instance with mocks."""
         return TrainingService(
@@ -94,9 +98,7 @@ class TestTrainingService:
         assert input_data[0][1] == 10.0  # sinr_mean
         assert output_data[0][0] == 20.0  # latency_mean
 
-    def test_prepare_sequences_basic(
-        self, training_service, sample_cell_data
-    ):
+    def test_prepare_sequences_basic(self, training_service, sample_cell_data):
         """Test sequence preparation with valid data."""
         input_fields = ["rsrp_mean", "sinr_mean"]
         output_fields = ["latency_mean"]
@@ -104,7 +106,11 @@ class TestTrainingService:
         forecast_steps = 2
 
         X, y = training_service._prepare_sequences(
-            sample_cell_data, input_fields, output_fields, lookback_steps, forecast_steps
+            sample_cell_data,
+            input_fields,
+            output_fields,
+            lookback_steps,
+            forecast_steps,
         )
 
         # With 10 windows, lookback=5, forecast=2:
@@ -133,7 +139,11 @@ class TestTrainingService:
         forecast_steps = 2
 
         X, y = training_service._prepare_sequences(
-            sample_cell_data, input_fields, output_fields, lookback_steps, forecast_steps
+            sample_cell_data,
+            input_fields,
+            output_fields,
+            lookback_steps,
+            forecast_steps,
         )
 
         # Should return empty arrays
@@ -149,15 +159,11 @@ class TestTrainingService:
         assert X.shape[0] == 0
         assert y.shape[0] == 0
 
-    def test_prepare_sequences_multiple_cells(
-        self, training_service, sample_cell_data
-    ):
+    def test_prepare_sequences_multiple_cells(self, training_service, sample_cell_data):
         """Test combining sequences from multiple cells."""
         # Create data for 2 cells
         cell_0_data = sample_cell_data
-        cell_1_data = [
-            {**window, "cell_index": 1} for window in sample_cell_data
-        ]
+        cell_1_data = [{**window, "cell_index": 1} for window in sample_cell_data]
 
         all_sequences_X = []
         all_sequences_y = []

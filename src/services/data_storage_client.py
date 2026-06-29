@@ -1,9 +1,11 @@
 """Client for interacting with the Data Storage API."""
 
 import asyncio
+import json
 import logging
 import os
 import time
+from typing import Callable
 
 import httpx
 
@@ -151,29 +153,6 @@ class DataStorageClient:
         response.raise_for_status()
         return response.json()
 
-    async def get_known_cells(self, component_id: str | None = None) -> list[int]:
-        """
-        Get list of all known cell indexes from data-storage API.
-
-        Args:
-            component_id: Optional component ID to pass as X-Component-ID header
-                for policy enforcement.
-
-        Returns:
-            List of cell indexes (integers)
-        """
-        url = f"{self.base_url}{self.cell_endpoint}"
-        headers = {}
-        if component_id:
-            headers["X-Component-ID"] = component_id
-
-        client = _get_http_client()
-        response = await client.get(
-            url, timeout=30.0, headers={**await self._get_auth_headers(), **headers}
-        )
-        response.raise_for_status()
-        return response.json()
-
     async def probe_data_timestamp(
         self, window_duration_seconds: int, event_type: str | None = None
     ) -> int | None:
@@ -218,76 +197,6 @@ class DataStorageClient:
         except Exception:
             pass
         return None
-
-    async def fetch_cell_data(
-        self,
-        cell_index: int,
-        start_timestamp: int,
-        end_timestamp: int,
-        window_duration_seconds: int,
-        ip_src: str | None = None,
-        component_id: str | None = None,
-        public_key: bytes | None = None,
-    ) -> list[dict]:
-        """
-        Fetch processed latency data for a specific cell with pagination.
-
-        Automatically handles pagination when dataset is larger than 1000 records.
-
-        Args:
-            cell_index: Cell identifier
-            start_timestamp: Start time (Unix epoch seconds)
-            end_timestamp: End time (Unix epoch seconds)
-            window_duration_seconds: Window duration for aggregation
-            ip_src: Optional IP source filter. Use "*" to include ip_src in
-                    the response grouped per IP. Default None = existing behavior.
-            component_id: Optional component ID to pass as X-Component-ID header
-                    for policy enforcement.
-
-        Returns:
-            List of data windows with metrics (all pages combined)
-        """
-        url = f"{self.base_url}{self.data_endpoint}"
-        all_data = []
-        offset = 0
-        limit = 1000
-
-        client = _get_http_client()
-        while True:
-            params: dict[str, int | str] = {
-                "cell_index": cell_index,
-                "start_time": start_timestamp,
-                "end_time": end_timestamp,
-                "window_duration_seconds": window_duration_seconds,
-                "offset": offset,
-                "limit": limit,
-            }
-            if ip_src is not None:
-                params["ip_src"] = ip_src
-
-            headers = {**await self._get_auth_headers()}
-            if component_id:
-                headers["X-Component-ID"] = component_id
-            if _ENCRYPTION_ENABLED and public_key:
-                headers["X-Public-Key"] = public_key.hex()
-
-            response = await client.get(
-                url, params=params, timeout=60.0, headers=headers
-            )
-            response.raise_for_status()
-            batch = response.json()
-
-            if not batch:
-                break
-
-            all_data.extend(batch)
-
-            if len(batch) < limit:
-                break
-
-            offset += limit
-
-        return all_data
 
     async def fetch_data(
         self,
@@ -335,16 +244,43 @@ class DataStorageClient:
                 headers=headers,
             )
             response.raise_for_status()
-            batch = response.json()
 
-            if not batch:
-                break
-            all_data.extend(batch)
-            if len(batch) < limit:
-                break
+            if response.headers.get("content-type", "").startswith(
+                "application/octet-stream"
+            ):
+                all_data.append(response.content)
+                record_count = int(response.headers.get("x-record-count", limit))
+                if record_count < limit:
+                    break
+            else:
+                batch = response.json()
+                if not batch:
+                    break
+                all_data.extend(batch)
+                if len(batch) < limit:
+                    break
+
             offset += limit
 
         return all_data
+
+
+def decrypt_fetched(
+    data: list,
+    decrypt_fn: Callable[[bytes], bytes],
+) -> list[dict]:
+    """Decrypt encrypted pages returned by fetch_data/fetch_cell_data.
+
+    When ENCRYPTION_ENABLED, fetch methods return list[bytes] (one blob per page).
+    Pass that list here with the model's decrypt function to get list[dict].
+    If data is already list[dict] (no encryption), returns as-is.
+    """
+    if not data or isinstance(data[0], dict):
+        return data
+    result: list[dict] = []
+    for blob in data:
+        result.extend(json.loads(decrypt_fn(blob)))
+    return result
 
 
 async def derive_event_type(
