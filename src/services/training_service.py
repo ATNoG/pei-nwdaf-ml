@@ -23,7 +23,7 @@ from src.services.data_preparation import (
     extract_fields,
     prepare_sequences,
 )
-from src.services.data_storage_client import DataStorageClient
+from src.services.data_storage_client import DataStorageClient, decrypt_fetched
 from src.services.mlflow_service import MLflowService
 
 logger = logging.getLogger(__name__)
@@ -161,74 +161,13 @@ class TrainingService:
                 model_detail = self.mlflow_service.get_model(job.model_id)
                 config = model_detail.config
 
-                # Calculate timestamps
-                start_ts, end_ts = self._calculate_timestamps(job.lookback_seconds)
-                logger.info(f"Job {job_id}: Fetching data from {start_ts} to {end_ts}")
-
-                # Fetch all data for this model's event_type, group by slice context
-                event_type = getattr(model_detail, "event_type", None)
-                component_id = f"ml-{model_detail.name}" if model_detail.name else None
-                training_data = await self._fetch_training_data(
-                    start_ts,
-                    end_ts,
-                    config.window_duration_seconds,
-                    event_type=event_type,
-                    component_id=component_id,
-                )
-
-                if not training_data:
-                    raise ValueError("No data available for training")
-
-                slice_groups = self._group_by_slice(training_data)
-                logger.info(
-                    f"Job {job_id}: {len(training_data)} windows across {len(slice_groups)} slices"
-                )
-
-                all_X = []
-                all_y = []
-                for slice_key, slice_data in slice_groups.items():
-                    try:
-                        X, y = self._prepare_sequences(
-                            slice_data,
-                            config.input_fields,
-                            config.output_fields,
-                            config.lookback_steps,
-                            config.forecast_steps,
-                        )
-                        if len(X) == 0:
-                            continue
-                        all_X.append(X)
-                        all_y.append(y)
-                        logger.info(
-                            f"Job {job_id}: Slice {slice_key} - {len(X)} sequences"
-                        )
-                    except Exception as e:
-                        logger.warning(f"Job {job_id}: Slice {slice_key} failed: {e}")
-
-                if not all_X:
-                    raise ValueError(
-                        f"Insufficient data across all slices. "
-                        f"Need at least {config.lookback_steps + config.forecast_steps} windows per slice. "
-                        f"Try increasing lookback_seconds."
-                    )
-
-                X_train = np.concatenate(all_X, axis=0)
-                y_train = np.concatenate(all_y, axis=0)
-                X_background = X_train[-min(50, len(X_train)) :]
-
-                logger.info(
-                    f"Job {job_id}: {len(X_train)} total sequences from {len(all_X)} slices"
-                )
-
                 # Train model and log to MLflow
                 # Note: mlflow_run_id is set inside _train_and_log immediately after run starts
                 mlflow_run_id = await self._train_and_log(
                     model_id=job.model_id,
                     job_id=job_id,
                     architecture=config.architecture,
-                    X_train=X_train,
-                    y_train=y_train,
-                    X_background=X_background,
+                    lookback_seconds=job.lookback_seconds,
                     config_dict={
                         "hidden_size": config.hidden_size,
                         "lookback_steps": config.lookback_steps,
@@ -405,14 +344,22 @@ class TrainingService:
         window_duration_seconds: int,
         event_type: str | None = None,
         component_id: str | None = None,
+        public_key: bytes | None = None,
+        decrypt_fn=None,
     ) -> list[dict]:
         """Fetch all data for training filtered by event type."""
+
+        if public_key and not decrypt_fn:
+            raise ValueError("decrypt_fn must be provided when public_key is used")
+
         data = await self.data_storage_client.fetch_data(
             start_timestamp=start_timestamp,
             end_timestamp=end_timestamp,
             window_duration_seconds=window_duration_seconds,
             event=event_type,
+            public_key=public_key,
         )
+        data = decrypt_fetched(data, decrypt_fn) if public_key else data
         data.sort(key=lambda x: x.get("window_start_time", 0))
         logger.info(f"Fetched {len(data)} windows for event_type={event_type}")
         return data
@@ -452,10 +399,8 @@ class TrainingService:
         model_id: str,
         job_id: str,
         architecture: str,
-        X_train: np.ndarray,
-        y_train: np.ndarray,
-        X_background: np.ndarray,
         config_dict: dict,
+        lookback_seconds: int,
     ) -> str:
         """
         Train model and log to MLflow.
@@ -495,18 +440,6 @@ class TrainingService:
                     self.db.commit()
                     logger.info(f"Job {job_id}: MLflow run {run_id} linked to job")
 
-                # Log parameters
-                mlflow.log_params(
-                    {
-                        "model_id": model_id,
-                        "architecture": architecture_id,
-                        "num_sequences": len(X_train),
-                        "num_input_features": X_train.shape[2],
-                        "num_output_features": y_train.shape[2],
-                        **config_dict,
-                    }
-                )
-
                 # Build or load model for incremental training
                 # cls is already in sys.modules — mlflow.pytorch.load_model can deserialize
                 model = self._build_model(
@@ -518,6 +451,85 @@ class TrainingService:
                     lookback_steps=config_dict["lookback_steps"],
                     forecast_steps=config_dict["forecast_steps"],
                     hidden_size=config_dict["hidden_size"],
+                )
+
+                ### data fetch
+                model_detail = self.mlflow_service.get_model(model_id)
+                config = model_detail.config
+
+                # Calculate timestamps
+                start_ts, end_ts = self._calculate_timestamps(lookback_seconds)
+                logger.info(f"Job {job_id}: Fetching data from {start_ts} to {end_ts}")
+
+                # Fetch all data for this model's event_type, group by slice context
+                event_type = getattr(model_detail, "event_type", None)
+                component_id = f"ml-{model_detail.name}" if model_detail.name else None
+                training_data = await self._fetch_training_data(
+                    start_ts,
+                    end_ts,
+                    config.window_duration_seconds,
+                    event_type=event_type,
+                    component_id=component_id,
+                    public_key=model.public_key,
+                    decrypt_fn=model.decrypt,
+                )
+
+                if not training_data:
+                    raise ValueError("No data available for training")
+
+                slice_groups = self._group_by_slice(training_data)
+                logger.info(
+                    f"Job {job_id}: {len(training_data)} windows across {len(slice_groups)} slices"
+                )
+
+                all_X = []
+                all_y = []
+                for slice_key, slice_data in slice_groups.items():
+                    try:
+                        X, y = self._prepare_sequences(
+                            slice_data,
+                            config.input_fields,
+                            config.output_fields,
+                            config.lookback_steps,
+                            config.forecast_steps,
+                        )
+                        if len(X) == 0:
+                            continue
+                        all_X.append(X)
+                        all_y.append(y)
+                        logger.info(
+                            f"Job {job_id}: Slice {slice_key} - {len(X)} sequences"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Job {job_id}: Slice {slice_key} failed: {e}")
+
+                if not all_X:
+                    raise ValueError(
+                        f"Insufficient data across all slices. "
+                        f"Need at least {config.lookback_steps + config.forecast_steps} windows per slice. "
+                        f"Try increasing lookback_seconds."
+                    )
+
+                X_train = np.concatenate(all_X, axis=0)
+                y_train = np.concatenate(all_y, axis=0)
+                X_background = X_train[-min(50, len(X_train)) :]
+
+                logger.info(
+                    f"Job {job_id}: {len(X_train)} total sequences from {len(all_X)} slices"
+                )
+
+                ###
+
+                # Log parameters
+                mlflow.log_params(
+                    {
+                        "model_id": model_id,
+                        "architecture": architecture_id,
+                        "num_sequences": len(X_train),
+                        "num_input_features": X_train.shape[2],
+                        "num_output_features": y_train.shape[2],
+                        **config_dict,
+                    }
                 )
 
                 # Train model (with cancellation support)
@@ -554,6 +566,9 @@ class TrainingService:
                 # Register or update model
                 version = self._register_or_update_model(model_id, model_uri)
                 mlflow.set_tag("model_version", version)
+                self.mlflow_service.client.set_registered_model_tag(
+                    model_id, "public_key", model.public_key.hex()
+                )
 
                 # Store KernelSHAP background
                 with tempfile.TemporaryDirectory() as tmpdir:

@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import time
+from typing import Callable
 
 import httpx
 
@@ -18,6 +19,7 @@ _KC_CLIENT = os.getenv("KEYCLOAK_CLIENT_ID", "aion-services")
 _KC_USER = os.getenv("ML_SERVICE_KC_USER", "ml-service")
 _KC_PASS = os.getenv("ML_SERVICE_KC_PASSWORD", "ml-service")
 _TOKEN_URL = f"{_KC_URL}/realms/{_KC_REALM}/protocol/openid-connect/token"
+_ENCRYPTION_ENABLED = os.getenv("ENCRYPTION_ENABLED", "").lower() == "true"
 
 _cached_token: str | None = None
 _token_expires_at: float = 0.0
@@ -86,50 +88,12 @@ class DataStorageClient:
             for f in settings.DATA_STORAGE_EXCLUDED_FIELDS.split(",")
             if f.strip()
         )
-        self._encryptor_client = None
-        self._handshake_done = False
-        self._session_token: str | None = None
-        if settings.ENCRYPTION_ENABLED:
-            from encryptor.core.secure_channel_client import EncryptorClient
-
-            self._encryptor_client = EncryptorClient()
-
-    def _ensure_handshake(self) -> None:
-        """Perform the DH handshake with data-storage if not yet done."""
-        if self._encryptor_client is None or self._handshake_done:
-            return
-        try:
-            self._encryptor_client.handshake(self.base_url)
-            self._handshake_done = True
-            self._session_token = self._encryptor_client.session_token
-            logger.info(
-                "Encryption handshake with data-storage completed (session=%s).",
-                self._session_token,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Encryption handshake failed, continuing without encryption: %s", exc
-            )
-            self._encryptor_client = None
 
     async def _get_auth_headers(self) -> dict[str, str]:
-        headers: dict[str, str] = {}
-        if self._session_token:
-            headers["X-Session-Token"] = self._session_token
         token = await _get_service_token()
         if token:
-            headers["Authorization"] = f"Bearer {token}"
-        return headers
-
-    def _decrypt_response(self, response: httpx.Response) -> bytes:
-        """Decrypt the response body if the server marked it as encrypted."""
-        if (
-            self._encryptor_client is not None
-            and self._handshake_done
-            and response.headers.get("X-Encrypted") == "true"
-        ):
-            return self._encryptor_client.decrypt(response.content)
-        return response.content
+            return {"Authorization": f"Bearer {token}"}
+        return {}
 
     async def get_available_fields(self, component_id: str | None = None) -> list[str]:
         """
@@ -138,7 +102,6 @@ class DataStorageClient:
         Returns a list of field names, excluding metadata fields defined in
         DATA_STORAGE_EXCLUDED_FIELDS.
         """
-        self._ensure_handshake()
         url = f"{self.base_url}{settings.DATA_STORAGE_FIELDS_ENDPOINT}"
         headers = {}
         if component_id:
@@ -151,8 +114,7 @@ class DataStorageClient:
         )
         response.raise_for_status()
 
-        raw = self._decrypt_response(response)
-        data = json.loads(raw)
+        data = response.json()
 
         # data is {"field_name": ["EVENT_TYPE"], ...}
         if not data or not isinstance(data, dict):
@@ -183,39 +145,13 @@ class DataStorageClient:
 
     async def get_fields_with_events(self) -> dict[str, list[str]]:
         """Get field names with their associated event types from the data-storage fields endpoint."""
-        self._ensure_handshake()
         url = f"{self.base_url}{settings.DATA_STORAGE_FIELDS_ENDPOINT}"
         client = _get_http_client()
         response = await client.get(
             url, timeout=10.0, headers=await self._get_auth_headers()
         )
         response.raise_for_status()
-        raw = self._decrypt_response(response)
-        return json.loads(raw)
-
-    async def get_known_cells(self, component_id: str | None = None) -> list[int]:
-        """
-        Get list of all known cell indexes from data-storage API.
-
-        Args:
-            component_id: Optional component ID to pass as X-Component-ID header
-                for policy enforcement.
-
-        Returns:
-            List of cell indexes (integers)
-        """
-        self._ensure_handshake()
-        url = f"{self.base_url}{self.cell_endpoint}"
-        headers = {}
-        if component_id:
-            headers["X-Component-ID"] = component_id
-
-        client = _get_http_client()
-        response = await client.get(
-            url, timeout=30.0, headers={**await self._get_auth_headers(), **headers}
-        )
-        response.raise_for_status()
-        return json.loads(self._decrypt_response(response))
+        return response.json()
 
     async def probe_data_timestamp(
         self, window_duration_seconds: int, event_type: str | None = None
@@ -237,7 +173,6 @@ class DataStorageClient:
         import time
         from datetime import datetime, timezone
 
-        self._ensure_handshake()
         far_future = int(time.time()) + 10 * 365 * 24 * 3600
 
         try:
@@ -263,74 +198,6 @@ class DataStorageClient:
             pass
         return None
 
-    async def fetch_cell_data(
-        self,
-        cell_index: int,
-        start_timestamp: int,
-        end_timestamp: int,
-        window_duration_seconds: int,
-        ip_src: str | None = None,
-        component_id: str | None = None,
-    ) -> list[dict]:
-        """
-        Fetch processed latency data for a specific cell with pagination.
-
-        Automatically handles pagination when dataset is larger than 1000 records.
-
-        Args:
-            cell_index: Cell identifier
-            start_timestamp: Start time (Unix epoch seconds)
-            end_timestamp: End time (Unix epoch seconds)
-            window_duration_seconds: Window duration for aggregation
-            ip_src: Optional IP source filter. Use "*" to include ip_src in
-                    the response grouped per IP. Default None = existing behavior.
-            component_id: Optional component ID to pass as X-Component-ID header
-                    for policy enforcement.
-
-        Returns:
-            List of data windows with metrics (all pages combined)
-        """
-        self._ensure_handshake()
-        url = f"{self.base_url}{self.data_endpoint}"
-        all_data = []
-        offset = 0
-        limit = 1000
-
-        client = _get_http_client()
-        while True:
-            params: dict[str, int | str] = {
-                "cell_index": cell_index,
-                "start_time": start_timestamp,
-                "end_time": end_timestamp,
-                "window_duration_seconds": window_duration_seconds,
-                "offset": offset,
-                "limit": limit,
-            }
-            if ip_src is not None:
-                params["ip_src"] = ip_src
-
-            headers = {**await self._get_auth_headers()}
-            if component_id:
-                headers["X-Component-ID"] = component_id
-
-            response = await client.get(
-                url, params=params, timeout=60.0, headers=headers
-            )
-            response.raise_for_status()
-            batch = json.loads(self._decrypt_response(response))
-
-            if not batch:
-                break
-
-            all_data.extend(batch)
-
-            if len(batch) < limit:
-                break
-
-            offset += limit
-
-        return all_data
-
     async def fetch_data(
         self,
         start_timestamp: int,
@@ -340,9 +207,9 @@ class DataStorageClient:
         dnn: str | None = None,
         snssai_sd: str | None = None,
         event: str | None = None,
+        public_key: bytes | None = None,
     ) -> list[dict]:
         """Fetch processed data with optional tag filters (no cell_index)."""
-        self._ensure_handshake()
         url = f"{self.base_url}{self.data_endpoint}"
         all_data = []
         offset = 0
@@ -366,23 +233,65 @@ class DataStorageClient:
             if event is not None:
                 params["event"] = event
 
+            headers = await self._get_auth_headers()
+            if _ENCRYPTION_ENABLED and public_key:
+                headers["X-Public-Key"] = public_key.hex()
+                logger.info("[ECIES] fetch_data: sending X-Public-Key pub[:5]=%s offset=%d", public_key.hex()[:10], offset)
+
             response = await client.get(
                 url,
                 params=params,
                 timeout=60.0,
-                headers=await self._get_auth_headers(),
+                headers=headers,
             )
             response.raise_for_status()
-            batch = json.loads(self._decrypt_response(response))
 
-            if not batch:
-                break
-            all_data.extend(batch)
-            if len(batch) < limit:
-                break
+            if response.headers.get("content-type", "").startswith(
+                "application/octet-stream"
+            ):
+                logger.info("[ECIES] fetch_data: received encrypted blob %d bytes, blob[:5]=%s", len(response.content), response.content[:5].hex())
+                all_data.append(response.content)
+                record_count = int(response.headers.get("x-record-count", limit))
+                if record_count < limit:
+                    break
+            else:
+                batch = response.json()
+                if not batch:
+                    break
+                all_data.extend(batch)
+                if len(batch) < limit:
+                    break
+
             offset += limit
 
         return all_data
+
+
+def decrypt_fetched(
+    data: list,
+    decrypt_fn: Callable[[bytes], bytes],
+) -> list[dict]:
+    """Decrypt encrypted pages returned by fetch_data/fetch_cell_data.
+
+    When ENCRYPTION_ENABLED, fetch methods return list[bytes] (one blob per page).
+    Pass that list here with the model's decrypt function to get list[dict].
+    If data is already list[dict] (no encryption), returns as-is.
+    """
+    if not data or isinstance(data[0], dict):
+        return data
+    import time as _time
+    _t0 = _time.perf_counter()
+    result: list[dict] = []
+    total_blob = 0
+    total_plain = 0
+    for blob in data:
+        decrypted = decrypt_fn(blob)
+        total_blob += len(blob)
+        total_plain += len(decrypted)
+        result.extend(json.loads(decrypted))
+    _ms = (_time.perf_counter() - _t0) * 1000
+    logger.info("[ECIES] decrypt_fetched: %d pages, %d bytes → %d records in %.2f ms", len(data), total_blob, len(result), _ms)
+    return result
 
 
 async def derive_event_type(

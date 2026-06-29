@@ -1,8 +1,9 @@
 """Unit tests for Data Storage client."""
 
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import httpx
+import pytest
 
 from src.services.data_storage_client import DataStorageClient
 
@@ -54,22 +55,31 @@ class TestDataStorageClient:
     """Tests for DataStorageClient."""
 
     @pytest.mark.asyncio
-    async def test_get_available_fields_success(self, mock_settings, sample_example_response):
+    async def test_get_available_fields_success(
+        self, mock_settings, sample_example_response
+    ):
         """Test successfully fetching available fields."""
         import json as _json
+
         client = DataStorageClient()
 
         # Mock httpx response
         mock_response = MagicMock()
         mock_response.content = _json.dumps(sample_example_response).encode()
+        mock_response.json = MagicMock(return_value=sample_example_response)
         mock_response.headers = {}
         mock_response.raise_for_status = MagicMock()
 
         mock_client_instance = AsyncMock()
         mock_client_instance.get = AsyncMock(return_value=mock_response)
 
-        with patch("src.services.data_storage_client._get_http_client", return_value=mock_client_instance), \
-             patch("src.services.data_storage_client._get_service_token", AsyncMock(return_value=None)):
+        with patch(
+            "src.services.data_storage_client._get_http_client",
+            return_value=mock_client_instance,
+        ), patch(
+            "src.services.data_storage_client._get_service_token",
+            AsyncMock(return_value=None),
+        ):
 
             # Call method
             fields = await client.get_available_fields()
@@ -103,6 +113,7 @@ class TestDataStorageClient:
     async def test_get_available_fields_empty_response(self, mock_settings):
         """Test handling empty response."""
         import json as _json
+
         client = DataStorageClient()
 
         mock_response = MagicMock()
@@ -113,8 +124,13 @@ class TestDataStorageClient:
         mock_client_instance = AsyncMock()
         mock_client_instance.get = AsyncMock(return_value=mock_response)
 
-        with patch("src.services.data_storage_client._get_http_client", return_value=mock_client_instance), \
-             patch("src.services.data_storage_client._get_service_token", AsyncMock(return_value=None)):
+        with patch(
+            "src.services.data_storage_client._get_http_client",
+            return_value=mock_client_instance,
+        ), patch(
+            "src.services.data_storage_client._get_service_token",
+            AsyncMock(return_value=None),
+        ):
             fields = await client.get_available_fields()
 
             assert fields == []
@@ -135,8 +151,13 @@ class TestDataStorageClient:
         mock_client_instance = AsyncMock()
         mock_client_instance.get = AsyncMock(return_value=mock_response)
 
-        with patch("src.services.data_storage_client._get_http_client", return_value=mock_client_instance), \
-             patch("src.services.data_storage_client._get_service_token", AsyncMock(return_value=None)):
+        with patch(
+            "src.services.data_storage_client._get_http_client",
+            return_value=mock_client_instance,
+        ), patch(
+            "src.services.data_storage_client._get_service_token",
+            AsyncMock(return_value=None),
+        ):
             with pytest.raises(httpx.HTTPStatusError):
                 await client.get_available_fields()
 
@@ -192,8 +213,12 @@ class TestDataStorageClient:
     async def test_validate_fields_all_valid(self, mock_settings):
         """Test validating fields when all are valid."""
         client = DataStorageClient()
-        with patch.object(client, "get_fields_with_events", AsyncMock(return_value=self._FIELDS_MAP)):
-            is_valid, invalid = await client.validate_fields(["rsrp_mean", "latency_mean"])
+        with patch.object(
+            client, "get_fields_with_events", AsyncMock(return_value=self._FIELDS_MAP)
+        ):
+            is_valid, invalid = await client.validate_fields(
+                ["rsrp_mean", "latency_mean"]
+            )
             assert is_valid is True
             assert invalid == []
 
@@ -201,7 +226,9 @@ class TestDataStorageClient:
     async def test_validate_fields_some_invalid(self, mock_settings):
         """Test validating fields when some are invalid."""
         client = DataStorageClient()
-        with patch.object(client, "get_fields_with_events", AsyncMock(return_value=self._FIELDS_MAP)):
+        with patch.object(
+            client, "get_fields_with_events", AsyncMock(return_value=self._FIELDS_MAP)
+        ):
             is_valid, invalid = await client.validate_fields(
                 ["rsrp_mean", "invalid_field", "another_invalid"]
             )
@@ -212,64 +239,9 @@ class TestDataStorageClient:
     async def test_validate_fields_all_invalid(self, mock_settings):
         """Test validating fields when all are invalid."""
         client = DataStorageClient()
-        with patch.object(client, "get_fields_with_events", AsyncMock(return_value=self._FIELDS_MAP)):
+        with patch.object(
+            client, "get_fields_with_events", AsyncMock(return_value=self._FIELDS_MAP)
+        ):
             is_valid, invalid = await client.validate_fields(["foo", "bar", "baz"])
             assert is_valid is False
             assert set(invalid) == {"foo", "bar", "baz"}
-
-    @pytest.mark.asyncio
-    async def test_get_known_cells_success(self, mock_settings):
-        """Test successfully fetching known cells."""
-        import json as _json
-        client = DataStorageClient()
-        mock_cells = [0, 1, 2, 5, 7]
-
-        mock_response = MagicMock()
-        mock_response.content = _json.dumps(mock_cells).encode()
-        mock_response.headers = {}
-        mock_response.raise_for_status = MagicMock()
-
-        mock_client_instance = AsyncMock()
-        mock_client_instance.get = AsyncMock(return_value=mock_response)
-
-        with patch("src.services.data_storage_client._get_http_client", return_value=mock_client_instance), \
-             patch("src.services.data_storage_client._get_service_token", AsyncMock(return_value=None)):
-            cells = await client.get_known_cells()
-
-            assert cells == [0, 1, 2, 5, 7]
-            mock_client_instance.get.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_fetch_cell_data_success(self, mock_settings):
-        """Test successfully fetching cell data."""
-        import json as _json
-        client = DataStorageClient()
-        mock_data = [
-            {
-                "window_start_time": 1000,
-                "window_end_time": 1060,
-                "cell_index": 0,
-                "rsrp_mean": -85.0,
-                "latency_mean": 20.0,
-            }
-        ]
-
-        mock_response = MagicMock()
-        mock_response.content = _json.dumps(mock_data).encode()
-        mock_response.headers = {}
-        mock_response.raise_for_status = MagicMock()
-
-        mock_client_instance = AsyncMock()
-        mock_client_instance.get = AsyncMock(return_value=mock_response)
-
-        with patch("src.services.data_storage_client._get_http_client", return_value=mock_client_instance), \
-             patch("src.services.data_storage_client._get_service_token", AsyncMock(return_value=None)):
-            data = await client.fetch_cell_data(
-                cell_index=0,
-                start_timestamp=1000,
-                end_timestamp=2000,
-                window_duration_seconds=60,
-            )
-
-            assert len(data) == 1
-            assert data[0]["rsrp_mean"] == -85.0

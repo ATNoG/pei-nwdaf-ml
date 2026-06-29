@@ -32,18 +32,25 @@ class PredictRequest(BaseModel):
     arch_bytes: str    # base64-encoded Python source
     model_bytes: str   # base64-encoded .pth file
     config: dict
-    X_bytes: str
-    X_shape: list[int]
+    # Plaintext path (KernelSHAP / unencrypted)
+    X_bytes: str | None = None
+    X_shape: list[int] | None = None
+    # Encrypted path: base64-encoded ECIES blobs, one per fetch page
+    encrypted_pages: list[str] | None = None
 
 
 class PredictResponse(BaseModel):
     output_bytes: str
     output_shape: list[int]
+    used_windows: list[dict] | None = None
 
 
-def _load_and_predict(req: PredictRequest, config: ModelConfig) -> np.ndarray:
+def _load_and_predict(req: PredictRequest, config: ModelConfig) -> tuple[np.ndarray, list[dict] | None]:
     import torch
     from io import BytesIO
+
+    from src.services.data_preparation import prepare_last_sequence
+    from src.services.data_storage_client import decrypt_fetched
 
     arch_code = base64.b64decode(req.arch_bytes)
     model_data = base64.b64decode(req.model_bytes)
@@ -61,9 +68,22 @@ def _load_and_predict(req: PredictRequest, config: ModelConfig) -> np.ndarray:
         )
         model.model = loaded
 
-        X = np.frombuffer(base64.b64decode(req.X_bytes), dtype=np.float32).reshape(req.X_shape)
+        if req.encrypted_pages:
+            pages = [base64.b64decode(p) for p in req.encrypted_pages]
+            cell_data = decrypt_fetched(pages, model.decrypt)
+            cell_data.sort(key=lambda x: x.get("window_start_time", 0))
+            used_windows = cell_data[-config.lookback_steps:]
+            X = prepare_last_sequence(
+                cell_data=cell_data,
+                input_fields=config.input_fields,
+                lookback_steps=config.lookback_steps,
+            )
+        else:
+            X = np.frombuffer(base64.b64decode(req.X_bytes), dtype=np.float32).reshape(req.X_shape)
+            used_windows = None
+
         X = np.nan_to_num(X, nan=0.0)
-        return model.predict(X)
+        return model.predict(X), used_windows
 
 
 @app.post("/predict", response_model=PredictResponse)
@@ -74,11 +94,12 @@ async def predict(req: PredictRequest):
         raise HTTPException(status_code=422, detail=f"Invalid config: {e}")
 
     try:
-        raw = await asyncio.to_thread(_load_and_predict, req, config)
+        raw, used_windows = await asyncio.to_thread(_load_and_predict, req, config)
         raw = np.ascontiguousarray(raw, dtype=np.float32)
         return PredictResponse(
             output_bytes=base64.b64encode(raw.tobytes()).decode(),
             output_shape=list(raw.shape),
+            used_windows=used_windows,
         )
     except Exception as e:
         logger.error("Prediction failed: %s", e)
