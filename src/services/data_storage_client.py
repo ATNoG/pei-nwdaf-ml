@@ -1,7 +1,6 @@
 """Client for interacting with the Data Storage API."""
 
 import asyncio
-import json
 import logging
 import os
 import time
@@ -18,6 +17,7 @@ _KC_CLIENT = os.getenv("KEYCLOAK_CLIENT_ID", "aion-services")
 _KC_USER = os.getenv("ML_SERVICE_KC_USER", "ml-service")
 _KC_PASS = os.getenv("ML_SERVICE_KC_PASSWORD", "ml-service")
 _TOKEN_URL = f"{_KC_URL}/realms/{_KC_REALM}/protocol/openid-connect/token"
+_ENCRYPTION_ENABLED = os.getenv("ENCRYPTION_ENABLED", "").lower() == "true"
 
 _cached_token: str | None = None
 _token_expires_at: float = 0.0
@@ -227,6 +227,7 @@ class DataStorageClient:
         window_duration_seconds: int,
         ip_src: str | None = None,
         component_id: str | None = None,
+        public_key: bytes | None = None,
     ) -> list[dict]:
         """
         Fetch processed latency data for a specific cell with pagination.
@@ -267,6 +268,8 @@ class DataStorageClient:
             headers = {**await self._get_auth_headers()}
             if component_id:
                 headers["X-Component-ID"] = component_id
+            if _ENCRYPTION_ENABLED and public_key:
+                headers["X-Public-Key"] = public_key.hex()
 
             response = await client.get(
                 url, params=params, timeout=60.0, headers=headers
@@ -295,6 +298,7 @@ class DataStorageClient:
         dnn: str | None = None,
         snssai_sd: str | None = None,
         event: str | None = None,
+        public_key: bytes | None = None,
     ) -> list[dict]:
         """Fetch processed data with optional tag filters (no cell_index)."""
         url = f"{self.base_url}{self.data_endpoint}"
@@ -320,11 +324,15 @@ class DataStorageClient:
             if event is not None:
                 params["event"] = event
 
+            headers = await self._get_auth_headers()
+            if _ENCRYPTION_ENABLED and public_key:
+                headers["X-Public-Key"] = public_key.hex()
+
             response = await client.get(
                 url,
                 params=params,
                 timeout=60.0,
-                headers=await self._get_auth_headers(),
+                headers=headers,
             )
             response.raise_for_status()
             batch = response.json()

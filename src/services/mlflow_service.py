@@ -216,29 +216,6 @@ class MLflowService:
 
         return results
 
-    def get_public_key(self, model_id: str) -> str:
-        """Return the hex-encoded X25519 public key for the latest trained version."""
-        try:
-            registered_model = self.client.get_registered_model(model_id)
-        except MlflowException:
-            raise ValueError(f"Model '{model_id}' not found")
-
-        if not registered_model.latest_versions:
-            raise ValueError(f"Model '{model_id}' has no trained versions")
-
-        latest_mv = max(registered_model.latest_versions, key=lambda v: int(v.version))
-        if not latest_mv.run_id:
-            raise ValueError(f"No run associated with latest version of '{model_id}'")
-
-        run = self.client.get_run(latest_mv.run_id)
-        pub_key = run.data.tags.get("public_key")
-        if not pub_key:
-            raise ValueError(
-                f"No public key found for model '{model_id}' : retrain to generate one"
-            )
-
-        return pub_key
-
     def delete_model(self, model_id: str) -> None:
         """Delete a model from both PostgreSQL and MLflow registry."""
         # Delete from PostgreSQL
@@ -250,3 +227,12 @@ class MLflowService:
         except MlflowException:
             # Model exists in DB but not in MLflow - already deleted from DB
             pass
+
+    def get_public_key(self, model_id: str) -> bytes | None:
+        """Return model's X25519 public key from registered model tag, or None if not set."""
+        try:
+            rm = self.client.get_registered_model(model_id)
+            hex_key = (rm.tags or {}).get("public_key")
+            return bytes.fromhex(hex_key) if hex_key else None
+        except MlflowException:
+            return None

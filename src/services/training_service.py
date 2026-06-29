@@ -174,6 +174,7 @@ class TrainingService:
                     config.window_duration_seconds,
                     event_type=event_type,
                     component_id=component_id,
+                    public_key=self.mlflow_service.get_public_key(job.model_id),
                 )
 
                 if not training_data:
@@ -405,6 +406,7 @@ class TrainingService:
         window_duration_seconds: int,
         event_type: str | None = None,
         component_id: str | None = None,
+        public_key: bytes | None = None,
     ) -> list[dict]:
         """Fetch all data for training filtered by event type."""
         data = await self.data_storage_client.fetch_data(
@@ -412,6 +414,7 @@ class TrainingService:
             end_timestamp=end_timestamp,
             window_duration_seconds=window_duration_seconds,
             event=event_type,
+            public_key=public_key,
         )
         data.sort(key=lambda x: x.get("window_start_time", 0))
         logger.info(f"Fetched {len(data)} windows for event_type={event_type}")
@@ -554,7 +557,9 @@ class TrainingService:
                 # Register or update model
                 version = self._register_or_update_model(model_id, model_uri)
                 mlflow.set_tag("model_version", version)
-                mlflow.set_tag("public_key", model.public_key.hex())
+                self.mlflow_service.client.set_registered_model_tag(
+                    model_id, "public_key", model.public_key.hex()
+                )
 
                 # Store KernelSHAP background
                 with tempfile.TemporaryDirectory() as tmpdir:

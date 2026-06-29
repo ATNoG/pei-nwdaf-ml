@@ -124,9 +124,16 @@ class AnomalyTrainingService:
                 )
 
                 # Fetch all data for this model's event_type, group by slice
+                try:
+                    _rm = MlflowClient().get_registered_model(job.model_id)
+                    _pk_hex = (_rm.tags or {}).get("public_key")
+                    _public_key: bytes | None = bytes.fromhex(_pk_hex) if _pk_hex else None
+                except Exception:
+                    _public_key = None
                 training_data = await self._fetch_training_data(
                     start_ts, end_ts, config.window_duration_seconds,
                     event_type=config_db.event_type,
+                    public_key=_public_key,
                 )
                 if not training_data:
                     raise ValueError("No data available for training")
@@ -271,6 +278,7 @@ class AnomalyTrainingService:
         end_timestamp: int,
         window_duration_seconds: int,
         event_type: str | None = None,
+        public_key: bytes | None = None,
     ) -> list[dict]:
         """Fetch all data for training filtered by event type."""
         data = await self.data_storage_client.fetch_data(
@@ -278,6 +286,7 @@ class AnomalyTrainingService:
             end_timestamp=end_timestamp,
             window_duration_seconds=window_duration_seconds,
             event=event_type,
+            public_key=public_key,
         )
         data.sort(key=lambda x: x.get("window_start_time", 0))
         logger.info(f"Fetched {len(data)} windows for event_type={event_type}")
@@ -449,7 +458,9 @@ class AnomalyTrainingService:
             model_uri = f"runs:/{run_id}/model"
             result = mlflow.register_model(model_uri, model_id)
             mlflow.set_tag("model_version", result.version)
-            mlflow.set_tag("public_key", ae.model.public_key.hex())
+            MlflowClient().set_registered_model_tag(
+                model_id, "public_key", ae.model.public_key.hex()
+            )
 
             # Store KernelSHAP background for explainability
             with tempfile.TemporaryDirectory() as tmpdir:
