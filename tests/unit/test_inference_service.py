@@ -105,7 +105,7 @@ class TestInferenceServicePredict:
 
         with patch(
             "src.services.inference_service.safe_predict",
-            return_value=np.zeros((1, forecast_steps * num_outputs), dtype=np.float32),
+            return_value=(np.zeros((1, forecast_steps * num_outputs), dtype=np.float32), None),
         ):
             result = await inference_service.predict(
                 output_field="latency_mean",
@@ -222,7 +222,7 @@ class TestInferenceServicePredict:
 
         with patch(
             "src.services.inference_service.safe_predict",
-            return_value=np.zeros((1, config.forecast_steps * len(config.output_fields)), dtype=np.float32),
+            return_value=(np.zeros((1, config.forecast_steps * len(config.output_fields)), dtype=np.float32), None),
         ), patch(
             "src.services.inference_service.calculate_timestamps",
             return_value=(1000, 2000),
