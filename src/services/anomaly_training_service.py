@@ -18,7 +18,7 @@ from src.models.autoencoder import Autoencoder
 from src.schemas.training import TrainingJobStatus
 from src.services.anomaly_config_service import AnomalyConfigService
 from src.services.data_preparation import calculate_timestamps, extract_fields
-from src.services.data_storage_client import DataStorageClient
+from src.services.data_storage_client import DataStorageClient, decrypt_fetched
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,9 @@ class AnomalyTrainingService:
             )
             self.db.commit()
             if result.rowcount == 0:
-                logger.info(f"Anomaly job {job_id} was not in QUEUED state (likely cancelled), aborting")
+                logger.info(
+                    f"Anomaly job {job_id} was not in QUEUED state (likely cancelled), aborting"
+                )
                 return
 
             try:
@@ -123,17 +125,17 @@ class AnomalyTrainingService:
                     f"Anomaly job {job_id}: Fetching data from {start_ts} to {end_ts}"
                 )
 
-                # Fetch all data for this model's event_type, group by slice
-                try:
-                    _rm = MlflowClient().get_registered_model(job.model_id)
-                    _pk_hex = (_rm.tags or {}).get("public_key")
-                    _public_key: bytes | None = bytes.fromhex(_pk_hex) if _pk_hex else None
-                except Exception:
-                    _public_key = None
+                ae = Autoencoder(
+                    input_size=len(config.input_fields), hidden_size=config.hidden_size
+                )
+
                 training_data = await self._fetch_training_data(
-                    start_ts, end_ts, config.window_duration_seconds,
+                    start_ts,
+                    end_ts,
+                    config.window_duration_seconds,
                     event_type=config_db.event_type,
-                    public_key=_public_key,
+                    public_key=ae.public_key,
+                    decrypt_fn=ae.decrypt,
                 )
                 if not training_data:
                     raise ValueError("No data available for training")
@@ -148,9 +150,13 @@ class AnomalyTrainingService:
                     try:
                         inputs, _ = extract_fields(slice_data, config.input_fields, [])
                         all_features.extend(inputs)
-                        logger.info(f"Anomaly job {job_id}: Slice {slice_key} - {len(inputs)} windows")
+                        logger.info(
+                            f"Anomaly job {job_id}: Slice {slice_key} - {len(inputs)} windows"
+                        )
                     except Exception as e:
-                        logger.warning(f"Anomaly job {job_id}: Slice {slice_key} failed: {e}")
+                        logger.warning(
+                            f"Anomaly job {job_id}: Slice {slice_key} failed: {e}"
+                        )
 
                 if not all_features:
                     raise ValueError("No data had sufficient fields for training")
@@ -168,6 +174,7 @@ class AnomalyTrainingService:
                     model_id=job.model_id,
                     job_id=job_id,
                     X_train=X_train,
+                    ae=ae,
                     config=config,
                     config_db=config_db,
                 )
@@ -210,9 +217,17 @@ class AnomalyTrainingService:
         from src.schemas.kube import JobResources
         from src.services.kube_training import get_kube_training_service
 
-        job = self.db.query(AnomalyTrainingJobDB).filter(AnomalyTrainingJobDB.job_id == job_id).first()
+        job = (
+            self.db.query(AnomalyTrainingJobDB)
+            .filter(AnomalyTrainingJobDB.job_id == job_id)
+            .first()
+        )
         if resources is None and job:
-            cfg = self.db.query(AnomalyModelConfigDB).filter(AnomalyModelConfigDB.model_id == job.model_id).first()
+            cfg = (
+                self.db.query(AnomalyModelConfigDB)
+                .filter(AnomalyModelConfigDB.model_id == job.model_id)
+                .first()
+            )
             if cfg and cfg.default_cpu and cfg.default_memory:
                 resources = JobResources(cpu=cfg.default_cpu, memory=cfg.default_memory)
 
@@ -220,7 +235,9 @@ class AnomalyTrainingService:
         if kube:
             kube.to_kube(job.model_id, job_id, resources, "anomaly")
         else:
-            asyncio.get_running_loop().run_in_executor(_executor, _run_anomaly_training_sync, job_id)
+            asyncio.get_running_loop().run_in_executor(
+                _executor, _run_anomaly_training_sync, job_id
+            )
 
     def cancel_job(self, job_id: str):
         job = self.get_job(job_id)
@@ -242,6 +259,7 @@ class AnomalyTrainingService:
                 logger.error(f"Failed to terminate MLflow run: {e}")
 
         from src.services.kube_training import get_kube_training_service
+
         kube = get_kube_training_service()
         if kube:
             try:
@@ -279,8 +297,13 @@ class AnomalyTrainingService:
         window_duration_seconds: int,
         event_type: str | None = None,
         public_key: bytes | None = None,
+        decrypt_fn=None,
     ) -> list[dict]:
         """Fetch all data for training filtered by event type."""
+
+        if public_key and not decrypt_fn:
+            raise ValueError("decrypt_fn must be provided when public_key is used")
+
         data = await self.data_storage_client.fetch_data(
             start_timestamp=start_timestamp,
             end_timestamp=end_timestamp,
@@ -288,6 +311,8 @@ class AnomalyTrainingService:
             event=event_type,
             public_key=public_key,
         )
+        data = decrypt_fetched(data, decrypt_fn) if public_key else data
+
         data.sort(key=lambda x: x.get("window_start_time", 0))
         logger.info(f"Fetched {len(data)} windows for event_type={event_type}")
         return data
@@ -370,6 +395,7 @@ class AnomalyTrainingService:
         model_id: str,
         job_id: str,
         X_train: np.ndarray,
+        ae: Autoencoder,
         config,
         config_db: AnomalyModelConfigDB,
     ) -> str:
@@ -419,7 +445,6 @@ class AnomalyTrainingService:
                 mlflow.log_artifact(scaler_path, artifact_path="scaler")
 
             # Always train from scratch - scaler + threshold must match
-            ae = Autoencoder(input_size=num_features, hidden_size=config.hidden_size)
 
             def status_callback(epoch, max_epochs, loss):
                 logger.info(f"Epoch {epoch}/{max_epochs}: loss={loss:.6f}")
@@ -467,7 +492,9 @@ class AnomalyTrainingService:
                 bg_path = os.path.join(tmpdir, "background.npz")
                 np.savez(bg_path, X_background=X_scaled)
                 mlflow.log_artifact(bg_path, artifact_path="background")
-            logger.info(f"Anomaly model {model_id} v{result.version} logged - background stored ({len(X_scaled)} samples)")
+            logger.info(
+                f"Anomaly model {model_id} v{result.version} logged - background stored ({len(X_scaled)} samples)"
+            )
             return run_id
 
     @staticmethod

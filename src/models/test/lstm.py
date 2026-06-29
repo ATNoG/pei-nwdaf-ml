@@ -43,11 +43,10 @@ class LSTM(ModelInterface):
             hidden_size=hidden_size
         )
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = None
         self.num_layers = num_layers
 
     def _ensure_model(self):
-        if self.model is None:
+        if isinstance(self._model.inner, nn.Identity):
             # LSTM processes sequences per-timestep
             input_size = len(self.input_fields)
             # Output is flattened: forecast_steps * num_output_features

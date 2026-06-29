@@ -236,6 +236,7 @@ class DataStorageClient:
             headers = await self._get_auth_headers()
             if _ENCRYPTION_ENABLED and public_key:
                 headers["X-Public-Key"] = public_key.hex()
+                logger.info("[ECIES] fetch_data: sending X-Public-Key pub[:5]=%s offset=%d", public_key.hex()[:10], offset)
 
             response = await client.get(
                 url,
@@ -248,6 +249,7 @@ class DataStorageClient:
             if response.headers.get("content-type", "").startswith(
                 "application/octet-stream"
             ):
+                logger.info("[ECIES] fetch_data: received encrypted blob %d bytes, blob[:5]=%s", len(response.content), response.content[:5].hex())
                 all_data.append(response.content)
                 record_count = int(response.headers.get("x-record-count", limit))
                 if record_count < limit:
@@ -277,9 +279,18 @@ def decrypt_fetched(
     """
     if not data or isinstance(data[0], dict):
         return data
+    import time as _time
+    _t0 = _time.perf_counter()
     result: list[dict] = []
+    total_blob = 0
+    total_plain = 0
     for blob in data:
-        result.extend(json.loads(decrypt_fn(blob)))
+        decrypted = decrypt_fn(blob)
+        total_blob += len(blob)
+        total_plain += len(decrypted)
+        result.extend(json.loads(decrypted))
+    _ms = (_time.perf_counter() - _t0) * 1000
+    logger.info("[ECIES] decrypt_fetched: %d pages, %d bytes → %d records in %.2f ms", len(data), total_blob, len(result), _ms)
     return result
 
 

@@ -34,10 +34,15 @@ class SecureWrapper(nn.Module):
         )
 
     def decrypt(self, ciphertext: bytes) -> bytes:
-        private_key = X25519PrivateKey.from_private_bytes(self.priv_key)
-        ephemeral_pub = X25519PublicKey.from_public_bytes(ciphertext[:32])
-        shared_secret = private_key.exchange(ephemeral_pub)
-        aes_key = HKDF(
-            algorithm=hashes.SHA256(), length=32, salt=None, info=b"model-decrypt"
-        ).derive(shared_secret)
-        return AESGCM(aes_key).decrypt(ciphertext[32:44], ciphertext[44:], None)
+        return ecies_decrypt(ciphertext, self.priv_key)
+
+
+def ecies_decrypt(ciphertext: bytes, priv_key_bytes: bytes) -> bytes:
+    """Standalone ECIES decrypt. Same algorithm as SecureWrapper.decrypt."""
+    private_key = X25519PrivateKey.from_private_bytes(priv_key_bytes)
+    ephemeral_pub = X25519PublicKey.from_public_bytes(ciphertext[:32])
+    shared_secret = private_key.exchange(ephemeral_pub)
+    aes_key = HKDF(
+        algorithm=hashes.SHA256(), length=32, salt=None, info=b"model-decrypt"
+    ).derive(shared_secret)
+    return AESGCM(aes_key).decrypt(ciphertext[32:44], ciphertext[44:], None)

@@ -1,11 +1,15 @@
+"""This file should be deleted and changed to a walk-forward-validation, which would fit better with the model data encryption logic.
+The current one used a seeded "backdoor" that generates a key used for data encryption.
+"""
+
 """Service for evaluating and monitoring model performance per output field."""
 
 import json
 import logging
 from datetime import datetime, timezone
 
-import numpy as np
 import mlflow
+import numpy as np
 from mlflow.exceptions import MlflowException
 from sqlalchemy.orm import Session
 
@@ -66,6 +70,7 @@ def _make_alibi_scorer(metric: str, score_fn):
     Error metrics (rmse, mae, mape) are negated so alibi's convention holds.
     Sets __name__ = metric so alibi keys the result dict by metric name.
     """
+
     def scorer(y_true, y_pred):
         if len(y_pred) == 0 or len(y_true) == 0:
             return 0.0
@@ -92,7 +97,9 @@ class _SequenceIndexBridge:
 
     def encode(self, n_fields: int) -> np.ndarray:
         """Identity encoding: cell i uses its own sequences for every field."""
-        return np.tile(np.arange(self.n_cells, dtype=np.float32)[:, np.newaxis], (1, n_fields))  # (n_cells, n_fields)
+        return np.tile(
+            np.arange(self.n_cells, dtype=np.float32)[:, np.newaxis], (1, n_fields)
+        )  # (n_cells, n_fields)
 
     def reconstruct(self, X_2d: np.ndarray) -> np.ndarray:
         """Look up real sequences from pool using float indices (rounded + clipped)."""
@@ -158,7 +165,9 @@ class PerformanceService:
             event_type=event_type or None,
         )
         if fallback_start_ts is not None:
-            logger.info("Evaluation fallback anchor: window_start_time=%d", fallback_start_ts)
+            logger.info(
+                "Evaluation fallback anchor: window_start_time=%d", fallback_start_ts
+            )
         else:
             logger.warning("Evaluation: no data found in storage - scores will be None")
 
@@ -167,7 +176,9 @@ class PerformanceService:
 
         performances: list[ModelPerformance] = []
         scored: list[tuple[str, float]] = []  # (model_id, score)
-        loaded_models: dict[str, object] = {}  # to avoid loading the same model twice for importance calculation
+        loaded_models: dict[str, object] = (
+            {}
+        )  # to avoid loading the same model twice for importance calculation
         detail_map: dict[str, object] = {}
 
         for model_config in model_configs:
@@ -192,9 +203,18 @@ class PerformanceService:
 
             detail_map[model_config.model_id] = model_detail
             try:
-                _model_uri = f"models:/{model_config.model_id}/{model_detail.latest_version}"
+                _model_uri = (
+                    f"models:/{model_config.model_id}/{model_detail.latest_version}"
+                )
                 loaded_models[model_config.model_id] = _model_uri
-                score = await self._compute_score_for_model(_model_uri, config, field_name, event_type, metric, fallback_start_ts)
+                score = await self._compute_score_for_model(
+                    _model_uri,
+                    config,
+                    field_name,
+                    event_type,
+                    metric,
+                    fallback_start_ts,
+                )
             except Exception as e:
                 logger.warning(
                     f"Failed to evaluate model {model_config.model_id} for field '{field_name}': {e}"
@@ -203,7 +223,9 @@ class PerformanceService:
 
             if score is not None:
                 scored.append((model_config.model_id, score))
-                self._write_history_row(model_config.model_id, field_name, score, metric, "evaluate")
+                self._write_history_row(
+                    model_config.model_id, field_name, score, metric, "evaluate"
+                )
 
             performances.append(
                 base.model_copy(update={"score": score, "evaluated_at": evaluated_at})
@@ -229,6 +251,7 @@ class PerformanceService:
 
         # Invalidate inference cache so next request picks up new best model
         from src.services import inference_cache
+
         inference_cache.invalidate_field(field_name)
 
         if best_model_id and best_model_id in loaded_models:
@@ -242,10 +265,18 @@ class PerformanceService:
                     fallback_start_ts=fallback_start_ts,
                 )
                 if importances is not None:
-                    self.client.set_registered_model_tag(best_model_id, _importance_key(field_name), json.dumps(importances))
-                    self.client.set_registered_model_tag(best_model_id, _importance_at_key(field_name), evaluated_at_str)
+                    self.client.set_registered_model_tag(
+                        best_model_id,
+                        _importance_key(field_name),
+                        json.dumps(importances),
+                    )
+                    self.client.set_registered_model_tag(
+                        best_model_id, _importance_at_key(field_name), evaluated_at_str
+                    )
             except Exception as e:
-                logger.warning("Permutation importance failed for '%s': %s", field_name, e)
+                logger.warning(
+                    "Permutation importance failed for '%s': %s", field_name, e
+                )
 
         for p in performances:
             p.is_best = p.model_id == best_model_id
@@ -360,7 +391,9 @@ class PerformanceService:
                     is_best=True,
                     baseline_score=float(baseline_str) if baseline_str else None,
                     last_trained_at=model_detail.last_trained_at,
-                    evaluated_at=datetime.fromisoformat(eval_at_str) if eval_at_str else None,
+                    evaluated_at=(
+                        datetime.fromisoformat(eval_at_str) if eval_at_str else None
+                    ),
                 )
 
         return None
@@ -379,7 +412,9 @@ class PerformanceService:
         if config is None:
             raise ValueError(f"Model ID '{model_id}' does not exist.")
         if field_name not in config.output_fields:
-            raise ValueError(f"Model ID '{model_id}' does not predict field '{field_name}'.")
+            raise ValueError(
+                f"Model ID '{model_id}' does not predict field '{field_name}'."
+            )
 
         event_type = config.event_type
 
@@ -387,11 +422,15 @@ class PerformanceService:
         current_best = self.get_best_model(field_name)
         if current_best and current_best.model_id != model_id:
             try:
-                self.client.delete_registered_model_tag(current_best.model_id, _best_key(event_type, field_name))
+                self.client.delete_registered_model_tag(
+                    current_best.model_id, _best_key(event_type, field_name)
+                )
             except MlflowException:
                 pass
 
-        self.client.set_registered_model_tag(model_id, _best_key(event_type, field_name), "true")
+        self.client.set_registered_model_tag(
+            model_id, _best_key(event_type, field_name), "true"
+        )
 
         return self.get_best_model(field_name)
 
@@ -439,7 +478,9 @@ class PerformanceService:
         )
 
         _model_uri = f"models:/{best.model_id}/{model_detail.latest_version}"
-        score = await self._compute_score_for_model(_model_uri, config, field_name, model_event_type, metric, fallback_start_ts)
+        score = await self._compute_score_for_model(
+            _model_uri, config, field_name, model_event_type, metric, fallback_start_ts
+        )
 
         evaluated_at = datetime.now(tz=timezone.utc)
         evaluated_at_str = evaluated_at.isoformat()
@@ -480,7 +521,9 @@ class PerformanceService:
             tags = self._get_registered_model_tags(config.model_id)
             for key in tags:
                 if key.startswith("best_for:"):
-                    suffix = key.removeprefix("best_for:")  # e.g. "PERF_DATA:thrputUl_mbps_mean"
+                    suffix = key.removeprefix(
+                        "best_for:"
+                    )  # e.g. "PERF_DATA:thrputUl_mbps_mean"
                     fields.add(suffix)
         return list(fields)
 
@@ -497,7 +540,9 @@ class PerformanceService:
         self, field_name: str, model_id: str | None = None
     ) -> ScoreHistoryResponse:
         """Return score measurement history for field_name, oldest first."""
-        q = self.db.query(ScoreHistoryDB).filter(ScoreHistoryDB.field_name == field_name)
+        q = self.db.query(ScoreHistoryDB).filter(
+            ScoreHistoryDB.field_name == field_name
+        )
         if model_id:
             q = q.filter(ScoreHistoryDB.model_id == model_id)
         rows = q.order_by(ScoreHistoryDB.measured_at).all()
@@ -531,7 +576,10 @@ class PerformanceService:
         if metric in _HIGHER_IS_BETTER:
             return sorted(
                 performances,
-                key=lambda p: (p.score is None, -(p.score if p.score is not None else 0.0)),
+                key=lambda p: (
+                    p.score is None,
+                    -(p.score if p.score is not None else 0.0),
+                ),
             )
         return sorted(
             performances,
@@ -604,7 +652,11 @@ class PerformanceService:
             )
 
         if not data:
-            logger.warning("No data for score computation on field '%s' (metric=%s)", field_name, metric)
+            logger.warning(
+                "No data for score computation on field '%s' (metric=%s)",
+                field_name,
+                metric,
+            )
             return None
 
         # Group by slice context and score each independently
@@ -622,7 +674,9 @@ class PerformanceService:
             x_windows = eval_data[: config.lookback_steps]
             truth_windows = eval_data[config.lookback_steps :]
 
-            X = prepare_last_sequence(x_windows, config.input_fields, config.lookback_steps)
+            X = prepare_last_sequence(
+                x_windows, config.input_fields, config.lookback_steps
+            )
 
             try:
                 pred = sync_safe_predict(config.architecture, model_uri, config, X)[0]
@@ -631,10 +685,16 @@ class PerformanceService:
                 continue
 
             all_pred_vals.extend(pred[field_idx::num_out].tolist())
-            all_truth_vals.extend([float(w.get(field_name) or 0.0) for w in truth_windows])
+            all_truth_vals.extend(
+                [float(w.get(field_name) or 0.0) for w in truth_windows]
+            )
 
         if not all_pred_vals:
-            logger.warning("No valid slices for score computation on field '%s' (metric=%s)", field_name, metric)
+            logger.warning(
+                "No valid slices for score computation on field '%s' (metric=%s)",
+                field_name,
+                metric,
+            )
             return None
 
         return self._compute_score(all_pred_vals, all_truth_vals, metric)
@@ -651,13 +711,13 @@ class PerformanceService:
         errors = p - t
 
         if metric == "rmse":
-            return float(np.sqrt(np.mean(errors ** 2)))
+            return float(np.sqrt(np.mean(errors**2)))
         if metric == "mae":
             return float(np.mean(np.abs(errors)))
         if metric == "mape":
             return float(np.mean(np.abs(errors / t)) * 100)
         if metric == "r2":
-            ss_res = float(np.sum(errors ** 2))
+            ss_res = float(np.sum(errors**2))
             ss_tot = float(np.sum((t - np.mean(t)) ** 2))
             return (1.0 - ss_res / ss_tot) if ss_tot > 0 else 0.0
 
@@ -702,7 +762,11 @@ class PerformanceService:
         if data:
             slice_groups: dict[tuple, list[dict]] = {}
             for w in data:
-                key = (w.get("snssai_sst", ""), w.get("snssai_sd", ""), w.get("dnn", ""))
+                key = (
+                    w.get("snssai_sst", ""),
+                    w.get("snssai_sd", ""),
+                    w.get("dnn", ""),
+                )
                 slice_groups.setdefault(key, []).append(w)
 
             for slice_data in slice_groups.values():
@@ -710,12 +774,23 @@ class PerformanceService:
                     continue
                 slice_data.sort(key=lambda x: x.get("window_start_time", 0))
                 eval_data = slice_data[-min_windows:]
-                X = prepare_last_sequence(eval_data[: config.lookback_steps], config.input_fields, config.lookback_steps)
+                X = prepare_last_sequence(
+                    eval_data[: config.lookback_steps],
+                    config.input_fields,
+                    config.lookback_steps,
+                )
                 X_list.append(X[0])
-                y_list.append([float(w.get(field_name) or 0.0) for w in eval_data[config.lookback_steps:]])
+                y_list.append(
+                    [
+                        float(w.get(field_name) or 0.0)
+                        for w in eval_data[config.lookback_steps :]
+                    ]
+                )
 
         if not X_list:
-            logger.warning("Permutation importance: no usable slices for '%s'", field_name)
+            logger.warning(
+                "Permutation importance: no usable slices for '%s'", field_name
+            )
             return None
 
         bridge = _SequenceIndexBridge(np.stack(X_list, axis=0))
@@ -730,15 +805,19 @@ class PerformanceService:
             return preds[:, field_idx::num_out].mean(axis=1)
 
         scorer = _make_alibi_scorer(metric, self._compute_score)
-        explainer = PermutationImportance(predictor=predict_fn, score_fns=scorer, feature_names=config.input_fields)
-        explanation = explainer.explain(X_2d, y_1d, n_repeats=n_repeats, kind="difference")
+        explainer = PermutationImportance(
+            predictor=predict_fn, score_fns=scorer, feature_names=config.input_fields
+        )
+        explanation = explainer.explain(
+            X_2d, y_1d, n_repeats=n_repeats, kind="difference"
+        )
 
         f_names = explanation.data["feature_names"]
         f_importance = explanation.data["feature_importance"][0]
         importances = {
             f_names[i]: {
                 "mean": round(float(f_importance[i]["mean"]), 6),
-                "std":  round(float(f_importance[i]["std"]),  6),
+                "std": round(float(f_importance[i]["std"]), 6),
             }
             for i in range(len(f_names))
         }
@@ -746,7 +825,10 @@ class PerformanceService:
         ranked = sorted(importances.items(), key=lambda x: x[1]["mean"], reverse=True)
         logger.info(
             "Permutation importance for field '%s' (metric=%s, n_cells=%d, n_repeats=%d):",
-            field_name, metric, len(X_list), n_repeats,
+            field_name,
+            metric,
+            len(X_list),
+            n_repeats,
         )
         for name, vals in ranked:
             logger.info("  %-30s mean=%+.6f  std=%.6f", name, vals["mean"], vals["std"])
@@ -808,8 +890,12 @@ class PerformanceService:
                 f"No usable data found for model '{model_id}' on field '{field_name}'"
             )
         computed_at = datetime.now(timezone.utc)
-        self.client.set_registered_model_tag(model_id, _importance_key(field_name), json.dumps(importances))
-        self.client.set_registered_model_tag(model_id, _importance_at_key(field_name), computed_at.isoformat())
+        self.client.set_registered_model_tag(
+            model_id, _importance_key(field_name), json.dumps(importances)
+        )
+        self.client.set_registered_model_tag(
+            model_id, _importance_at_key(field_name), computed_at.isoformat()
+        )
         return FeatureImportanceResponse(
             field_name=field_name,
             model_id=model_id,
@@ -836,20 +922,28 @@ class PerformanceService:
         For non-winners: removes best_for:{event}:{field} if previously set.
         """
         for model_id, score in scored_models:
-            self.client.set_registered_model_tag(model_id, _score_key(field_name), str(score))
+            self.client.set_registered_model_tag(
+                model_id, _score_key(field_name), str(score)
+            )
             self.client.set_registered_model_tag(
                 model_id, _eval_at_key(field_name), evaluated_at_str
             )
 
             if model_id == best_model_id:
-                self.client.set_registered_model_tag(model_id, _best_key(event_type, field_name), "true")
-                self.client.set_registered_model_tag(model_id, _metric_key(field_name), metric)
+                self.client.set_registered_model_tag(
+                    model_id, _best_key(event_type, field_name), "true"
+                )
+                self.client.set_registered_model_tag(
+                    model_id, _metric_key(field_name), metric
+                )
                 self.client.set_registered_model_tag(
                     model_id, _baseline_key(field_name), str(score)
                 )
             else:
                 try:
-                    self.client.delete_registered_model_tag(model_id, _best_key(event_type, field_name))
+                    self.client.delete_registered_model_tag(
+                        model_id, _best_key(event_type, field_name)
+                    )
                 except MlflowException:
                     pass
 
