@@ -65,6 +65,10 @@ class ModelCreate(BaseModel):
         description="Unique model name (alphanumeric, underscore, hyphen only)",
     )
     config: ModelConfig = Field(..., description="Model configuration")
+    auto_train: bool = Field(
+        default=True,
+        description="Trigger a training run immediately after creation",
+    )
 
 
 class ModelSummary(BaseModel):
@@ -108,3 +112,4 @@ class ModelDetail(BaseModel):
     last_trained_at: datetime | None = Field(None, description="Last training completion timestamp")
     mlflow_run_id: str | None = Field(None, description="MLflow run ID of the latest training")
     training_loss: float | None = Field(None, description="Final training loss from latest run")
+    training_job_id: str | None = Field(None, description="Job id if auto-train was triggered on creation")
