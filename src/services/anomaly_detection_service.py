@@ -145,6 +145,7 @@ class AnomalyDetectionService:
             dnn=tags_dict.get("dnn"),
             snssai_sd=tags_dict.get("snssai_sd"),
             event=tags_dict.get("event"),
+            public_key=ae.public_key,
         )
 
         empty = AnomalyDetectionResult(

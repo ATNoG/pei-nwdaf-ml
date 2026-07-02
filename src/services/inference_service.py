@@ -9,20 +9,22 @@ import mlflow
 import numpy as np
 
 from src.core.config import settings
-from src.services.model_loader import load_trained_model
-from src.services.safe_predict import safe_predict, sync_safe_predict
-from src.services import inference_cache
 from src.schemas.inference import ForecastStepPrediction
 from src.schemas.model import ModelConfig
 from src.schemas.performance import LocalExplanationResponse
+from src.services import inference_cache
 from src.services.data_preparation import calculate_timestamps, prepare_last_sequence
 from src.services.data_storage_client import DataStorageClient
 from src.services.mlflow_service import MLflowService
+from src.services.model_loader import load_trained_model
+from src.services.safe_predict import safe_predict, sync_safe_predict
 
 logger = logging.getLogger(__name__)
 
 try:
-    from dlt_client import analytics_from_env, inference_from_env as _dlt_inference_from_env
+    from dlt_client import analytics_from_env
+    from dlt_client import inference_from_env as _dlt_inference_from_env
+
     _DLT_AVAILABLE = True
 except ImportError:
     _DLT_AVAILABLE = False
@@ -47,9 +49,15 @@ def _get_dlt_clients():
 
 
 async def _dlt_trace_inference(
-    model_run_id, model_name, model_version,
-    query_params, data_payload, anomaly_score, decision,
-    time_range_start, time_range_end,
+    model_run_id,
+    model_name,
+    model_version,
+    query_params,
+    data_payload,
+    anomaly_score,
+    decision,
+    time_range_start,
+    time_range_end,
 ):
     analytics, inference = _get_dlt_clients()
     if analytics is None:
@@ -66,7 +74,9 @@ async def _dlt_trace_inference(
             time_range_end=time_range_end,
         )
     except Exception as exc:
-        logger.warning("DLT record_data_fetch failed [%s] (non-fatal): %s", type(exc).__name__, exc)
+        logger.warning(
+            "DLT record_data_fetch failed [%s] (non-fatal): %s", type(exc).__name__, exc
+        )
     try:
         await inference.record_inference(
             mlflow_run_id=model_run_id or "",
@@ -78,7 +88,10 @@ async def _dlt_trace_inference(
             decision=decision,
         )
     except Exception as exc:
-        logger.warning("DLT record_inference failed [%s] (non-fatal): %s", type(exc).__name__, exc)
+        logger.warning(
+            "DLT record_inference failed [%s] (non-fatal): %s", type(exc).__name__, exc
+        )
+
 
 # (model_id, run_id) -> X_background (invalidated automatically when model version changes)
 _background_cache: dict[tuple[str, str], np.ndarray] = {}
@@ -96,7 +109,11 @@ class InferenceService:
         self.data_storage_client = data_storage_client
 
     async def predict(
-        self, output_field: str, tags: dict, model_id: str | None = None, explain: bool = False
+        self,
+        output_field: str,
+        tags: dict,
+        model_id: str | None = None,
+        explain: bool = False,
     ) -> dict:
         """Run inference using tag filters (snssai/dnn/event). explain=True adds KernelSHAP."""
         event_type = tags.get("event", "") if isinstance(tags, dict) else ""
@@ -110,27 +127,41 @@ class InferenceService:
             config = model_detail.config
         else:
             # Cache miss: resolve best model (N MLflow calls) then cache result
-            configs = await asyncio.to_thread(self.mlflow_service.ml_config_service.list_all)
+            configs = await asyncio.to_thread(
+                self.mlflow_service.ml_config_service.list_all
+            )
 
             if model_id is not None:
                 # Explicit model_id: validate it predicts this field, skip best-model resolution
-                config_entry = next((c for c in configs if c.model_id == model_id), None)
-                if config_entry is None or output_field not in config_entry.output_fields:
+                config_entry = next(
+                    (c for c in configs if c.model_id == model_id), None
+                )
+                if (
+                    config_entry is None
+                    or output_field not in config_entry.output_fields
+                ):
                     raise ValueError(
                         f"Model '{model_id}' does not predict field '{output_field}'."
                     )
                 best_id = None
             else:
+
                 def _is_best(mid: str) -> bool:
                     rm_tags = self.mlflow_service.client.get_registered_model(mid).tags
-                    tag_key = f"best_for:{event_type}:{output_field}" if event_type else None
+                    tag_key = (
+                        f"best_for:{event_type}:{output_field}" if event_type else None
+                    )
                     if tag_key and rm_tags.get(tag_key) == "true":
                         return True
                     suffix = f":{output_field}"
-                    return any(v == "true" and k.endswith(suffix) for k, v in rm_tags.items())
+                    return any(
+                        v == "true" and k.endswith(suffix) for k, v in rm_tags.items()
+                    )
 
                 best_id = await asyncio.to_thread(
-                    lambda: next((c.model_id for c in configs if _is_best(c.model_id)), None)
+                    lambda: next(
+                        (c.model_id for c in configs if _is_best(c.model_id)), None
+                    )
                 )
 
                 if best_id is None:
@@ -141,7 +172,9 @@ class InferenceService:
 
                 model_id = best_id
 
-            model_detail = await asyncio.to_thread(self.mlflow_service.get_model, model_id)
+            model_detail = await asyncio.to_thread(
+                self.mlflow_service.get_model, model_id
+            )
             config = model_detail.config
 
             if model_id == best_id:
@@ -156,7 +189,9 @@ class InferenceService:
 
         model_uri = f"models:/{model_id}/{model_detail.latest_version}"
         lookback_seconds = config.lookback_steps * config.window_duration_seconds
-        start_ts, end_ts = calculate_timestamps(lookback_seconds + config.window_duration_seconds)
+        start_ts, end_ts = calculate_timestamps(
+            lookback_seconds + config.window_duration_seconds
+        )
 
         cell_data = await self.data_storage_client.fetch_data(
             start_timestamp=start_ts,
@@ -166,40 +201,47 @@ class InferenceService:
             dnn=tags.get("dnn"),
             snssai_sd=tags.get("snssai_sd"),
             event=tags.get("event"),
+            public_key=self.mlflow_service.get_public_key(model_id),
         )
 
         if not cell_data:
             raise ValueError(f"No data for tags {tags} in last {lookback_seconds}s")
 
-        # Sort by timestamp
-        cell_data.sort(key=lambda x: x.get("window_start_time", 0))
+        if cell_data and isinstance(cell_data[0], bytes):
+            # Encrypted: worker decrypts with model private key, returns used_windows
+            raw_predictions, used_windows = await safe_predict(config.architecture, model_uri, config, cell_data)
+            used_data = used_windows or []
+        else:
+            cell_data.sort(key=lambda x: x.get("window_start_time", 0))
+            X = prepare_last_sequence(
+                cell_data=cell_data,
+                input_fields=config.input_fields,
+                lookback_steps=config.lookback_steps,
+            )
+            X = np.nan_to_num(X, nan=0.0)
+            raw_predictions, _ = await safe_predict(config.architecture, model_uri, config, X)
+            used_data = cell_data[-config.lookback_steps:]
 
-        # Prepare input sequence
-        X = prepare_last_sequence(
-            cell_data=cell_data,
-            input_fields=config.input_fields,
-            lookback_steps=config.lookback_steps,
+        asyncio.create_task(
+            _dlt_trace_inference(
+                model_run_id=model_detail.mlflow_run_id or "",
+                model_name=model_detail.name or model_id,
+                model_version=model_detail.latest_version,
+                query_params={
+                    **tags,
+                    "output_field": output_field,
+                    "lookback_seconds": lookback_seconds,
+                },
+                data_payload=used_data,
+                anomaly_score=0.0,
+                decision="NORMAL",
+                time_range_start=str(start_ts),
+                time_range_end=str(end_ts),
+            )
         )
-
-        X = np.nan_to_num(X, nan=0.0)
-
-        raw_predictions = await safe_predict(config.architecture, model_uri, config, X)
-
-        asyncio.create_task(_dlt_trace_inference(
-            model_run_id=model_detail.mlflow_run_id or "",
-            model_name=model_detail.name or model_id,
-            model_version=model_detail.latest_version,
-            query_params={**tags, "output_field": output_field, "lookback_seconds": lookback_seconds},
-            data_payload=cell_data,
-            anomaly_score=0.0,
-            decision="NORMAL",
-            time_range_start=str(start_ts),
-            time_range_end=str(end_ts),
-        ))
 
         # Calculate input data timestamps and window overlap
         from datetime import datetime
-        used_data = cell_data[-config.lookback_steps :]
 
         # Get timestamps from used data
         first_window = used_data[0]
@@ -216,7 +258,10 @@ class InferenceService:
         last_window_end = extract_timestamp(last_window, "window_end_time")
         if last_window_end == 0:
             # If window_end_time not available, calculate it
-            last_window_end = extract_timestamp(last_window, "window_start_time") + config.window_duration_seconds
+            last_window_end = (
+                extract_timestamp(last_window, "window_start_time")
+                + config.window_duration_seconds
+            )
 
         # Calculate window overlap from first two windows
         window_overlap = 0
@@ -249,7 +294,12 @@ class InferenceService:
                     X_instance=X,
                 )
             except Exception as e:
-                logger.warning("KernelSHAP explanation failed tags=%s field='%s': %s", tags, output_field, e)
+                logger.warning(
+                    "KernelSHAP explanation failed tags=%s field='%s': %s",
+                    tags,
+                    output_field,
+                    e,
+                )
 
         return {
             "model_id": model_id,
@@ -278,7 +328,10 @@ class InferenceService:
         model_id must be the designated best model for this event_type:output_field.
         Returns {"model_info": {...}, "input": {...}, "output": {...}}.
         """
-        from src.services.data_preparation import calculate_timestamps, prepare_last_sequence
+        from src.services.data_preparation import (
+            calculate_timestamps,
+            prepare_last_sequence,
+        )
 
         model_detail = await asyncio.to_thread(self.mlflow_service.get_model, model_id)
         config = model_detail.config
@@ -288,7 +341,9 @@ class InferenceService:
 
         model_uri = f"models:/{model_id}/{model_detail.latest_version}"
         lookback_seconds = config.lookback_steps * config.window_duration_seconds
-        start_ts, end_ts = calculate_timestamps(lookback_seconds + config.window_duration_seconds)
+        start_ts, end_ts = calculate_timestamps(
+            lookback_seconds + config.window_duration_seconds
+        )
 
         cell_data = await self.data_storage_client.fetch_data(
             start_timestamp=start_ts,
@@ -298,30 +353,33 @@ class InferenceService:
             dnn=tags.get("dnn"),
             snssai_sd=tags.get("snssai_sd"),
             event=tags.get("event"),
+            public_key=self.mlflow_service.get_public_key(model_id),
         )
 
         if not cell_data:
             raise ValueError(f"No data for tags {tags} in last {lookback_seconds}s")
 
-        cell_data.sort(key=lambda x: x.get("window_start_time", 0))
-
-        X = prepare_last_sequence(
-            cell_data=cell_data,
-            input_fields=config.input_fields,
-            lookback_steps=config.lookback_steps,
-        )
-        X = np.nan_to_num(X, nan=0.0)
-
-        raw_predictions = await safe_predict(config.architecture, model_uri, config, X)
+        if cell_data and isinstance(cell_data[0], bytes):
+            raw_predictions, used_windows = await safe_predict(config.architecture, model_uri, config, cell_data)
+            used_data = used_windows or []
+        else:
+            cell_data.sort(key=lambda x: x.get("window_start_time", 0))
+            X = prepare_last_sequence(
+                cell_data=cell_data,
+                input_fields=config.input_fields,
+                lookback_steps=config.lookback_steps,
+            )
+            X = np.nan_to_num(X, nan=0.0)
+            raw_predictions, _ = await safe_predict(config.architecture, model_uri, config, X)
+            used_data = cell_data[-config.lookback_steps:]
 
         def _ts(window, field):
             ts = window.get(field, 0)
             if isinstance(ts, str):
                 from datetime import datetime as _dt
+
                 return int(_dt.fromisoformat(ts).timestamp())
             return int(ts)
-
-        used_data = cell_data[-config.lookback_steps:]
         input_start = _ts(used_data[0], "window_start_time")
         last_end = _ts(used_data[-1], "window_end_time") or (
             _ts(used_data[-1], "window_start_time") + config.window_duration_seconds
@@ -329,7 +387,9 @@ class InferenceService:
 
         window_overlap = 0
         if len(used_data) >= 2:
-            step = _ts(used_data[1], "window_start_time") - _ts(used_data[0], "window_start_time")
+            step = _ts(used_data[1], "window_start_time") - _ts(
+                used_data[0], "window_start_time"
+            )
             window_overlap = config.window_duration_seconds - step
 
         predictions = self._structure_predictions(
@@ -345,8 +405,12 @@ class InferenceService:
             model_run_id=model_detail.mlflow_run_id or "",
             model_name=model_detail.name or model_id,
             model_version=model_detail.latest_version,
-            query_params={**tags, "output_field": output_field, "lookback_seconds": lookback_seconds},
-            data_payload=cell_data,
+            query_params={
+                **tags,
+                "output_field": output_field,
+                "lookback_seconds": lookback_seconds,
+            },
+            data_payload=used_data,
             anomaly_score=0.0,
             decision="NORMAL",
             time_range_start=str(start_ts),
@@ -381,13 +445,17 @@ class InferenceService:
         if cache_key in _background_cache:
             return _background_cache[cache_key]
 
-        artifact_path = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="background/background.npz")
+        artifact_path = mlflow.artifacts.download_artifacts(
+            run_id=run_id, artifact_path="background/background.npz"
+        )
         data = np.load(artifact_path)
         X_background = data["X_background"].astype(np.float32)
         _background_cache[cache_key] = X_background
         logger.info(
             "Loaded KernelSHAP background for model %s run %s - %d cells cached",
-            model_id, run_id, len(X_background),
+            model_id,
+            run_id,
+            len(X_background),
         )
         return X_background
 
@@ -404,6 +472,7 @@ class InferenceService:
     ) -> LocalExplanationResponse:
         """Explain a single prediction using KernelSHAP with training-time background."""
         from alibi.explainers import KernelShap
+
         from src.services.performance_service import _SequenceIndexBridge
 
         client = mlflow.tracking.MlflowClient()
@@ -425,8 +494,8 @@ class InferenceService:
             preds = sync_safe_predict(config.architecture, model_uri, config, X_3d)
             return preds[:, field_idx::num_out].mean(axis=1)
 
-        x_instance_2d = np.array([[0.0] * n_fields])       # index 0 = target
-        background_2d = bridge.encode(n_fields)[1:]         # indices 1..N = training cells
+        x_instance_2d = np.array([[0.0] * n_fields])  # index 0 = target
+        background_2d = bridge.encode(n_fields)[1:]  # indices 1..N = training cells
 
         explainer = KernelShap(predict_fn, feature_names=config.input_fields)
         explainer.fit(background_2d)
@@ -439,12 +508,21 @@ class InferenceService:
             name: round(float(v), 6)
             for name, v in zip(config.input_fields, shap_values)
         }
-        pred_for_field = sync_safe_predict(config.architecture, model_uri, config, X_instance)[0][field_idx::num_out].tolist()
+        pred_for_field = sync_safe_predict(
+            config.architecture, model_uri, config, X_instance
+        )[0][field_idx::num_out].tolist()
 
         logger.info(
             "KernelSHAP tags=%s field='%s' baseline=%.4f attributions=%s",
-            tags, field_name, expected_value,
-            {k: v for k, v in sorted(attributions.items(), key=lambda x: abs(x[1]), reverse=True)},
+            tags,
+            field_name,
+            expected_value,
+            {
+                k: v
+                for k, v in sorted(
+                    attributions.items(), key=lambda x: abs(x[1]), reverse=True
+                )
+            },
         )
 
         return LocalExplanationResponse(
@@ -544,7 +622,7 @@ class InferenceService:
                     step=step_idx + 1,
                     window_start_time=window_start,
                     window_end_time=window_end,
-                    values=values_dict
+                    values=values_dict,
                 )
             )
 

@@ -90,6 +90,17 @@ def _payload(architecture_id: str, model_uri: str, config, X: np.ndarray) -> dic
     }
 
 
+def _payload_encrypted(architecture_id: str, model_uri: str, config, pages: list[bytes]) -> dict:
+    arch_bytes, model_bytes = _get_bytes(architecture_id, model_uri)
+    return {
+        "architecture_id": architecture_id,
+        "arch_bytes": base64.b64encode(arch_bytes).decode(),
+        "model_bytes": base64.b64encode(model_bytes).decode(),
+        "config": config.model_dump(),
+        "encrypted_pages": [base64.b64encode(p).decode() for p in pages],
+    }
+
+
 def sync_safe_predict(architecture: str, model_uri: str, config, X: np.ndarray) -> np.ndarray:
     """Sync version — use inside sync callbacks (e.g. KernelSHAP predict_fn)."""
     client = _get_sync_client()
@@ -108,21 +119,34 @@ def sync_safe_predict(architecture: str, model_uri: str, config, X: np.ndarray) 
         raise RuntimeError(f"Prediction failed: {e.response.json().get('detail', str(e))}")
 
 
-async def safe_predict(architecture: str, model_uri: str, config, X: np.ndarray) -> np.ndarray:
+async def safe_predict(
+    architecture: str,
+    model_uri: str,
+    config,
+    data: list[bytes] | np.ndarray,
+) -> tuple[np.ndarray, list[dict] | None]:
     """Send prediction request to isolated inference worker.
 
-    MLservice downloads arch + model bytes, caches them, sends to worker.
-    Worker has no MLflow/MinIO access — exec + torch.load run in cap_drop=[ALL] sandbox.
+    data: list[bytes] → encrypted path (worker decrypts with model private key)
+    data: np.ndarray  → plaintext path (KernelSHAP / unencrypted inference)
+
+    Returns (predictions, used_windows). used_windows is None for the numpy path.
     """
+    if isinstance(data, list):
+        payload = _payload_encrypted(architecture, model_uri, config, data)
+    else:
+        payload = _payload(architecture, model_uri, config, data)
+
     client = _get_async_client()
     try:
         r = await client.post(
             f"{settings.INFERENCE_WORKER_URL}/predict",
-            json=_payload(architecture, model_uri, config, X),
+            json=payload,
         )
         r.raise_for_status()
         body = r.json()
-        return np.frombuffer(base64.b64decode(body["output_bytes"]), dtype=np.float32).reshape(body["output_shape"])
+        predictions = np.frombuffer(base64.b64decode(body["output_bytes"]), dtype=np.float32).reshape(body["output_shape"])
+        return predictions, body.get("used_windows")
     except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
         logger.error("Inference worker unreachable: %s", e)
         raise RuntimeError("Inference service unavailable. Try again later.")

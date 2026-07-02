@@ -1,6 +1,11 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
+import torch.nn as nn
+
+from src.models.secure_wrapper import SecureWrapper
+
+
 class ModelInterface(ABC):
     """Base interface for all ML models"""
 
@@ -30,6 +35,27 @@ class ModelInterface(ABC):
         self.lookback_steps = lookback_steps
         self.forecast_steps = forecast_steps
         self.hidden_size = hidden_size
+        self._model: SecureWrapper = SecureWrapper(nn.Identity())
+
+    @property
+    def model(self) -> SecureWrapper:
+        return self._model
+
+    @model.setter
+    def model(self, value: nn.Module | None) -> None:
+        if value is None:
+            self._model.inner = nn.Identity()
+        elif isinstance(value, SecureWrapper):
+            self._model = value
+        else:
+            self._model.inner = value
+
+    @property
+    def public_key(self) -> bytes:
+        return self._model.public_key
+
+    def decrypt(self, ciphertext: bytes) -> bytes:
+        return self._model.decrypt(ciphertext)
 
     @abstractmethod
     def train(self, X: Any, y: Any, max_epochs: int = 100, status_callback=None) -> float:

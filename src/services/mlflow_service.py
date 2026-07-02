@@ -227,3 +227,12 @@ class MLflowService:
         except MlflowException:
             # Model exists in DB but not in MLflow - already deleted from DB
             pass
+
+    def get_public_key(self, model_id: str) -> bytes | None:
+        """Return model's X25519 public key from registered model tag, or None if not set."""
+        try:
+            rm = self.client.get_registered_model(model_id)
+            hex_key = (rm.tags or {}).get("public_key")
+            return bytes.fromhex(hex_key) if hex_key else None
+        except MlflowException:
+            return None

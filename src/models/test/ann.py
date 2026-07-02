@@ -42,10 +42,9 @@ class ANN(ModelInterface):
             hidden_size=hidden_size
         )
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = None
 
     def _ensure_model(self):
-        if self.model is None:
+        if isinstance(self._model.inner, nn.Identity):
             # ANN flattens the sequence: lookback_steps * num_input_features
             flattened_input_size = self.lookback_steps * len(self.input_fields)
             # Output is flattened: forecast_steps * num_output_features

@@ -7,6 +7,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+from src.models.secure_wrapper import SecureWrapper
+
 logger = logging.getLogger(__name__)
 
 
@@ -15,7 +17,6 @@ class AutoencoderNetwork(nn.Module):
 
     def __init__(self, input_size: int, hidden_size: int):
         super().__init__()
-        # Encoder: input → hidden → bottleneck
         bottleneck = max(4, hidden_size // 2)
         self.encoder = nn.Sequential(
             nn.Linear(input_size, hidden_size),
@@ -23,7 +24,6 @@ class AutoencoderNetwork(nn.Module):
             nn.Linear(hidden_size, bottleneck),
             nn.ReLU(),
         )
-        # Decoder: bottleneck → hidden → input (reconstruction)
         self.decoder = nn.Sequential(
             nn.Linear(bottleneck, hidden_size),
             nn.ReLU(),
@@ -42,7 +42,14 @@ class Autoencoder:
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = AutoencoderNetwork(input_size, hidden_size).to(self.device)
+        self.model = SecureWrapper(AutoencoderNetwork(input_size, hidden_size)).to(self.device)
+
+    @property
+    def public_key(self) -> bytes:
+        return self.model.public_key
+
+    def decrypt(self, ciphertext: bytes) -> bytes:
+        return self.model.decrypt(ciphertext)
 
     def train(
         self,
