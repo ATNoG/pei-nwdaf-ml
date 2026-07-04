@@ -1,9 +1,13 @@
+import logging
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from src.services.mlflow_service import MLflowService
 from src.services.data_storage_client import DataStorageClient, derive_event_type
+from src.services.training_service import TrainingService
+from src.core.config import settings
 from src.core.dependencies import get_mlflow_client
+from src.routers.v1.training_router import get_training_service
 from src.schemas.model import ModelConfig, ModelCreate, ModelDetail, ModelSummary, ModelSummaryDetail
 router = APIRouter()
 
@@ -46,6 +50,7 @@ async def create_model(
     request: Request,
     mlflow_service: MLflowService = Depends(get_mlflow_client),
     data_storage_client: DataStorageClient = Depends(DataStorageClient),
+    training_service: TrainingService = Depends(get_training_service),
 ) -> ModelDetail:
     """Create a new model with field validation"""
     try:
@@ -85,8 +90,21 @@ async def create_model(
                 )
             except Exception as e:
                 # Non-blocking: log but don't fail model creation
-                import logging
                 logging.getLogger(__name__).warning(f"Failed to register model with policy: {e}")
+
+        # Optionally kick off the first training run right after creation
+        if model_create.auto_train:
+            try:
+                job = training_service.create_training_job(
+                    model.id, settings.AUTO_TRAIN_LOOKBACK_SECONDS
+                )
+                training_service.dispatch(job["job_id"], None)
+                model.training_job_id = job["job_id"]
+            except Exception as e:
+                # Non-blocking: a failed auto-train must not fail model creation
+                logging.getLogger(__name__).warning(
+                    f"Auto-train failed to start for {model.id}: {e}"
+                )
 
         return model
     except ValueError as e:

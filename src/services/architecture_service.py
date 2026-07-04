@@ -191,9 +191,10 @@ class ArchitectureService:
         architecture_validations.content.run(tree)
         architecture_validations.interface.run(tree)
         architecture_validations.name.run(architecture_id)
-        architecture_validations.dry_run.run(
-            architecture_id, file, self._make_namespace
-        )
+        # dry_run disabled: it exec()s uploaded code (RCE/DoS surface). See security review.
+        # architecture_validations.dry_run.run(
+        #     architecture_id, file, self._make_namespace
+        # )
 
     @staticmethod
     def help() -> str:

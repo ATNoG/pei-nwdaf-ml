@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     # Training
     TRAIN_MAX_EPOCHS: int = 100
     ADD_TEST_MODELS: bool = False
+    # Lookback window used for the training run auto-triggered on model creation
+    AUTO_TRAIN_LOOKBACK_SECONDS: int = 86400
 
     # Inference worker
     INFERENCE_WORKER_URL: str = "http://inference-worker:8061"
