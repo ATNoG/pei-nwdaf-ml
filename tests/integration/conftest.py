@@ -1,15 +1,16 @@
 """Integration test fixtures with real services via testcontainers."""
 
-import pytest
 import time
+
 import httpx
-from testcontainers.postgres import PostgresContainer
-from testcontainers.core.container import DockerContainer
-from testcontainers.core.network import Network
-from testcontainers.core.waiting_utils import wait_for_logs
+import pytest
 from mlflow import MlflowClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from testcontainers.core.container import DockerContainer
+from testcontainers.core.network import Network
+from testcontainers.core.waiting_utils import wait_for_logs
+from testcontainers.postgres import PostgresContainer
 
 from src.db.database import Base
 
@@ -32,7 +33,9 @@ def postgres_container(docker_network):
 
     with postgres:
         # Create additional database for ml_service using psycopg2
-        conn_url = postgres.get_connection_url().replace("postgresql+psycopg2://", "postgresql://")
+        conn_url = postgres.get_connection_url().replace(
+            "postgresql+psycopg2://", "postgresql://"
+        )
         conn = psycopg2.connect(conn_url)
         conn.autocommit = True
         cursor = conn.cursor()
@@ -44,25 +47,31 @@ def postgres_container(docker_network):
 
 
 @pytest.fixture(scope="session")
-def minio_container(docker_network):
-    """MinIO container for MLflow artifact store."""
-    minio = DockerContainer("minio/minio:latest")
-    minio.with_network(docker_network)
-    minio.with_network_aliases("minio")
-    minio.with_exposed_ports(9000)
-    minio.with_env("MINIO_ROOT_USER", "minio")
-    minio.with_env("MINIO_ROOT_PASSWORD", "minio123")
-    minio.with_command("server /data")
+def rustfs_container(docker_network):
+    """RustFS container for MLflow artifact store."""
+    rustfs = DockerContainer("rustfs/rustfs:1.0.4")
+    rustfs.with_network(docker_network)
+    rustfs.with_network_aliases("rustfs")
+    rustfs.with_exposed_ports(9000)
+    rustfs.with_env("RUSTFS_ACCESS_KEY", "rustfs")
+    rustfs.with_env("RUSTFS_SECRET_KEY", "rustfs123")
 
-    with minio:
-        # Wait for MinIO to be ready
-        wait_for_logs(minio, "MinIO Object Storage Server", timeout=30)
-        time.sleep(2)  # Extra wait for API to be fully ready
-        yield minio
+    with rustfs:
+        url = f"http://{rustfs.get_container_host_ip()}:{rustfs.get_exposed_port(9000)}/health"
+        for _ in range(30):
+            try:
+                if httpx.get(url, timeout=2).status_code == 200:
+                    break
+            except httpx.HTTPError:
+                pass
+            time.sleep(1)
+        else:
+            raise RuntimeError("RustFS did not become healthy")
+        yield rustfs
 
 
 @pytest.fixture(scope="session")
-def mlflow_container(docker_network, postgres_container, minio_container):
+def mlflow_container(docker_network, postgres_container, rustfs_container):
     """MLflow tracking server container."""
     # Use container network aliases for inter-container communication
     postgres_url = f"postgresql://test:test@postgres:5432/test"
@@ -72,9 +81,11 @@ def mlflow_container(docker_network, postgres_container, minio_container):
     mlflow.with_exposed_ports(5000)
     mlflow.with_env("MLFLOW_BACKEND_STORE_URI", postgres_url)
     mlflow.with_env("MLFLOW_DEFAULT_ARTIFACT_ROOT", "s3://mlflow")
-    mlflow.with_env("MLFLOW_S3_ENDPOINT_URL", "http://minio:9000")
-    mlflow.with_env("AWS_ACCESS_KEY_ID", "minio")
-    mlflow.with_env("AWS_SECRET_ACCESS_KEY", "minio123")
+
+    mlflow.with_env("MLFLOW_S3_ENDPOINT_URL", "http://rustfs:9000")
+    mlflow.with_env("AWS_ACCESS_KEY_ID", "rustfs")
+    mlflow.with_env("AWS_SECRET_ACCESS_KEY", "rustfs123")
+
     mlflow.with_command(
         [
             "mlflow",
