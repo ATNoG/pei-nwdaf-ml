@@ -76,7 +76,7 @@ def mlflow_container(docker_network, postgres_container, rustfs_container):
     # Use container network aliases for inter-container communication
     postgres_url = f"postgresql://test:test@postgres:5432/test"
 
-    mlflow = DockerContainer("ghcr.io/mlflow/mlflow:latest")
+    mlflow = DockerContainer("ghcr.io/mlflow/mlflow:v3.10.1")
     mlflow.with_network(docker_network)
     mlflow.with_exposed_ports(5000)
     mlflow.with_env("MLFLOW_BACKEND_STORE_URI", postgres_url)
@@ -86,18 +86,16 @@ def mlflow_container(docker_network, postgres_container, rustfs_container):
     mlflow.with_env("AWS_ACCESS_KEY_ID", "rustfs")
     mlflow.with_env("AWS_SECRET_ACCESS_KEY", "rustfs123")
 
+    mlflow.with_env("AWS_DEFAULT_REGION", "us-east-1")
     mlflow.with_command(
         [
-            "mlflow",
-            "server",
-            "--backend-store-uri",
-            postgres_url,
-            "--default-artifact-root",
-            "s3://mlflow",
-            "--host",
-            "0.0.0.0",
-            "--port",
-            "5000",
+            "/bin/bash",
+            "-c",
+            "pip install --no-cache-dir psycopg2-binary boto3 && "
+            "python -c \"import boto3,os; s3=boto3.client('s3',endpoint_url=os.environ['MLFLOW_S3_ENDPOINT_URL']); "
+            "b='mlflow'; b in [x['Name'] for x in s3.list_buckets().get('Buckets',[])] or s3.create_bucket(Bucket=b)\" && "
+            "mlflow server --backend-store-uri postgresql+psycopg2://test:test@postgres:5432/test "
+            "--default-artifact-root s3://mlflow --host 0.0.0.0 --port 5000",
         ]
     )
 
